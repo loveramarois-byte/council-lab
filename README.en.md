@@ -33,6 +33,16 @@ Install [Python 3.12+](https://www.python.org/downloads/) and [Node.js 22+](http
 2. Unzip it and double-click `安装 Council.command`.
 3. Launch `Council.app` from your Desktop.
 
+## Windows 10 / 11 installation
+
+Install [Python 3.12+](https://www.python.org/downloads/windows/) and [Node.js 22+](https://nodejs.org/) first. Enable **Add python.exe to PATH** in the Python installer.
+
+1. Download `Council-v*-Windows.zip` from the [latest release](https://github.com/loveramarois-byte/council-lab/releases/latest).
+2. Extract the entire ZIP, then double-click `Install Council.cmd`.
+3. Launch Council from the shortcut created on your Desktop.
+
+No administrator permission is required. Use `Start Council.cmd` and `Stop Council.cmd` in the extracted folder when you need the direct controls. If SmartScreen appears, choose **More info** and **Run anyway**.
+
 Developers can run:
 
 ```bash
@@ -42,7 +52,7 @@ cd council-lab
 ./start.sh
 ```
 
-Council opens at <http://localhost:3000>. Mock mode is offline and free to use. Linux and Windows can run from source, but desktop packages are not available yet.
+Council opens at <http://localhost:3000>. Mock mode is offline and free to use. macOS and Windows include double-click launchers; Linux can run the project from source.
 
 ## Privacy
 
@@ -52,6 +62,6 @@ Council does not expose or retain hidden model chain-of-thought. It stores only 
 
 ## Status and license
 
-Version `0.2.1` is an early release for research and decision support. Do not use unreviewed outputs for medical, legal, financial, or safety-critical decisions.
+Version `0.2.2` is an early release for research and decision support. Do not use unreviewed outputs for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

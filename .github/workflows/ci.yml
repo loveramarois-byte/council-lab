@@ -23,6 +23,43 @@ jobs:
           plutil -lint "$HOME/Desktop/Council.app/Contents/Info.plist"
           codesign --verify --deep --strict "$HOME/Desktop/Council.app"
 
+  windows-launcher:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate Windows launchers
+        shell: pwsh
+        run: |
+          Get-ChildItem desktop/*.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
+          }
+          @("Install Council.cmd", "Start Council.cmd", "Stop Council.cmd") | ForEach-Object {
+            if (-not (Test-Path $_)) { throw "Missing Windows entry point: $_" }
+          }
+          ./desktop/install-windows.ps1 -CheckOnly
+      - name: Install and smoke-test Windows launcher
+        shell: pwsh
+        run: |
+          ./desktop/install-windows.ps1 -NoLaunch
+          ./desktop/start-council.ps1 -NoBrowser
+          $health = Invoke-RestMethod -Uri http://127.0.0.1:8001/api/health
+          if ($health.status -ne "ok" -or $health.service -ne "council-lab") { throw "Backend health check failed" }
+          $page = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:3000/
+          if ($page.StatusCode -ne 200 -or $page.Content -notmatch "Council") { throw "Frontend smoke test failed" }
+          ./desktop/stop-council.ps1
+
   backend:
     runs-on: ubuntu-latest
     steps:

@@ -17,14 +17,17 @@ jobs:
           fetch-depth: 0
       - name: Build novice-friendly source package
         run: |
-          package="Council-${GITHUB_REF_NAME}-macOS.zip"
-          git archive --format=zip --prefix="Council-${GITHUB_REF_NAME}/" -o "$package" "$GITHUB_SHA"
-          echo "PACKAGE=$package" >> "$GITHUB_ENV"
+          mac_package="Council-${GITHUB_REF_NAME}-macOS.zip"
+          windows_package="Council-${GITHUB_REF_NAME}-Windows.zip"
+          git archive --format=zip --prefix="Council-${GITHUB_REF_NAME}/" -o "$mac_package" "$GITHUB_SHA"
+          cp "$mac_package" "$windows_package"
+          echo "MAC_PACKAGE=$mac_package" >> "$GITHUB_ENV"
+          echo "WINDOWS_PACKAGE=$windows_package" >> "$GITHUB_ENV"
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "$PACKAGE" \
+          gh release create "$GITHUB_REF_NAME" "$MAC_PACKAGE" "$WINDOWS_PACKAGE" \
             --title "Council ${GITHUB_REF_NAME}" \
             --generate-notes \
-            --notes "面向 macOS 普通用户：下载 Council-${GITHUB_REF_NAME}-macOS.zip，解压后双击‘安装 Council.command’。首次使用需要 Python 3.12+ 和 Node.js 22+。"
+            --notes "首次使用均需 Python 3.12+ 和 Node.js 22+。macOS 下载 Council-${GITHUB_REF_NAME}-macOS.zip，双击‘安装 Council.command’；Windows 下载 Council-${GITHUB_REF_NAME}-Windows.zip，双击‘Install Council.cmd’。"

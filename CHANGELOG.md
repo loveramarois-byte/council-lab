@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-28
+
+### Added
+
+- 增加 Windows 10 / 11 双击安装、启动和停止入口，并自动创建桌面快捷方式。
+- GitHub Release 同时生成 macOS 与 Windows 下载包，CI 增加 `windows-latest` 脚本校验。
+
 ## [0.2.1] - 2026-07-28
 
 ### Fixed

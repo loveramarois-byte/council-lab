@@ -64,6 +64,17 @@ Council 当前不执行联网搜索或代码沙箱，也不提供百分比事实
 
 首次被 macOS 阻止时，按住 Control 点击安装器，选择“打开”。安装器只在当前项目内安装依赖并创建桌面启动入口，不会删除已有审议记录。
 
+### 普通用户（Windows 10 / 11）
+
+首次使用需要安装 [Python 3.12+](https://www.python.org/downloads/windows/) 和 [Node.js 22+](https://nodejs.org/)。安装 Python 时勾选 **Add python.exe to PATH**。
+
+1. 打开 [最新版本下载页](https://github.com/loveramarois-byte/council-lab/releases/latest)。
+2. 下载 `Council-v*-Windows.zip`，右键选择“全部解压缩”。
+3. 双击解压后文件夹里的 **`Install Council.cmd`**。
+4. 安装完成后，双击桌面的 **`Council`** 快捷方式。
+
+如果 Windows 弹出 SmartScreen，点“更多信息”→“仍要运行”。启动和停止也可直接双击项目里的 `Start Council.cmd` / `Stop Council.cmd`。安装器不需要管理员权限。
+
 ### 开发者
 
 ```bash
@@ -75,7 +86,7 @@ cd council-lab
 
 浏览器会打开 <http://localhost:3000>。默认 Mock Provider 不联网、不需要密钥，也不会产生模型费用。安装问题见 [安装与排错](docs/INSTALL.md)。
 
-> Linux 和 Windows 当前可运行源码，但暂未提供桌面安装包。详见 [docs/INSTALL.md](docs/INSTALL.md)。
+> Linux 可通过命令行运行源码。macOS 和 Windows 均已提供可双击的安装与启动入口。详见 [docs/INSTALL.md](docs/INSTALL.md)。
 
 ## 工作方式
 
@@ -119,8 +130,8 @@ Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于�
 ## 数据与安全
 
 - API Key 不进入 Council SQLite、日志或前端存储；桌面录入后写入 macOS Keychain、Windows Credential Locker 或 Linux Secret Service。
-- 审议记录默认位于 `~/Library/Application Support/Council/data/`（macOS）。
-- 启动日志默认位于 `~/Library/Logs/Council/`。
+- 审议记录默认位于 `~/Library/Application Support/Council/data/`（macOS）或 `%LOCALAPPDATA%\Council\data\`（Windows）。
+- 启动日志默认位于 `~/Library/Logs/Council/`（macOS）或 `%LOCALAPPDATA%\Council\logs\`（Windows）。
 - CC Switch 模型目录为空时，Council 只读查询近期成功调用过的模型名，不读取其 Provider 配置或密钥，也不修改 CC Switch 数据库。
 - 后端默认只监听 loopback。不要把本地凭据接口直接暴露到不可信网络。
 
@@ -130,7 +141,7 @@ Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于�
 
 - **Backend**：Python 3.12、FastAPI、LangGraph、SQLite
 - **Frontend**：Next.js 16、React 19、TypeScript、TanStack Query
-- **Desktop**：AppleScript `.app` 启动器与 shell 安装脚本
+- **Desktop**：macOS AppleScript `.app` 与 Windows PowerShell / `.cmd` 双击启动器
 - **Quality**：Pytest、Playwright、GitHub Actions、Dependabot
 
 ## 项目结构
@@ -138,14 +149,14 @@ Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于�
 ```text
 backend/       FastAPI、审议状态机、Provider、上下文与持久化
 frontend/      单页圆桌、历史、评测和设置界面
-desktop/       macOS 安装、启动和停止脚本
+desktop/       macOS / Windows 安装、启动和停止脚本
 docs/          架构、设计决策、评测与集成说明
 .github/       CI、Release、Issue 和依赖更新配置
 ```
 
 ## 项目状态
 
-当前版本为 `0.2.1`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
+当前版本为 `0.2.2`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
 
 欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](CONTRIBUTING.md)、[行为规范](CODE_OF_CONDUCT.md) 和 [安全政策](SECURITY.md)。
 
