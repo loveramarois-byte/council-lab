@@ -75,7 +75,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.lock
       - run: python -m pip install -r backend/requirements.lock
-      - run: PYTHONPATH=backend pytest -q backend/tests
+      - run: PYTHONPATH=backend:. pytest -q backend/tests
 
   frontend:
     runs-on: ubuntu-latest
