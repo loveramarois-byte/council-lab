@@ -1,0 +1,14 @@
+"use client";
+
+import Link from "next/link";
+import { ArrowUpRight, Filter, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { api, Run } from "../../lib/api";
+
+export default function RunsPage() {
+  const [runs, setRuns] = useState<Run[]>([]); const [query, setQuery] = useState(""); const [status, setStatus] = useState("all");
+  const load = () => api.runs().then(setRuns).catch(() => setRuns([])); useEffect(() => { load(); }, []);
+  const filtered = useMemo(() => runs.filter((run) => (status === "all" || run.status === status) && (!query || run.question.toLowerCase().includes(query.toLowerCase()))), [runs, status, query]);
+  const remove = async (id: string) => { await api.deleteRun(id); setRuns((items) => items.filter((item) => item.id !== id)); };
+  return <div className="page-wrap"><header className="topbar"><div><span className="top-kicker">工作台 / 记录</span><span className="top-title">历史审议</span></div><Link href="/" className="top-action"><span>新建</span><ArrowUpRight size={15} /></Link></header><div className="list-intro"><p className="eyebrow terracotta">ARCHIVE / 02</p><h1>留下判断的来路。</h1><p>每一次审议都保存问题、证据、分歧和限制。</p></div><div className="list-toolbar"><label className="search-box"><Search size={16} /><input placeholder="搜索问题" value={query} onChange={(event) => setQuery(event.target.value)} /></label><label className="filter-box"><Filter size={15} /><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="completed">已完成</option><option value="running">进行中</option><option value="failed">未完成</option></select></label></div><div className="run-list">{filtered.length === 0 ? <div className="empty-state"><span className="empty-number">00</span><h2>还没有审议记录</h2><p>从一个具体问题开始，答案会在这里留下轨迹。</p><Link href="/" className="text-action">开始第一份审议 <ArrowUpRight size={14} /></Link></div> : filtered.map((run) => <article key={run.id} className="run-row"><div className="row-marker"><span className={`status-pill-dot status-${run.status}`} /></div><div className="row-main"><Link href={`/runs/${run.id}`} className="row-question">{run.question}</Link><div className="row-meta"><span>{run.mode === "standard" ? "标准" : run.mode === "quick" ? "快速" : "严谨"}</span><span>{new Date(run.created_at).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span><span>{run.model}</span></div></div><div className="row-status">{run.status === "completed" ? "已完成" : run.status === "running" ? "进行中" : run.status === "failed" ? "未完成" : "已取消"}<small>{run.final_decision?.confidence.level || "等待结果"}</small></div><button className="icon-button row-delete" onClick={() => remove(run.id)} title="删除记录"><Trash2 size={15} /></button><ArrowUpRight className="row-arrow" size={17} /></article>)}</div></div>;
+}

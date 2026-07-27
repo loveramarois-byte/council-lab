@@ -1,0 +1,37 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+backend/.venv/
+.venv/
+**/.pytest_cache/
+*.py[cod]
+__pycache__/
+
+# Runtime data
+backend/data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.pid
+*.pids
+*.log
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/test-results/
+frontend/playwright-report/
+*.tsbuildinfo
+
+# Local artifacts and desktop builds
+artifacts/
+desktop/logs/
+desktop/Council.app/
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/

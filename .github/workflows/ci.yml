@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-launcher:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell scripts
+        run: |
+          bash -n setup.sh start.sh
+          zsh -n "安装 Council.command" desktop/*.sh
+      - name: Build and verify desktop launcher
+        run: |
+          mkdir -p "$HOME/Desktop"
+          ./desktop/build-macos-app.sh
+          plutil -lint "$HOME/Desktop/Council.app/Contents/Info.plist"
+          codesign --verify --deep --strict "$HOME/Desktop/Council.app"
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - run: python -m pip install -r backend/requirements.lock
+      - run: PYTHONPATH=backend pytest -q backend/tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install -r backend/requirements.lock
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: |
+          COUNCIL_DATA_DIR="$RUNNER_TEMP/council-data" python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8001 >"$RUNNER_TEMP/backend.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/backend.pid"
+          NEXT_PUBLIC_API_URL=http://127.0.0.1:8001 npm --prefix frontend run dev -- --hostname 127.0.0.1 >"$RUNNER_TEMP/frontend.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/frontend.pid"
+          for attempt in {1..60}; do
+            curl -fsS http://127.0.0.1:8001/api/health >/dev/null && curl -fsS http://127.0.0.1:3000 >/dev/null && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/backend.log" "$RUNNER_TEMP/frontend.log"
+          exit 1
+        working-directory: .
+      - run: npm test
+        working-directory: frontend
+      - if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/backend.pid")" "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
+          cat "$RUNNER_TEMP/backend.log" "$RUNNER_TEMP/frontend.log" 2>/dev/null || true

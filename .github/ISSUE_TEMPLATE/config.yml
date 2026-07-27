@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安装与排错
+    url: https://github.com/loveramarois-byte/council-lab/blob/main/docs/INSTALL.md
+    about: 提交 Issue 前先检查常见安装问题
+  - name: 安全漏洞报告
+    url: https://github.com/loveramarois-byte/council-lab/security/advisories/new
+    about: 请通过私密渠道报告安全漏洞
