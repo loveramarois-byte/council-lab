@@ -24,11 +24,13 @@ from .models import (
     RunEvent,
     RunLimits,
     RunRecord,
+    RunSourceSnapshot,
     UsageSummary,
     utc_now,
 )
 from .providers import ModelBackend, build_backend
 from .store import Store
+from .templates import get_template
 
 
 MODE_WORKFLOW_EFFORT = {
@@ -205,8 +207,73 @@ class Orchestrator:
             raise ValueError("总结席角色必须为 finalizer")
         return [self._resolve_assignment(item) for item in config.seats], self._resolve_assignment(config.finalizer)
 
-    async def start(self, request: RunCreate) -> RunRecord:
+    async def start(
+        self,
+        request: RunCreate,
+        *,
+        frozen_sources: list[RunSourceSnapshot] | None = None,
+        frozen_project_name: str = "",
+        frozen_project_context: str | None = None,
+    ) -> RunRecord:
         seats, finalizer = self._resolve_config(request)
+        project = None
+        source_snapshots: list[RunSourceSnapshot] = []
+        project_context = ""
+        project_name = ""
+        if frozen_sources is not None:
+            source_snapshots = [source.model_copy(deep=True) for source in frozen_sources]
+            project_context = frozen_project_context or ""
+            project_name = frozen_project_name
+        elif request.project_id:
+            project = await self.store.get_project(request.project_id)
+            if not project:
+                raise ValueError("资料空间不存在")
+            project_name = project.name
+            project_sources = await self.store.list_sources(project.id)
+            requested_ids = set(request.source_ids or [])
+            selected_sources = (
+                [source for source in project_sources if source.id in requested_ids]
+                if request.source_ids is not None
+                else project_sources[:20]
+            )
+            if requested_ids - {source.id for source in selected_sources}:
+                raise ValueError("部分资料不存在或不属于当前资料空间")
+            remaining_chars = 100_000
+            for source in selected_sources:
+                excerpt = source.content[: min(30_000, remaining_chars)]
+                if not excerpt:
+                    continue
+                remaining_chars -= len(excerpt)
+                source_snapshots.append(
+                    RunSourceSnapshot(
+                        id=source.id,
+                        kind=source.kind,
+                        title=source.title,
+                        excerpt=excerpt,
+                        url=source.url,
+                        filename=source.filename,
+                        sha256=source.sha256,
+                    )
+                )
+                if remaining_chars <= 0:
+                    break
+            context_parts = []
+            if project.instructions.strip():
+                context_parts.append(f"资料空间固定说明：{project.instructions.strip()}")
+            if request.include_project_history:
+                previous_runs = [
+                    run
+                    for run in await self.store.list_runs()
+                    if run.project_id == project.id and run.status == "completed" and run.final_decision
+                ][:3]
+                for index, previous in enumerate(reversed(previous_runs), 1):
+                    context_parts.append(
+                        f"历史审议 {index}：{previous.question}\n结论：{previous.final_decision.final_answer[:1600]}"
+                    )
+            project_context = "\n\n".join(context_parts)[:12_000]
+        elif request.source_ids:
+            raise ValueError("选择资料前必须先选择资料空间")
+        template = get_template(request.template_id)
         run_id = str(uuid.uuid4())
         primary = seats[0]
         run = RunRecord(
@@ -226,6 +293,12 @@ class Orchestrator:
             seat_assignments=seats,
             finalizer_assignment=finalizer,
             auto_summarize=request.auto_summarize,
+            project_id=request.project_id if frozen_sources is not None else project.id if project else None,
+            project_name=project_name,
+            project_context=project_context,
+            template_id=template.id,
+            template_name=template.name,
+            source_snapshots=source_snapshots,
         )
         await self.store.save_run(run)
         self.live_runs[run_id] = run
@@ -235,6 +308,14 @@ class Orchestrator:
         self.run_locks[run_id] = asyncio.Lock()
         self.tasks[run_id] = asyncio.create_task(self.execute(run, cancel))
         return run
+
+    @staticmethod
+    def _evidence_context(run: RunRecord) -> str:
+        sections = []
+        for index, source in enumerate(run.source_snapshots, 1):
+            origin = source.url or source.filename or "本地文字资料"
+            sections.append(f"[S{index}] {source.title}\n来源：{origin}\n{source.excerpt}")
+        return "\n\n".join(sections)
 
     async def emit(
         self,
@@ -500,7 +581,13 @@ class Orchestrator:
         participant = self.PARTICIPANTS[speaker_index]
         assignment = run.seat_assignments[speaker_index]
         run.awaiting_user = False
-        context_window = build_context_window(run.question, run.discussion_turns, context_budget_for_mode(run.mode))
+        context_window = build_context_window(
+            run.question,
+            run.discussion_turns,
+            context_budget_for_mode(run.mode),
+            self._evidence_context(run),
+            run.project_context,
+        )
         run.context_snapshot = ContextSnapshot(
             token_budget=context_window.token_budget,
             estimated_tokens=context_window.estimated_tokens,
@@ -508,6 +595,8 @@ class Orchestrator:
             total_turns=context_window.total_turns,
             compacted=context_window.compacted,
             summary=context_window.summary,
+            source_tokens=context_window.source_tokens,
+            history_tokens=context_window.history_tokens,
         )
         await self.emit(
             run,
@@ -525,9 +614,15 @@ class Orchestrator:
                 "确有不同意见就指出具体哪一点、为什么，若没有可反驳之处就明确认同，不要为了制造冲突而强行反驳。"
                 "随后补充自己的新依据、修正或方案。"
             )
+        template = get_template(run.template_id)
+        source_instruction = (
+            "已提供带 [S编号] 的资料。涉及资料中的事实时引用对应编号；没有资料支持的内容必须标为推断或未知，禁止编造来源。"
+            if run.source_snapshots
+            else "当前没有附加资料，不得声称结论已经过外部核验。"
+        )
         system = (
             f"你是四人圆桌中的{participant['name']}，角色是{participant['role']}：{participant['brief']}。\n"
-            f"{debate_instruction}"
+            f"{debate_instruction}\n本次模板要求：{template.system_guidance}\n{source_instruction}"
             "这是用户全程可参与的公开讨论。必须回应记录中最新的用户插话。"
             "不要替全体宣布最终答案，不展示隐藏思维链，控制在220字以内。"
         )
@@ -588,7 +683,13 @@ class Orchestrator:
     ) -> None:
         if run.final_decision is not None:
             return
-        context_window = build_context_window(run.question, run.discussion_turns, context_budget_for_mode(run.mode))
+        context_window = build_context_window(
+            run.question,
+            run.discussion_turns,
+            context_budget_for_mode(run.mode),
+            self._evidence_context(run),
+            run.project_context,
+        )
         run.context_snapshot = ContextSnapshot(
             token_budget=context_window.token_budget,
             estimated_tokens=context_window.estimated_tokens,
@@ -596,23 +697,52 @@ class Orchestrator:
             total_turns=context_window.total_turns,
             compacted=context_window.compacted,
             summary=context_window.summary,
+            source_tokens=context_window.source_tokens,
+            history_tokens=context_window.history_tokens,
         )
         await self.emit(run, "summary_started", "summary", "正在根据四席公开讨论和你的最终补充形成答案", 94)
+        template = get_template(run.template_id)
+        citation_instruction = (
+            "附加资料使用 [S编号] 引用；只引用上下文中真实存在的编号。资料没有覆盖的事实必须保留为未知。"
+            if run.source_snapshots
+            else "没有附加资料，不得声称答案已通过外部事实核验。"
+        )
         generation = await self._generate_with_fallback(
             run,
             assignment,
             backends,
             context_window.prompt,
-            "你是圆桌记录员。根据四位成员和用户的完整公开讨论，直接给出最终答案。先综合已经形成的共识，再处理明确分歧，最后给出可执行答案和必要边界。不要声称不存在的共识，不展示隐藏思维链。",
+            "你是圆桌记录员。根据四位成员和用户的完整公开讨论，直接给出最终答案。"
+            "先综合已经形成的共识，再处理明确分歧，最后给出可执行答案和必要边界。"
+            f"本次模板要求：{template.system_guidance} {citation_instruction}"
+            "不要声称不存在的共识，不展示隐藏思维链。",
         )
         provider_type = getattr(assignment.provider_snapshot.provider_type, "value", assignment.provider_snapshot.provider_type)
+        sources = [
+            f"[S{index}] {source.title}" + (f" — {source.url}" if source.url else f" — {source.filename}" if source.filename else "")
+            for index, source in enumerate(run.source_snapshots, 1)
+        ]
         run.final_decision = FinalDecision(
             final_answer=generation.text.strip(),
-            key_reasons=["四席按顺序公开回应", "用户在最终综合前确认了讨论上下文"],
-            unverified_claims=["模型共识尚未经过外部事实核验"],
+            key_reasons=[
+                "四席按顺序公开回应",
+                "用户在最终综合前确认了讨论上下文",
+                *([f"本次固化了 {len(sources)} 份资料快照"] if sources else []),
+            ],
+            unverified_claims=[
+                "附加资料已进入公开上下文，但 Council 未独立验证来源真实性"
+                if sources
+                else "模型共识尚未经过外部事实核验"
+            ],
             disagreements=self._explicit_disagreements(run),
             risks_and_limitations=["模型共识不等于事实验证；关键结论仍需使用第一方资料或可复现测试核对。"],
-            confidence={"level": "unverified", "explanation": "当前版本未执行外部事实核验，因此不提供百分比置信度。"},
+            confidence={
+                "level": "source_grounded" if sources else "unverified",
+                "explanation": "答案引用了用户提供的资料，但资料真实性仍需人工确认。"
+                if sources
+                else "当前没有外部证据，因此不提供百分比置信度。",
+            },
+            sources=sources,
             provider_summary={
                 "provider": assignment.provider_name,
                 "protocol": "mock" if provider_type == "mock" else "openai_compatible",

@@ -1,5 +1,11 @@
 on run
 	set appPath to POSIX path of (path to me)
+	set bundledLauncher to appPath & "Contents/Resources/launcher/start-council.sh"
+	if (do shell script "test -x " & quoted form of bundledLauncher & "; echo $?") is "0" then
+		do shell script "/usr/bin/nohup /bin/zsh " & quoted form of bundledLauncher & " >/dev/null 2>&1 &"
+		return
+	end if
+
 	set projectPathFile to appPath & "Contents/Resources/project-path.txt"
 	try
 		set projectDirectory to do shell script "/bin/cat " & quoted form of projectPathFile

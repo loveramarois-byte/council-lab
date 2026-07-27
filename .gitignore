@@ -28,6 +28,8 @@ frontend/playwright-report/
 
 # Local artifacts and desktop builds
 artifacts/
+build/
+dist/
 desktop/logs/
 desktop/Council.app/
 

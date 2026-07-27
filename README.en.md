@@ -1,49 +1,89 @@
 # Council Lab
 
-Council is a local-first, human-participatory AI deliberation workspace. Four seats speak in sequence and explicitly agree with or challenge earlier arguments. Council then waits for your confirmation or additions before a fifth call produces the final answer.
+Council is a local-first, human-participatory AI deliberation workspace. Four seats speak in sequence, respond to earlier arguments, and expose the discussion as it happens. After seat four, Council waits for your confirmation or additions before a fifth model call produces the final answer.
 
-[中文说明](README.md) · [Download](https://github.com/loveramarois-byte/council-lab/releases/latest) · [Contributing](CONTRIBUTING.md)
+[中文说明](README.md) · [Download](https://github.com/loveramarois-byte/council-lab/releases/latest) · [Install guide](docs/INSTALL.md) · [Contributing](CONTRIBUTING.md)
 
-![Council roundtable debating a high-stakes research portfolio](docs/images/roundtable-v2.png)
+![Council roundtable debating a complex public-interest question](docs/images/roundtable-v2.png)
 
-## Highlights
+## Why Council
 
-- Four visible, sequential model calls instead of four unrelated answers.
-- Human interjections become context for later seats and the final synthesis.
-- Independently configurable providers and models for all four seats and the finalizer, snapshotted per run.
-- A human confirmation point after seat four, with support for multiple final additions.
-- LangGraph workflow, SQLite persistence, checkpoints, startup recovery, and explicit recoverable failures.
-- Deterministic context clipping that preserves the question, early anchors, recent turns, and the latest user interjection.
-- Quick, Standard, and Rigorous are workflow/context tiers. Native reasoning effort is sent only by capable Responses providers.
-- Enforced defaults of eight model attempts, 40k provider-reported cumulative tokens, and 120 seconds for the full run.
-- Limit-stopped runs can raise their boundary and continue from the unfinished seat without repeating completed calls.
-- CC Switch, DeepSeek, Zhipu GLM, Kimi, SiliconFlow, OpenAI, custom OpenAI-compatible, and offline Mock providers.
-- Automatic model discovery with OS credential-store protection for API keys.
-- One-viewport desktop and mobile workspace with internally scrolling discussions.
+- **A discussion, not four disconnected answers.** Each later seat must agree, partially agree, or challenge what came before.
+- **You remain in the room.** Interjections become public context for later seats and the final synthesis.
+- **Independent seat configuration.** Choose a provider and model for each of the four speakers and the finalizer; the configuration is snapshotted per run.
+- **A deliberate confirmation point.** Council does not finalize after seat four until you approve or add more context.
+- **Projects and evidence.** Add text, public web pages, PDF, DOCX, Markdown, CSV, JSON, or TXT sources and cite frozen run snapshots as `[S1]`.
+- **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
+- **Portable reports.** Export a completed deliberation as Markdown or a self-contained HTML report.
+- **Local-first credentials.** API keys are stored in the operating-system credential store, not Council's database or browser storage.
+- **Reproducible evaluation.** A 12-case benchmark compares direct answers, same-model councils, and cross-model councils without publishing fabricated quality scores.
 
-Council does not currently run web searches or a code sandbox, and it does not present model agreement as a percentage fact-confidence score. A final synthesis is model consensus, not external verification.
+Council never displays or saves hidden chain-of-thought. It stores only public model responses and run metadata. It does not currently run web searches or a code sandbox, and model agreement is **not** external fact verification.
 
-The run screen separates the per-call discussion context from cumulative provider usage. CC Switch Codex routes may attach roughly 4k-5k base-instruction tokens to each request, so provider usage can be much higher than the visible context window. Council checks the cumulative boundary before each request; the last allowed response can therefore take the total slightly past that boundary.
+## Download and run
 
-## macOS installation
-
-Install [Python 3.12+](https://www.python.org/downloads/) and [Node.js 22+](https://nodejs.org/) first.
+### macOS
 
 1. Download `Council-v*-macOS.zip` from the [latest release](https://github.com/loveramarois-byte/council-lab/releases/latest).
-2. Unzip it and double-click `安装 Council.command`.
-3. Launch `Council.app` from your Desktop.
+2. Unzip it and double-click **`Council.app`**.
+3. Start with **Local Demo**, or open **Settings -> Model Providers** to connect a real API.
 
-## Windows 10 / 11 installation
+The release includes its own runtime. Python and Node.js are not required. This open-source build is ad-hoc signed but not Apple-notarized. If macOS blocks the first launch, Control-click `Council.app`, choose **Open**, and confirm.
 
-Install [Python 3.12+](https://www.python.org/downloads/windows/) and [Node.js 22+](https://nodejs.org/) first. Enable **Add python.exe to PATH** in the Python installer.
+### Windows 10 / 11
 
 1. Download `Council-v*-Windows.zip` from the [latest release](https://github.com/loveramarois-byte/council-lab/releases/latest).
-2. Extract the entire ZIP, then double-click `Install Council.cmd`.
-3. Launch Council from the shortcut created on your Desktop.
+2. Right-click the ZIP, choose **Extract All**, and open the extracted folder.
+3. Double-click **`Start Council.cmd`**.
 
-No administrator permission is required. Use `Start Council.cmd` and `Stop Council.cmd` in the extracted folder when you need the direct controls. If SmartScreen appears, choose **More info** and **Run anyway**.
+The release includes its own runtime and needs neither administrator access nor a separate Python/Node.js installation. This open-source build is not commercially code-signed. If SmartScreen appears, verify that the file came from this repository's Release page, then choose **More info -> Run anyway**. `Create Desktop Shortcut.cmd` adds an optional shortcut.
 
-Developers can run:
+## First connection
+
+1. Run one question with **Local Demo**. It is offline, free, and verifies the full four-seat workflow.
+2. Open **Settings -> Model Providers** and choose DeepSeek, Zhipu GLM, Kimi, SiliconFlow, OpenAI, CC Switch, or a compatible custom endpoint.
+3. Follow **Get API Key**, paste the key, and select **Save and test**. Council stores the key, requests the provider's real model catalog, selects a model, and performs a minimal generation test.
+
+If live model discovery fails, Council labels any built-in values as offline recommendations. They are troubleshooting hints, not claims about models enabled for your account. The live provider response remains authoritative.
+
+## Deliberation flow
+
+```mermaid
+flowchart LR
+    Q["Your question"] --> A["1 · Analyst"]
+    A --> B["2 · Challenger"]
+    B --> C["3 · Builder"]
+    C --> D["4 · Observer"]
+    D --> H["Your confirmation / addition"]
+    H --> S["5 · Final synthesis"]
+    U["You can interject"] -.public context.-> B
+    U -.public context.-> C
+    U -.public context.-> D
+    U -.public context.-> S
+```
+
+Each seat is a separate API call with its own public role prompt. Separate calls do not necessarily mean separate vendors: you may intentionally assign the same provider and model to multiple seats. Agreement between seats is still not proof that a claim is true.
+
+Quick, Standard, and Rigorous are Council workflow and context tiers. Native reasoning effort is sent only by providers and protocols that explicitly support it.
+
+## Providers
+
+| Provider | Setup | Model discovery |
+| --- | --- | --- |
+| CC Switch | Local route; credentials remain in CC Switch | Live route catalog or read-only recent successful model history |
+| DeepSeek | API key | Live catalog with clearly labelled offline recommendations |
+| Zhipu GLM | API key | Live catalog with clearly labelled offline recommendations |
+| Kimi | API key | Live catalog with clearly labelled offline recommendations |
+| SiliconFlow | API key | Live catalog |
+| OpenAI | API key | Live catalog with clearly labelled offline recommendations |
+| Custom compatible endpoint | URL and optional API key | Live catalog or manual model ID |
+| Local Demo | No setup | Built-in Mock only |
+
+Real providers receive your question, selected evidence, and public discussion context and may charge for requests. CC Switch continues to own upstream selection and failover; Council reports only the route state it can directly observe.
+
+## Development
+
+Source development requires Python 3.12+ and Node.js 22+:
 
 ```bash
 git clone https://github.com/loveramarois-byte/council-lab.git
@@ -52,16 +92,12 @@ cd council-lab
 ./start.sh
 ```
 
-Council opens at <http://localhost:3000>. Mock mode is offline and free to use. macOS and Windows include double-click launchers; Linux can run the project from source.
+Council opens at <http://localhost:3000>. Linux is supported through the source workflow. See [docs/INSTALL.md](docs/INSTALL.md) for paths and troubleshooting.
 
-## Privacy
+## Privacy and status
 
-Provider keys are stored in the operating system credential store, not in Council's SQLite database, logs, or browser storage. Deliberation data stays in the platform user-data directory by default. Real providers receive the question and public discussion context and may charge for requests.
+Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and imported source text may contain sensitive material; protect the local account and review content before sharing an exported report.
 
-Council does not expose or retain hidden model chain-of-thought. It stores only public model outputs and run metadata.
-
-## Status and license
-
-Version `0.2.2` is an early release for research and decision support. Do not use unreviewed outputs for medical, legal, financial, or safety-critical decisions.
+Version `0.3.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

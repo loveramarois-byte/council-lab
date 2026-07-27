@@ -1,16 +1,39 @@
 import asyncio
+import io
 import sqlite3
 
 import pytest
 
 from app.context import build_context_window, context_budget_for_mode, estimate_tokens
 from app.credentials import delete_provider_secret, get_provider_secret, save_provider_secret
-from app.models import AgentAssignmentsConfig, AgentModelAssignment, CandidateAnswer, DiscussionAction, DiscussionTurn, ProviderCapabilities, ProviderCreate, ProviderProfile, ProviderType, RunCreate, RunLimits, RunRecord, UsageSummary, utc_now
+from app.evidence import content_hash, extract_file_text, validate_public_url
+from app.models import (
+    AgentAssignmentsConfig,
+    AgentModelAssignment,
+    CandidateAnswer,
+    DiscussionAction,
+    DiscussionTurn,
+    FinalDecision,
+    ProjectRecord,
+    ProjectSource,
+    ProviderCapabilities,
+    ProviderCreate,
+    ProviderProfile,
+    ProviderType,
+    RunCreate,
+    RunLimits,
+    RunRecord,
+    RunSourceSnapshot,
+    UsageSummary,
+    utc_now,
+)
 from app.orchestrator import Orchestrator, analyze_question, describe_run_error, reasoning_effort_for_mode
 from app.paths import data_dir, database_path
 from app.provider_catalog import builtin_providers
 from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, validate_base_url
+from app.reports import run_html, run_markdown
 from app.store import Store, serialize_public_provider
+from evals.scoring import aggregate_execution, blind_labels, load_dataset, summarize_human_reviews
 
 
 def test_data_directory_can_be_overridden(tmp_path, monkeypatch):
@@ -37,8 +60,11 @@ def test_builtin_provider_catalog_uses_official_api_roots():
     assert catalog["deepseek"].base_url == "https://api.deepseek.com"
     assert catalog["zhipu"].base_url == "https://open.bigmodel.cn/api/paas/v4"
     assert catalog["kimi"].base_url == "https://api.moonshot.cn/v1"
-    assert catalog["deepseek"].default_model == "deepseek-v4-flash"
-    assert catalog["zhipu"].default_model == "glm-5.2"
+    assert catalog["ccswitch"].default_model == ""
+    assert catalog["deepseek"].default_model == "deepseek-chat"
+    assert catalog["deepseek"].model_source == "recommended"
+    assert catalog["zhipu"].default_model == "glm-4-flash"
+    assert not any("5.6" in model or "v4-" in model or "k3" in model for profile in catalog.values() for model in [profile.default_model, *profile.available_models])
     assert normalize_base_url(catalog["zhipu"].base_url, ProviderType.COMPATIBLE) == catalog["zhipu"].base_url
 
 
@@ -127,7 +153,7 @@ def test_ccswitch_model_discovery_uses_recent_successful_requests(tmp_path):
 
 
 def test_responses_payload_uses_highest_reasoning_effort():
-    payload = build_responses_payload("ping", "system", "gpt-5.6-sol", "ultra")
+    payload = build_responses_payload("ping", "system", "test-reasoning-model", "ultra")
     assert payload["reasoning"] == {"effort": "ultra"}
     assert "temperature" not in payload
 
@@ -889,3 +915,254 @@ async def test_each_seat_and_finalizer_use_independent_persisted_snapshots(tmp_p
     assert current.final_decision.disagreements == []
     assert current.final_decision.confidence["level"] == "unverified"
     assert "score" not in current.final_decision.confidence
+
+
+def test_evidence_file_limits_hashing_and_text_extraction():
+    raw = "标题\n一条可引用的事实".encode("utf-8")
+    text, media_type = extract_file_text("notes.md", raw)
+    assert text == "标题\n一条可引用的事实"
+    assert media_type == "text/plain"
+    assert content_hash(raw) == "624cb7a6a3bac5a51195ade8f43f71f274b1625c1fd544cdece47ae8aba056b4"
+
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("DOCX 中的项目资料")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    docx_text, docx_media_type = extract_file_text("brief.docx", buffer.getvalue())
+    assert "DOCX 中的项目资料" in docx_text
+    assert "wordprocessingml" in docx_media_type
+
+    with pytest.raises(ValueError, match="支持 TXT"):
+        extract_file_text("payload.exe", b"not allowed")
+    with pytest.raises(ValueError, match="10 MB"):
+        extract_file_text("large.txt", b"x" * (10 * 1024 * 1024 + 1))
+
+
+def test_web_evidence_rejects_private_and_dns_rebinding_targets(monkeypatch):
+    for url in [
+        "http://127.0.0.1/admin",
+        "http://169.254.169.254/latest/meta-data",
+        "http://[::1]/",
+        "http://localhost:8000/",
+    ]:
+        with pytest.raises(ValueError, match="公开互联网|不能访问"):
+            validate_public_url(url)
+
+    monkeypatch.setattr(
+        "app.evidence.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("10.20.30.40", 443))],
+    )
+    with pytest.raises(ValueError, match="内网"):
+        validate_public_url("https://public-looking.example/source")
+
+
+async def test_project_and_source_crud_is_scoped_and_counted(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    first = ProjectRecord(id="project-a", name="产品决策", description="长期上下文")
+    second = ProjectRecord(id="project-b", name="风险审计")
+    await store.save_project(first)
+    await store.save_project(second)
+    source = ProjectSource(
+        id="source-a",
+        project_id=first.id,
+        kind="text",
+        title="约束",
+        content="预算不超过十万元",
+        size_bytes=30,
+        sha256="abc123",
+    )
+    await store.save_source(source)
+
+    projects = {project.id: project for project in await store.list_projects()}
+    assert projects[first.id].source_count == 1
+    assert projects[second.id].source_count == 0
+    assert await store.list_sources(second.id) == []
+    assert await store.delete_source(second.id, source.id) is False
+    assert await store.get_source(source.id) is not None
+    assert await store.delete_project(first.id) is True
+    assert await store.get_source(source.id) is None
+
+
+async def test_run_freezes_sources_uses_citations_and_replays_deleted_material(tmp_path, monkeypatch):
+    prompts: list[str] = []
+    systems: list[str] = []
+
+    class CaptureBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            prompts.append(prompt)
+            systems.append(system)
+            return Generation(text="表态：认同。根据 [S1]，应先验证预算约束。")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: CaptureBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    project = ProjectRecord(id="project-a", name="迁移计划", instructions="先保护可回滚性")
+    source = ProjectSource(
+        id="source-a",
+        project_id=project.id,
+        kind="text",
+        title="预算说明",
+        content="本季度预算上限为十万元。",
+        size_bytes=39,
+        sha256="snapshot-sha",
+    )
+    await store.save_project(project)
+    await store.save_source(source)
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+
+    run = await orchestrator.start(
+        RunCreate(
+            question="是否现在迁移？",
+            provider_id="mock",
+            project_id=project.id,
+            source_ids=[source.id],
+            template_id="research_synthesis",
+        )
+    )
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "awaiting_final_input"
+    assert current.template_name == "资料研判"
+    assert current.source_snapshots[0].excerpt == "本季度预算上限为十万元。"
+    assert "[S1] 预算说明" in prompts[0]
+    assert "资料本身尚未经过 Council 独立核验" in prompts[0]
+    assert "禁止编造来源" in systems[0]
+
+    await store.delete_source(project.id, source.id)
+    replay = await orchestrator.start(
+        RunCreate(
+            question=current.question,
+            provider_id="mock",
+            project_id=current.project_id,
+            template_id=current.template_id,
+        ),
+        frozen_sources=current.source_snapshots,
+        frozen_project_name=current.project_name,
+        frozen_project_context=current.project_context,
+    )
+    await orchestrator.tasks[replay.id]
+    replayed = await store.get_run(replay.id)
+    assert replayed is not None
+    assert replayed.source_snapshots[0].sha256 == "snapshot-sha"
+    assert replayed.project_name == "迁移计划"
+
+    other = ProjectRecord(id="project-b", name="其他空间")
+    await store.save_project(other)
+    with pytest.raises(ValueError, match="不属于当前资料空间"):
+        await orchestrator.start(
+            RunCreate(
+                question="跨项目引用",
+                provider_id="mock",
+                project_id=other.id,
+                source_ids=["source-a"],
+            )
+        )
+
+
+async def test_project_history_enters_context_and_reports_keep_sources(tmp_path, monkeypatch):
+    class ImmediateBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            return Generation(text="表态：认同。继续验证历史结论。")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: ImmediateBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    project = ProjectRecord(id="project-a", name="长期研究")
+    await store.save_project(project)
+    now = utc_now()
+    previous = RunRecord(
+        id="previous",
+        question="上一轮的问题",
+        mode="standard",
+        provider_id="mock",
+        model="council-mock",
+        status="completed",
+        created_at=now,
+        updated_at=now,
+        project_id=project.id,
+        project_name=project.name,
+        final_decision=FinalDecision(
+            final_answer="上一轮的明确结论",
+            confidence={"level": "unverified", "explanation": "测试"},
+            provider_summary={"provider": "Mock"},
+            usage=UsageSummary(),
+        ),
+    )
+    await store.save_run(previous)
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    run = await orchestrator.start(
+        RunCreate(question="根据历史继续判断", provider_id="mock", project_id=project.id)
+    )
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None
+    assert "上一轮的问题" in current.project_context
+    assert "上一轮的明确结论" in current.project_context
+
+    current.source_snapshots = [
+        RunSourceSnapshot(
+            id="source-1",
+            kind="text",
+            title="一手资料",
+            excerpt="事实正文",
+            sha256="source-hash",
+        )
+    ]
+    current.final_decision = FinalDecision(
+        final_answer="最终答案引用 [S1]。",
+        disagreements=["仍需验证一个条件"],
+        confidence={"level": "source_grounded", "explanation": "测试"},
+        provider_summary={"provider": "Mock"},
+        usage=UsageSummary(),
+    )
+    markdown = run_markdown(current)
+    html = run_html(current)
+    assert "[S1]" in markdown and "source-hash" in markdown
+    assert "最终答案引用 [S1]" in markdown
+    assert "[S1] 一手资料" in html and "最终答案引用 [S1]" in html
+
+
+def test_benchmark_dataset_is_balanced_and_blinding_is_deterministic():
+    dataset = load_dataset("evals/council_benchmark_v1.json")
+    categories = [case["category"] for case in dataset["cases"]]
+    assert len(dataset["cases"]) == 12
+    assert {category: categories.count(category) for category in set(categories)} == {
+        "decision": 3,
+        "fact_check": 3,
+        "risk": 3,
+        "planning": 3,
+    }
+    labels = blind_labels("run-1", "case-1", ["direct", "same_model_council", "cross_model_council"])
+    assert labels == blind_labels("run-1", "case-1", ["direct", "same_model_council", "cross_model_council"])
+    assert set(labels.values()) == {"A", "B", "C"}
+
+
+def test_benchmark_execution_and_human_scores_remain_separate():
+    variants = [
+        {"strategy": "direct", "blind_label": "B", "status": "completed", "model_calls": 1, "input_tokens": 100, "output_tokens": 30, "duration_ms": 500},
+        {"strategy": "same_model_council", "blind_label": "A", "status": "completed", "model_calls": 5, "input_tokens": 600, "output_tokens": 120, "duration_ms": 2400},
+        {"strategy": "cross_model_council", "blind_label": "C", "status": "failed", "model_calls": 2, "input_tokens": 200, "output_tokens": 20, "duration_ms": 1800},
+    ]
+    result = {
+        "run_id": "eval-run",
+        "benchmark_version": "council-benchmark-v1",
+        "quality_claims_allowed": True,
+        "cases": [{"id": "case-1", "variants": variants}],
+    }
+    execution = aggregate_execution(result["cases"])
+    assert execution["direct"]["model_calls"] == 1
+    assert execution["cross_model_council"]["failure_rate"] == 1
+
+    score = {field: 4 for field in ["accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty"]}
+    reviews = {"run_id": "eval-run", "reviews": [{"case_id": "case-1", "scores": {"A": score, "B": score, "C": score}, "preferred": "A"}]}
+    summary = summarize_human_reviews(result, reviews)
+    assert summary["quality_scored"] is True
+    assert summary["quality_claims_allowed"] is True
+    assert summary["quality"]["same_model_council"]["preferred_cases"] == 1
+    assert summary["quality"]["direct"]["accuracy"] == 4
+
+    invalid = {"run_id": "eval-run", "reviews": [{"case_id": "case-1", "scores": {"A": {**score, "accuracy": 6}}}]}
+    with pytest.raises(ValueError, match="必须为 1-5"):
+        summarize_human_reviews(result, invalid)

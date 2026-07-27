@@ -48,7 +48,9 @@ const statusCopy: Record<string, string> = {
 
 function providerStatus(provider: Provider, transientStatus: string) {
   if (provider.id === "mock") return { label: "可用", tone: "good" };
-  if (["connected", "route_reachable", "route_connected_upstream_busy"].includes(transientStatus)) return { label: "已连接", tone: "good" };
+  if (transientStatus === "connected") return { label: "已连接", tone: "good" };
+  if (["route_reachable", "route_connected_upstream_busy"].includes(transientStatus)) return { label: "路由可达", tone: "good" };
+  if (transientStatus !== "idle") return { label: "不可用", tone: "bad" };
   if (provider.last_error) return { label: "需检查", tone: "bad" };
   if (provider.has_api_key || provider.id === "ccswitch") return { label: "待验证", tone: "ready" };
   return { label: "未配置", tone: "idle" };
@@ -93,23 +95,30 @@ export default function ProvidersSettingsPage() {
           const result = await api.detectCCSwitch();
           const models = Array.isArray(result.models) ? result.models.filter((model): model is string => typeof model === "string") : [];
           const defaultModel = typeof result.default_model === "string" ? result.default_model : current.default_model || models[0] || "";
-          setProviders((items) => items.map((item) => item.id === current.id ? { ...item, ...(models.length ? { available_models: models } : {}), default_model: defaultModel } : item));
+          const modelSource = typeof result.model_source === "string" ? result.model_source as Provider["model_source"] : current.model_source;
+          setProviders((items) => items.map((item) => item.id === current.id ? { ...item, ...(models.length ? { available_models: models } : {}), default_model: defaultModel, model_source: modelSource } : item));
           const nextStatus = String(result.status || "unknown");
           setConnectionStatus(nextStatus);
           if (models.length) {
             setMessage(`已自动识别 ${models.length} 个可用模型。`);
             setMessageTone("success");
-          } else {
-            setMessage("CC Switch 已连接，但没有公布模型目录。可刷新或手动填写模型 ID。");
+          } else if (["connected", "route_reachable"].includes(nextStatus)) {
+            setMessage("CC Switch 本地路由可访问，但没有公布模型目录。可刷新或手动填写模型 ID。");
             setMessageTone("info");
+          } else {
+            setMessage(statusCopy[nextStatus] || String(result.error || "没有检测到 CC Switch。请先启动 CC Switch，或改用其他供应商。"));
+            setMessageTone("error");
           }
         } else {
           const result = await api.providerModels(current.id);
           const defaultModel = result.default_model || current.default_model || result.models[0] || "";
-          setProviders((items) => items.map((item) => item.id === current.id ? { ...item, available_models: result.models, default_model: defaultModel, last_error: result.error || null } : item));
-          if (result.models.length) {
+          setProviders((items) => items.map((item) => item.id === current.id ? { ...item, available_models: result.models, default_model: defaultModel, model_source: result.source as Provider["model_source"], last_error: result.error || null } : item));
+          if (result.fetched > 0) {
             setMessage(`已自动识别 ${result.models.length} 个可用模型。`);
             setMessageTone("success");
+          } else if (result.error) {
+            setMessage(result.models.length ? `${result.error} 当前显示离线备选模型，也可以手动填写模型 ID。` : `${result.error} 请检查 Key、账户权限或服务地址后重试，也可以手动填写模型 ID。`);
+            setMessageTone(result.models.length ? "info" : "error");
           }
         }
       } catch (error) {
@@ -165,7 +174,7 @@ export default function ProvidersSettingsPage() {
       const saved = await saveSettings();
       const result = await api.providerModels(saved.id);
       const defaultModel = result.default_model || saved.default_model || result.models[0] || "";
-      updateCurrent({ ...saved, available_models: result.models, default_model: defaultModel, last_error: result.error || null });
+      updateCurrent({ ...saved, available_models: result.models, default_model: defaultModel, model_source: result.source as Provider["model_source"], last_error: result.error || null });
       if (result.fetched > 0) {
         setMessage(`已从 ${saved.display_name} 获取 ${result.fetched} 个可用模型。`);
         setMessageTone("success");
@@ -193,7 +202,8 @@ export default function ProvidersSettingsPage() {
       const result = await api.detectCCSwitch();
       const models = Array.isArray(result.models) ? result.models.filter((model): model is string => typeof model === "string") : [];
       const defaultModel = typeof result.default_model === "string" ? result.default_model : current.default_model || models[0] || "";
-      if (models.length) updateCurrent({ available_models: models, default_model: defaultModel });
+      const modelSource = typeof result.model_source === "string" ? result.model_source as Provider["model_source"] : current.model_source;
+      if (models.length) updateCurrent({ available_models: models, default_model: defaultModel, model_source: modelSource });
       const nextStatus = String(result.status || "unknown");
       setConnectionStatus(nextStatus);
       setMessage(statusCopy[nextStatus] || String(result.error || "CC Switch 检测完成。"));
@@ -213,15 +223,18 @@ export default function ProvidersSettingsPage() {
       setMessageTone("error");
       return;
     }
-    if (current.id !== "mock" && !current.default_model.trim()) {
-      setMessage("先获取模型或手动填写模型 ID。");
-      setMessageTone("error");
-      return;
-    }
     setBusy("test");
     setMessage("");
     try {
-      const saved = await saveSettings();
+      let saved = await saveSettings();
+      if (saved.id !== "mock") {
+        autoDiscovered.current.add(saved.id);
+        const discovered = await api.providerModels(saved.id);
+        const defaultModel = discovered.default_model || saved.default_model || discovered.models[0] || "";
+        if (!defaultModel) throw new Error(discovered.error || "没有读取到模型。请检查 Key、账户权限或服务地址，也可以在模型框手动填写模型 ID。");
+        if (saved.default_model !== defaultModel) saved = await api.patchProvider(saved.id, { default_model: defaultModel });
+        updateCurrent({ ...saved, available_models: discovered.models, model_source: discovered.source as Provider["model_source"] });
+      }
       const result = await api.testProvider(saved.id);
       const nextStatus = String(result.status || "unknown");
       if (["connected", "route_connected_upstream_busy"].includes(nextStatus)) {
@@ -304,7 +317,7 @@ export default function ProvidersSettingsPage() {
                 <span>API Key {current.has_api_key && <small className="saved-credential"><LockKeyhole size={11} />{current.credential_source === "environment" ? "来自环境变量" : "已保存在系统凭据库"}</small>}</span>
                 <div className="secure-input">
                   <KeyRound size={15} />
-                  <input type={showKey ? "text" : "password"} value={apiKey} onChange={(event) => setApiKey(event.target.value)} onBlur={() => { if (apiKey.trim().length >= 8 && !busy) void fetchModels(); }} autoComplete="off" spellCheck={false} placeholder={current.credential_source === "environment" ? `由 ${current.api_key_env} 提供` : current.has_api_key ? "已保存，留空不会修改" : "粘贴 API Key"} />
+                  <input type={showKey ? "text" : "password"} value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" spellCheck={false} placeholder={current.credential_source === "environment" ? `由 ${current.api_key_env} 提供` : current.has_api_key ? "已保存，留空不会修改" : "粘贴 API Key"} />
                   <button type="button" onClick={() => setShowKey((value) => !value)} aria-label={showKey ? "隐藏 API Key" : "显示 API Key"} title={showKey ? "隐藏 API Key" : "显示 API Key"}>{showKey ? <EyeOff size={15} /> : <Eye size={15} />}</button>
                 </div>
                 <span className="field-links">
@@ -314,7 +327,7 @@ export default function ProvidersSettingsPage() {
               </label>}
 
               <label className="field model-field">
-                <span>模型 <small>{current.available_models.length ? `已自动识别 ${current.available_models.length} 个` : busy === "models" || busy === "detect" ? "正在自动识别" : "可手动填写模型 ID"}</small></span>
+                <span>模型 <small>{busy === "models" || busy === "detect" ? "正在自动识别" : current.model_source === "provider" || current.model_source === "ccswitch_history" ? `已识别 ${current.available_models.length} 个` : current.available_models.length ? `${current.available_models.length} 个离线备选，连接后更新` : "连接后自动识别，也可手填"}</small></span>
                 <div className="model-input-row">
                   {current.available_models.length ? <select aria-label="模型" value={current.default_model || modelOptions[0]} disabled={current.id === "mock"} onChange={(event) => updateCurrent({ default_model: event.target.value })}>{modelOptions.map((model) => <option key={model} value={model}>{model}</option>)}</select> : <input value={current.default_model || ""} readOnly={current.id === "mock"} onChange={(event) => updateCurrent({ default_model: event.target.value })} placeholder="连接后自动识别，也可手动填写" />}
                   <button type="button" onClick={current.id === "ccswitch" ? detectCCSwitch : fetchModels} disabled={Boolean(busy) || current.id === "mock"} aria-label="获取模型" title="获取模型">

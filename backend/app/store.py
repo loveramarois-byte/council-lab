@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .models import AgentAssignmentsConfig, ProviderProfile, RunEvent, RunRecord
+from .models import AgentAssignmentsConfig, ProjectRecord, ProjectSource, ProviderProfile, RunEvent, RunRecord
 
 
 class Store:
@@ -24,7 +24,66 @@ class Store:
         self.conn.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
         self.conn.execute("CREATE TABLE IF NOT EXISTS provider_profiles (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
         self.conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+        self.conn.execute("CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
+        self.conn.execute("CREATE TABLE IF NOT EXISTS project_sources (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id, created_at)")
         self.conn.commit()
+
+    async def save_project(self, project: ProjectRecord) -> None:
+        async with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO projects(id,payload,created_at) VALUES(?,?,?)",
+                (project.id, project.model_dump_json(), project.created_at.isoformat()),
+            )
+            self.conn.commit()
+
+    async def get_project(self, project_id: str) -> ProjectRecord | None:
+        row = self.conn.execute("SELECT payload FROM projects WHERE id=?", (project_id,)).fetchone()
+        return ProjectRecord.model_validate_json(row[0]) if row else None
+
+    async def list_projects(self) -> list[ProjectRecord]:
+        rows = self.conn.execute("SELECT payload FROM projects ORDER BY created_at DESC").fetchall()
+        projects = [ProjectRecord.model_validate_json(row[0]) for row in rows]
+        runs = await self.list_runs()
+        for project in projects:
+            project.source_count = self.conn.execute(
+                "SELECT COUNT(*) FROM project_sources WHERE project_id=?", (project.id,)
+            ).fetchone()[0]
+            project.run_count = sum(1 for run in runs if run.project_id == project.id)
+        return projects
+
+    async def delete_project(self, project_id: str) -> bool:
+        async with self._lock:
+            cursor = self.conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+            self.conn.execute("DELETE FROM project_sources WHERE project_id=?", (project_id,))
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    async def save_source(self, source: ProjectSource) -> None:
+        async with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO project_sources(id,project_id,payload,created_at) VALUES(?,?,?,?)",
+                (source.id, source.project_id, source.model_dump_json(), source.created_at.isoformat()),
+            )
+            self.conn.commit()
+
+    async def get_source(self, source_id: str) -> ProjectSource | None:
+        row = self.conn.execute("SELECT payload FROM project_sources WHERE id=?", (source_id,)).fetchone()
+        return ProjectSource.model_validate_json(row[0]) if row else None
+
+    async def list_sources(self, project_id: str) -> list[ProjectSource]:
+        rows = self.conn.execute(
+            "SELECT payload FROM project_sources WHERE project_id=? ORDER BY created_at DESC", (project_id,)
+        ).fetchall()
+        return [ProjectSource.model_validate_json(row[0]) for row in rows]
+
+    async def delete_source(self, project_id: str, source_id: str) -> bool:
+        async with self._lock:
+            cursor = self.conn.execute(
+                "DELETE FROM project_sources WHERE id=? AND project_id=?", (source_id, project_id)
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
 
     def load_assignment_config(self) -> AgentAssignmentsConfig | None:
         row = self.conn.execute("SELECT payload FROM app_settings WHERE key='agent_assignments'").fetchone()

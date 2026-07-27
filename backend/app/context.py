@@ -22,6 +22,8 @@ class ContextWindow:
     included_turns: int
     total_turns: int
     compacted: bool
+    source_tokens: int = 0
+    history_tokens: int = 0
 
 
 def context_budget_for_mode(mode: str) -> int:
@@ -65,7 +67,7 @@ def _format_turn(turn: DiscussionTurn, content_limit: int | None = None) -> str:
     return f"{turn.speaker_name}（{turn.role_label or '参与者'}）：{content}"
 
 
-def build_context_window(question: str, turns: list[DiscussionTurn], token_budget: int) -> ContextWindow:
+def _build_dialogue_context(question: str, turns: list[DiscussionTurn], token_budget: int) -> ContextWindow:
     if token_budget < 120:
         raise ValueError("token_budget must be at least 120")
 
@@ -138,4 +140,51 @@ def build_context_window(question: str, turns: list[DiscussionTurn], token_budge
         included_turns=len(included_ids),
         total_turns=len(turns),
         compacted=True,
+    )
+
+
+def build_context_window(
+    question: str,
+    turns: list[DiscussionTurn],
+    token_budget: int,
+    evidence_context: str = "",
+    project_history: str = "",
+) -> ContextWindow:
+    if not evidence_context and not project_history:
+        return _build_dialogue_context(question, turns, token_budget)
+
+    extras_budget = max(0, token_budget - 120)
+    evidence_limit = min(int(token_budget * 0.38), extras_budget)
+    evidence = _truncate_tokens(evidence_context, evidence_limit) if evidence_context else ""
+    remaining = max(0, extras_budget - estimate_tokens(evidence))
+    history_limit = min(int(token_budget * 0.16), remaining)
+    history = _truncate_tokens(project_history, history_limit) if project_history else ""
+    source_tokens = estimate_tokens(evidence)
+    history_tokens = estimate_tokens(history)
+    dialogue_budget = max(120, token_budget - source_tokens - history_tokens)
+    dialogue = _build_dialogue_context(question, turns, dialogue_budget)
+
+    sections: list[str] = []
+    if history:
+        sections.append(f"同一资料空间的历史结论（仅作上下文，不替代当前证据）：\n{history}")
+    if evidence:
+        sections.append(
+            "本次资料证据（引用时只能使用现有 [S编号]，资料本身尚未经过 Council 独立核验）：\n"
+            + evidence
+        )
+    sections.append(dialogue.prompt)
+    prompt = "\n\n".join(sections)
+    if estimate_tokens(prompt) > token_budget:
+        prompt = _truncate_tokens(prompt, token_budget)
+
+    return ContextWindow(
+        prompt=prompt,
+        summary=dialogue.summary,
+        token_budget=token_budget,
+        estimated_tokens=estimate_tokens(prompt),
+        included_turns=dialogue.included_turns,
+        total_turns=dialogue.total_turns,
+        compacted=dialogue.compacted or source_tokens < estimate_tokens(evidence_context) or history_tokens < estimate_tokens(project_history),
+        source_tokens=source_tokens,
+        history_tokens=history_tokens,
     )
