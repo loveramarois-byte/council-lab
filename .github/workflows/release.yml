@@ -47,7 +47,7 @@ jobs:
         run: ./packaging/build-macos-release.sh
       - name: Smoke-test packaged services
         run: |
-          package="artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
+          package="$GITHUB_WORKSPACE/artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
           resources="$package/Council.app/Contents/Resources"
           COUNCIL_DATA_DIR="$RUNNER_TEMP/council-data" "$resources/backend/council-backend/council-backend" >"$RUNNER_TEMP/backend.log" 2>&1 &
           backend_pid=$!
@@ -64,7 +64,7 @@ jobs:
           exit 1
       - name: Smoke-test launcher repeat and partial recovery
         run: |
-          package="artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
+          package="$GITHUB_WORKSPACE/artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
           resources="$package/Council.app/Contents/Resources"
           export COUNCIL_DATA_DIR="$RUNNER_TEMP/launcher-data"
           export COUNCIL_LOG_DIR="$RUNNER_TEMP/launcher-logs"
