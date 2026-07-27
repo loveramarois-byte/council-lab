@@ -5,5 +5,5 @@ keyring>=25,<26
 pydantic>=2.8,<3
 pytest>=8,<9
 pytest-asyncio>=0.23,<1
-langgraph>=1.2,<2
+langgraph>=1.2.9,<2
 langgraph-checkpoint-sqlite>=3.1,<4
