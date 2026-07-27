@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import random
 import time
 import uuid
 from typing import Any, TypedDict
@@ -11,29 +9,28 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from .context import build_context_window, context_budget_for_mode
+from .credentials import get_provider_secret
 from .models import (
+    AgentAssignmentsConfig,
+    AgentModelAssignment,
     CandidateAnswer,
     ContextSnapshot,
-    Critique,
     DiscussionAction,
     DiscussionTurn,
     FinalDecision,
-    JudgeScore,
     QuestionAnalysis,
-    RevisedAnswer,
+    ResolvedAgentAssignment,
     RunCreate,
     RunEvent,
     RunRecord,
     UsageSummary,
-    VerificationResult,
-    VerificationTask,
     utc_now,
 )
-from .providers import build_backend
+from .providers import ModelBackend, build_backend
 from .store import Store
 
 
-MODE_REASONING_EFFORT = {
+MODE_WORKFLOW_EFFORT = {
     "quick": "low",
     "standard": "high",
     "rigorous": "ultra",
@@ -45,11 +42,7 @@ CCSWITCH_EFFORT_FALLBACKS = {
     "low": [("low", 1.0)],
 }
 
-EFFORT_LABELS = {
-    "ultra": "Ultra",
-    "high": "High",
-    "low": "Low",
-}
+EFFORT_LABELS = {"ultra": "Ultra", "high": "High", "low": "Low"}
 
 
 class DebateWorkflowState(TypedDict):
@@ -57,55 +50,84 @@ class DebateWorkflowState(TypedDict):
     next_speaker_index: int
 
 
+class RunLimitReached(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 def reasoning_effort_for_mode(mode: str) -> str:
-    return MODE_REASONING_EFFORT.get(mode, "high")
+    """Legacy-compatible workflow tier; only capable Responses providers receive it upstream."""
+    return MODE_WORKFLOW_EFFORT.get(mode, "high")
 
 
 def describe_run_error(exc: Exception, timeout_seconds: int | float = 120) -> str:
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
-        return f"当前席位等待上游超过 {int(timeout_seconds)} 秒，CC Switch 未能在时限内返回结果。请重试当前席位。"
+        return f"完整审议运行超过 {int(timeout_seconds)} 秒时间上限。已保留完成的发言，可重新开一桌或重试未完成席位。"
     message = str(exc).strip()
     return message or f"{type(exc).__name__}：当前席位调用失败，请重试。"
 
 
 def analyze_question(question: str, mode: str) -> QuestionAnalysis:
     lower = question.lower()
-    question_type = "coding" if any(token in lower for token in ("代码", "python", "javascript", "bug", "api")) else "mathematical" if any(token in lower for token in ("计算", "多少", "几率", "equation")) else "current_factual" if any(token in lower for token in ("今天", "最新", "当前", "now", "latest")) else "factual"
+    question_type = (
+        "coding"
+        if any(token in lower for token in ("代码", "python", "javascript", "bug", "api"))
+        else "mathematical"
+        if any(token in lower for token in ("计算", "多少", "几率", "equation"))
+        else "current_factual"
+        if any(token in lower for token in ("今天", "最新", "当前", "now", "latest"))
+        else "factual"
+    )
     high_risk = any(token in lower for token in ("法律", "医疗", "诊断", "投资", "金融"))
-    needs_math = question_type == "mathematical"
-    needs_code = question_type == "coding"
-    agents = 4
-    return QuestionAnalysis(question_type=question_type, needs_realtime=question_type == "current_factual", needs_web=question_type in {"current_factual", "factual"}, needs_code_execution=needs_code, needs_math=needs_math, high_risk_domain=high_risk, recommended_agents=agents, recommended_mode=mode, expected_model_calls=agents + 4, expected_token_limit=12000 if mode != "rigorous" else 20000, expected_tool_calls=1 if needs_math or needs_code else 0)
+    return QuestionAnalysis(
+        question_type=question_type,
+        needs_realtime=question_type == "current_factual",
+        needs_web=question_type in {"current_factual", "factual"},
+        needs_code_execution=question_type == "coding",
+        needs_math=question_type == "mathematical",
+        high_risk_domain=high_risk,
+        recommended_agents=4,
+        recommended_mode=mode,
+        expected_model_calls=5,
+        expected_token_limit=12000 if mode != "rigorous" else 20000,
+        expected_tool_calls=0,
+    )
 
 
-def make_candidate(candidate_id: str, question: str, role: str, model: str, provider: str, text: str, usage: UsageSummary) -> CandidateAnswer:
-    return CandidateAnswer(candidate_id=candidate_id, answer=text, key_reasons=["将结论拆成可检查的条件和依据", "显式保留上下文不足带来的不确定性"], assumptions=["问题中的关键术语按通常含义理解"], claims_to_verify=[f"关于“{question[:100]}”的核心判断需要与可靠来源或确定性测试核对"], uncertainties=["没有外部资料时无法确认时效性细节"], risks=["如果题目省略关键约束，结论需要重新评估"], proposed_sources=["官方文档或第一方资料", "可复现的本地测试"], model=model, provider=provider, usage=usage, status="completed")
-
-
-def critique(candidate: CandidateAnswer, analysis: QuestionAnalysis) -> Critique:
-    issue_type = "missing_context" if analysis.question_type in {"factual", "current_factual"} else "verification_gap"
-    return Critique(candidate_id=candidate.candidate_id, severity="medium", issue_type=issue_type, issue="结论仍依赖题目未提供的上下文，不能把条件化判断写成确定事实。", affected_claim=candidate.claims_to_verify[0], suggested_check="补充来源日期、适用范围或运行最小复现。", possible_counterexample="改变一个未声明的边界条件可能让结果不同。", confidence=0.84)
-
-
-def verify(task: VerificationTask, analysis: QuestionAnalysis) -> VerificationResult:
-    if analysis.question_type == "mathematical":
-        return VerificationResult(task_id=task.task_id, claim=task.claim, status="partially_verified", evidence_summary="已确认需要确定性复算，但当前输入没有提供完整公式或数值。", tool="deterministic_math", confidence=0.55, limitations=["缺少可执行的完整表达式"])
-    if analysis.question_type == "coding":
-        return VerificationResult(task_id=task.task_id, claim=task.claim, status="partially_verified", evidence_summary="已将验证目标转成可运行测试方向；没有收到仓库或代码片段，暂不能宣称通过。", tool="test_plan", confidence=0.5, limitations=["没有实际代码输入"])
-    return VerificationResult(task_id=task.task_id, claim=task.claim, status="unverifiable", evidence_summary="当前 Mock 运行未联网，未将语言模型意见冒充外部事实核验。", tool="mock_no_network", confidence=0.25, limitations=["需要用户启用联网工具或配置可访问的来源"])
-
-
-def score_candidate(candidate: CandidateAnswer, critiques: list[Critique], verifications: list[VerificationResult]) -> JudgeScore:
-    evidence = 58.0 if any(v.status == "verified" for v in verifications) else 42.0
-    reasoning = 74.0
-    coverage = 68.0
-    risk = 80.0 if not critiques else 62.0
-    clarity = 78.0
-    weighted = round(evidence * 0.35 + reasoning * 0.25 + coverage * 0.2 + risk * 0.1 + clarity * 0.1, 2)
-    return JudgeScore(candidate_id=candidate.candidate_id, evidence_score=evidence, reasoning_score=reasoning, coverage_score=coverage, risk_score=risk, clarity_score=clarity, weighted_total=weighted, disqualifying_issues=[], explanation="证据覆盖仍有限，因此权重集中体现可验证边界、推理完整度和风险披露。")
+def make_candidate(
+    candidate_id: str,
+    question: str,
+    role: str,
+    model: str,
+    provider: str,
+    text: str,
+    usage: UsageSummary,
+) -> CandidateAnswer:
+    return CandidateAnswer(
+        candidate_id=candidate_id,
+        answer=text,
+        key_reasons=["将结论拆成可检查的条件和依据", "显式保留上下文不足带来的不确定性"],
+        assumptions=["问题中的关键术语按通常含义理解"],
+        claims_to_verify=[f"关于“{question[:100]}”的核心判断尚未经过外部事实核验"],
+        uncertainties=["当前版本只进行模型间公开审议，不执行外部事实核验"],
+        risks=["如果题目省略关键约束，结论需要重新评估"],
+        proposed_sources=[],
+        model=model,
+        provider=provider,
+        usage=usage,
+        status="completed",
+    )
 
 
 class Orchestrator:
+    PARTICIPANTS = [
+        {"id": "analyst", "name": "析理", "role": "拆解者", "brief": "澄清问题、条件和真正的决策目标"},
+        {"id": "challenger", "name": "诘问", "role": "挑战者", "brief": "寻找反例、漏洞和被忽略的代价"},
+        {"id": "builder", "name": "构策", "role": "方案师", "brief": "提出可执行方案、取舍和验证步骤"},
+        {"id": "observer", "name": "观澜", "role": "观察者", "brief": "连接各方观点、指出分歧，但不提前裁决"},
+    ]
+
     def __init__(self, store: Store, providers: dict[str, Any]):
         self.store = store
         self.providers = providers
@@ -114,121 +136,256 @@ class Orchestrator:
         self.run_locks: dict[str, asyncio.Lock] = {}
         self.retrying_runs: set[str] = set()
         self.live_runs: dict[str, RunRecord] = {}
+        self.shutting_down = False
 
-    PARTICIPANTS = [
-        {"id": "analyst", "name": "析理", "role": "拆解者", "brief": "澄清问题、条件和真正的决策目标"},
-        {"id": "challenger", "name": "诘问", "role": "挑战者", "brief": "寻找反例、漏洞和被忽略的代价"},
-        {"id": "builder", "name": "构策", "role": "方案师", "brief": "提出可执行方案、取舍和验证步骤"},
-        {"id": "observer", "name": "观澜", "role": "观察者", "brief": "连接各方观点、指出分歧，但不提前裁决"},
-    ]
+    def default_assignment_config(self, provider_id: str, model: str | None = None, mode: str = "standard") -> AgentAssignmentsConfig:
+        profile = self.providers.get(provider_id)
+        if not profile:
+            raise ValueError(f"Provider 不存在：{provider_id}")
+        selected_model = model or profile.default_model
+        if not selected_model:
+            raise ValueError(f"Provider {profile.display_name} 尚未配置模型")
+        effort = reasoning_effort_for_mode(mode)
+        seats = [
+            AgentModelAssignment(
+                role=participant["id"],
+                provider_id=profile.id,
+                model=selected_model,
+                protocol=profile.protocol_mode,
+                reasoning_effort=effort,
+                timeout_seconds=profile.timeout_seconds,
+            )
+            for participant in self.PARTICIPANTS
+        ]
+        finalizer = AgentModelAssignment(
+            role="finalizer",
+            provider_id=profile.id,
+            model=selected_model,
+            protocol=profile.protocol_mode,
+            reasoning_effort=effort,
+            timeout_seconds=profile.timeout_seconds,
+        )
+        return AgentAssignmentsConfig(seats=seats, finalizer=finalizer)
+
+    def _resolve_assignment(self, assignment: AgentModelAssignment) -> ResolvedAgentAssignment:
+        profile = self.providers.get(assignment.provider_id)
+        if not profile:
+            raise ValueError(f"Provider 不存在：{assignment.provider_id}")
+        model = assignment.model or profile.default_model
+        if not model:
+            raise ValueError(f"Provider {profile.display_name} 尚未配置模型")
+        snapshot = profile.model_copy(
+            deep=True,
+            update={
+                "protocol_mode": assignment.protocol,
+                "reasoning_effort": assignment.reasoning_effort,
+                "timeout_seconds": assignment.timeout_seconds,
+                "default_model": model,
+            },
+        )
+        return ResolvedAgentAssignment(
+            role=assignment.role,
+            provider_id=profile.id,
+            provider_name=profile.display_name,
+            model=model,
+            protocol=assignment.protocol,
+            reasoning_effort=assignment.reasoning_effort,
+            max_output_tokens=assignment.max_output_tokens,
+            temperature=assignment.temperature,
+            timeout_seconds=assignment.timeout_seconds,
+            provider_snapshot=snapshot,
+        )
+
+    def _resolve_config(self, request: RunCreate) -> tuple[list[ResolvedAgentAssignment], ResolvedAgentAssignment]:
+        config = request.assignment_config or self.default_assignment_config(request.provider_id, request.model, request.mode)
+        if [item.role for item in config.seats] != [item["id"] for item in self.PARTICIPANTS]:
+            raise ValueError("四席配置顺序必须为 analyst、challenger、builder、observer")
+        if config.finalizer.role != "finalizer":
+            raise ValueError("总结席角色必须为 finalizer")
+        return [self._resolve_assignment(item) for item in config.seats], self._resolve_assignment(config.finalizer)
 
     async def start(self, request: RunCreate) -> RunRecord:
-        profile = self.providers.get(request.provider_id) or self.providers["mock"]
+        seats, finalizer = self._resolve_config(request)
         run_id = str(uuid.uuid4())
-        model = request.model or profile.default_model
-        run = RunRecord(id=run_id, question=request.question, mode=request.mode, provider_id=profile.id, model=model, reasoning_effort=reasoning_effort_for_mode(request.mode), workflow_engine="langgraph", status="queued", created_at=utc_now(), updated_at=utc_now(), protocol=profile.protocol_mode, participant_roles=self.PARTICIPANTS)
+        primary = seats[0]
+        run = RunRecord(
+            id=run_id,
+            question=request.question,
+            mode=request.mode,
+            provider_id=primary.provider_id,
+            model=primary.model,
+            reasoning_effort=reasoning_effort_for_mode(request.mode),
+            workflow_engine="langgraph",
+            status="queued",
+            created_at=utc_now(),
+            updated_at=utc_now(),
+            protocol=primary.protocol,
+            participant_roles=self.PARTICIPANTS,
+            limits=request.limits,
+            seat_assignments=seats,
+            finalizer_assignment=finalizer,
+            auto_summarize=request.auto_summarize,
+        )
         await self.store.save_run(run)
         self.live_runs[run_id] = run
         await self.store.seed_events(run_id)
         cancel = asyncio.Event()
         self.cancel_events[run_id] = cancel
         self.run_locks[run_id] = asyncio.Lock()
-        self.tasks[run_id] = asyncio.create_task(self.execute(run, request, self._profile_for_run(profile, run), cancel))
+        self.tasks[run_id] = asyncio.create_task(self.execute(run, cancel))
         return run
 
-    @staticmethod
-    def _profile_for_run(profile: Any, run: RunRecord) -> Any:
-        return profile.model_copy(update={"reasoning_effort": run.reasoning_effort})
-
-    async def emit(self, run: RunRecord, event_type: str, stage: str, message: str, progress: int, data: dict[str, Any] | None = None) -> None:
+    async def emit(
+        self,
+        run: RunRecord,
+        event_type: str,
+        stage: str,
+        message: str,
+        progress: int,
+        data: dict[str, Any] | None = None,
+    ) -> None:
         run.updated_at = utc_now()
         await self.store.save_run(run)
-        await self.store.publish(RunEvent(event_id=str(uuid.uuid4()), run_id=run.id, type=event_type, stage=stage, message=message, progress=progress, data=data or {}))
+        await self.store.publish(
+            RunEvent(
+                event_id=str(uuid.uuid4()),
+                run_id=run.id,
+                type=event_type,
+                stage=stage,
+                message=message,
+                progress=progress,
+                data=data or {},
+            )
+        )
 
-    async def execute(self, run: RunRecord, request: RunCreate, profile: Any, cancel: asyncio.Event) -> None:
+    async def execute(self, run: RunRecord, cancel: asyncio.Event) -> None:
         started = time.perf_counter()
         try:
             run.status = "running"
+            run.recoverable = False
             await self.emit(run, "question_analyzed", "analysis", "问题已放上圆桌，第一位成员正在准备发言", 8)
-            analysis = analyze_question(request.question, request.mode)
-            run.analysis = analysis
-            await self._run_debate_graph(run, request, profile, cancel, resume=False)
-            run.usage.duration_ms = int((time.perf_counter() - started) * 1000)
+            run.analysis = analyze_question(run.question, run.mode)
+            async with asyncio.timeout(run.limits.timeout_seconds):
+                await self._run_debate_graph(run, cancel, resume=False)
+                if run.status == "awaiting_final_input" and run.auto_summarize:
+                    await self._finalize_once(run)
+        except RunLimitReached as exc:
+            await self._stop_for_limit(run, exc)
         except asyncio.CancelledError:
-            if run.id not in self.retrying_runs:
+            if self.shutting_down:
+                run.status = "running"
+                run.recoverable = True
+            elif run.id not in self.retrying_runs:
                 run.status = "cancelled"
                 run.error = "任务已取消"
                 await self.emit(run, "run_cancelled", "cancelled", "审议已取消，已保留当前进度", 100)
         except Exception as exc:
             run.status = "failed"
             run.degraded = True
-            run.error = describe_run_error(exc, request.limits.timeout_seconds)
-            await self.emit(run, "run_failed", "error", "当前席位调用失败，已保留讨论进度", 100, {"error": run.error, "speaker_index": run.current_speaker_index})
+            run.recoverable = True
+            run.error = describe_run_error(exc, run.limits.timeout_seconds)
+            await self.emit(
+                run,
+                "run_failed",
+                "error",
+                "当前席位调用失败，已保留讨论进度",
+                100,
+                {"error": run.error, "speaker_index": run.current_speaker_index},
+            )
         finally:
+            run.usage.duration_ms += int((time.perf_counter() - started) * 1000)
             run.updated_at = utc_now()
             await self.store.save_run(run)
 
-    def _transcript(self, run: RunRecord) -> str:
-        if not run.discussion_turns:
-            return "（尚无发言）"
-        return "\n\n".join(f"{turn.speaker_name}：{turn.content}" for turn in run.discussion_turns[-16:])
+    async def _stop_for_limit(self, run: RunRecord, exc: RunLimitReached) -> None:
+        run.status = "stopped"
+        run.awaiting_user = False
+        run.recoverable = False
+        run.limit_reason = exc.code
+        run.error = str(exc)
+        await self.emit(
+            run,
+            "run_limit_reached",
+            "limits",
+            str(exc),
+            100,
+            {"limit": exc.code, "speaker_index": run.current_speaker_index},
+        )
 
-    async def _run_debate_graph(self, run: RunRecord, request: RunCreate, profile: Any, cancel: asyncio.Event, resume: bool) -> None:
-        backends: dict[str, Any] = {}
+    async def _run_debate_graph(self, run: RunRecord, cancel: asyncio.Event, resume: bool) -> None:
+        backends: dict[str, ModelBackend] = {}
 
         async def run_turn(state: DebateWorkflowState) -> dict[str, int]:
             if cancel.is_set():
                 raise asyncio.CancelledError
             speaker_index = state["next_speaker_index"]
-            await self._generate_turn(run, request, profile, backends, speaker_index)
+            if speaker_index < run.current_speaker_index:
+                return {"next_speaker_index": run.current_speaker_index}
+            if speaker_index >= len(self.PARTICIPANTS):
+                return {"next_speaker_index": speaker_index}
+            participant = self.PARTICIPANTS[speaker_index]
+            candidate_id = f"candidate-{participant['id']}"
+            if any(item.candidate_id == candidate_id for item in run.candidates):
+                run.current_speaker_index = max(run.current_speaker_index, speaker_index + 1)
+                await self.store.save_run(run)
+                return {"next_speaker_index": run.current_speaker_index}
+            await self._generate_turn(run, backends, speaker_index)
             run.checkpoint_count = max(run.checkpoint_count, run.current_speaker_index)
             await self.store.save_run(run)
             return {"next_speaker_index": run.current_speaker_index}
-
-        async def finalize(_: DebateWorkflowState) -> dict[str, int]:
-            if cancel.is_set():
-                raise asyncio.CancelledError
-            await self._finalize_debate(run, request, profile, backends)
-            run.checkpoint_count = max(run.checkpoint_count, len(self.PARTICIPANTS) + 1)
-            await self.store.save_run(run)
-            return {"next_speaker_index": len(self.PARTICIPANTS)}
 
         async def dispatch(_: DebateWorkflowState) -> dict[str, int]:
             return {}
 
         def route(state: DebateWorkflowState) -> str:
-            return "turn" if state["next_speaker_index"] < len(self.PARTICIPANTS) else "finalize"
+            return "turn" if state["next_speaker_index"] < len(self.PARTICIPANTS) else "done"
 
         builder = StateGraph(DebateWorkflowState)
         builder.add_node("dispatch", dispatch)
         builder.add_node("turn", run_turn)
-        builder.add_node("finalize", finalize)
+        builder.add_node("done", lambda _: {})
         builder.add_edge(START, "dispatch")
-        builder.add_conditional_edges("dispatch", route, {"turn": "turn", "finalize": "finalize"})
-        builder.add_conditional_edges("turn", route, {"turn": "turn", "finalize": "finalize"})
-        builder.add_edge("finalize", END)
+        builder.add_conditional_edges("dispatch", route, {"turn": "turn", "done": "done"})
+        builder.add_conditional_edges("turn", route, {"turn": "turn", "done": "done"})
+        builder.add_edge("done", END)
 
         config = {"configurable": {"thread_id": run.id}}
-        async with AsyncSqliteSaver.from_conn_string(self.store.checkpoint_path) as saver:
-            await saver.conn.execute("PRAGMA busy_timeout=5000")
-            graph = builder.compile(checkpointer=saver)
-            checkpoint = await saver.aget_tuple(config)
-            graph_input: DebateWorkflowState | None = None if resume and checkpoint else {
-                "run_id": run.id,
-                "next_speaker_index": run.current_speaker_index,
-            }
-            graph_completed = False
-            try:
+        try:
+            async with AsyncSqliteSaver.from_conn_string(self.store.checkpoint_path) as saver:
+                await saver.conn.execute("PRAGMA busy_timeout=5000")
+                graph = builder.compile(checkpointer=saver)
+                checkpoint = await saver.aget_tuple(config)
+                graph_input: DebateWorkflowState | None = None if resume and checkpoint else {
+                    "run_id": run.id,
+                    "next_speaker_index": run.current_speaker_index,
+                }
                 await graph.ainvoke(graph_input, config)
-                graph_completed = True
-            finally:
                 run.checkpoint_count = len([item async for item in saver.alist(config)])
-                if graph_completed and run.final_decision is not None:
-                    run.status = "completed"
-                    run.awaiting_user = False
-                    await self.emit(run, "final_completed", "complete", "四席辩论与最终答案已完成", 100, {"confidence": "medium"})
-                else:
-                    await self.store.save_run(run)
+        finally:
+            await self._close_backends(backends)
+
+        if run.current_speaker_index >= len(self.PARTICIPANTS) and run.final_decision is None:
+            run.status = "awaiting_final_input"
+            run.awaiting_user = True
+            await self.emit(
+                run,
+                "awaiting_final_input",
+                "discussion",
+                "四席发言完成。你可以补充信息，确认后再生成最终答案",
+                90,
+            )
+
+    @staticmethod
+    async def _close_backends(backends: dict[str, ModelBackend]) -> None:
+        unique = {id(backend): backend for backend in backends.values()}
+        if unique:
+            close_calls = []
+            for backend in unique.values():
+                close = getattr(backend, "aclose", None)
+                if close:
+                    close_calls.append(close())
+            if close_calls:
+                await asyncio.gather(*close_calls, return_exceptions=True)
 
     @staticmethod
     def _is_retryable_generation_error(exc: Exception) -> bool:
@@ -247,51 +404,100 @@ class Orchestrator:
         error = payload.get("error") if isinstance(payload, dict) else None
         return isinstance(error, dict) and error.get("code") == "cc_switch_upstream_error"
 
-    async def _generate_with_fallback(self, run: RunRecord, request: RunCreate, profile: Any, backends: dict[str, Any], prompt: str, system: str) -> Any:
-        provider_type = getattr(profile.provider_type, "value", profile.provider_type)
-        plan = CCSWITCH_EFFORT_FALLBACKS.get(run.reasoning_effort, [(run.reasoning_effort, 1.0)]) if provider_type == "ccswitch_local" else [(run.reasoning_effort, 1.0)]
+    @staticmethod
+    def _check_call_limits(run: RunRecord) -> None:
+        if run.usage.model_calls >= run.limits.max_model_calls:
+            raise RunLimitReached("max_model_calls", f"已达到模型调用上限（{run.limits.max_model_calls} 次），未继续请求下一席。")
+        used_tokens = run.usage.input_tokens + run.usage.output_tokens
+        if used_tokens >= run.limits.max_tokens:
+            raise RunLimitReached("max_tokens", f"已达到 Token 上限（{run.limits.max_tokens}），未继续请求下一席。")
+
+    async def _generate_with_fallback(
+        self,
+        run: RunRecord,
+        assignment: ResolvedAgentAssignment,
+        backends: dict[str, ModelBackend],
+        prompt: str,
+        system: str,
+    ) -> Any:
+        provider_type = getattr(assignment.provider_snapshot.provider_type, "value", assignment.provider_snapshot.provider_type)
+        native_effort = assignment.provider_snapshot.capabilities.supports_reasoning_effort
+        plan = (
+            CCSWITCH_EFFORT_FALLBACKS.get(assignment.reasoning_effort, [(assignment.reasoning_effort, 1.0)])
+            if provider_type == "ccswitch_local" and native_effort
+            else [(assignment.reasoning_effort, 1.0)]
+        )
 
         for index, (effort, timeout_fraction) in enumerate(plan):
-            attempt_profile = profile.model_copy(update={"reasoning_effort": effort})
-            if effort not in backends:
-                backends[effort] = build_backend(attempt_profile)
+            self._check_call_limits(run)
+            attempt_profile = assignment.provider_snapshot.model_copy(update={"reasoning_effort": effort})
+            backend_key = f"{assignment.role}:{assignment.provider_id}:{assignment.model}:{effort}"
+            if backend_key not in backends:
+                backends[backend_key] = build_backend(attempt_profile)
+            run.usage.model_calls += 1
+            await self.store.save_run(run)
             try:
-                return await asyncio.wait_for(
-                    backends[effort].generate(prompt, system, run.model),
-                    timeout=max(1.0, request.limits.timeout_seconds * timeout_fraction),
+                generation = await asyncio.wait_for(
+                    backends[backend_key].generate(
+                        prompt,
+                        system,
+                        assignment.model,
+                        temperature=assignment.temperature,
+                    ),
+                    timeout=max(1.0, min(assignment.timeout_seconds, run.limits.timeout_seconds) * timeout_fraction),
                 )
+                run.usage.input_tokens += generation.input_tokens
+                run.usage.output_tokens += generation.output_tokens
+                return generation
             except Exception as exc:
                 if index >= len(plan) - 1 or not self._is_retryable_generation_error(exc):
                     raise
                 next_effort = plan[index + 1][0]
                 run.degraded = True
                 run.reasoning_effort = next_effort
+                for pending in run.seat_assignments[run.current_speaker_index:]:
+                    if pending.provider_id == assignment.provider_id and pending.reasoning_effort == effort:
+                        pending.reasoning_effort = next_effort
+                        pending.provider_snapshot.reasoning_effort = next_effort
+                if run.finalizer_assignment and run.finalizer_assignment.provider_id == assignment.provider_id and run.finalizer_assignment.reasoning_effort == effort:
+                    run.finalizer_assignment.reasoning_effort = next_effort
+                    run.finalizer_assignment.provider_snapshot.reasoning_effort = next_effort
                 current_label = EFFORT_LABELS.get(effort, effort.title())
                 next_label = EFFORT_LABELS.get(next_effort, next_effort.title())
                 reason = "上游超时" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else "上游暂不可用"
-                turn = DiscussionTurn(
-                    id=str(uuid.uuid4()),
-                    speaker_type="system",
-                    speaker_id="route",
-                    speaker_name="路由",
-                    role_label="自动故障转移",
-                    content=f"{current_label} 档{reason}，已自动降为 {next_label} 档继续当前席位。",
-                    round=run.discussion_round,
+                run.discussion_turns.append(
+                    DiscussionTurn(
+                        id=str(uuid.uuid4()),
+                        speaker_type="system",
+                        speaker_id="route",
+                        speaker_name="路由",
+                        role_label="自动重试",
+                        content=f"{current_label} 原生推理档{reason}，已自动降为 {next_label} 档重试当前席位。",
+                        round=run.discussion_round,
+                        provider_id=assignment.provider_id,
+                        provider_name=assignment.provider_name,
+                        model=assignment.model,
+                    )
                 )
-                run.discussion_turns.append(turn)
                 await self.emit(
                     run,
                     "provider_degraded",
                     "discussion",
-                    f"CC Switch {current_label} 档{reason}，正在以 {next_label} 档继续当前席位",
+                    f"{assignment.provider_name} {current_label} 档{reason}，正在以 {next_label} 档重试",
                     min(88, 15 + len(run.discussion_turns) * 7),
                     {"from_effort": effort, "to_effort": next_effort, "speaker_index": run.current_speaker_index},
                 )
 
-        raise RuntimeError("CC Switch 档位降级流程未能生成结果")
+        raise RuntimeError("Provider 重试流程未能生成结果")
 
-    async def _generate_turn(self, run: RunRecord, request: RunCreate, profile: Any, backends: dict[str, Any], speaker_index: int) -> None:
+    async def _generate_turn(
+        self,
+        run: RunRecord,
+        backends: dict[str, ModelBackend],
+        speaker_index: int,
+    ) -> None:
         participant = self.PARTICIPANTS[speaker_index]
+        assignment = run.seat_assignments[speaker_index]
         run.awaiting_user = False
         context_window = build_context_window(run.question, run.discussion_turns, context_budget_for_mode(run.mode))
         run.context_snapshot = ContextSnapshot(
@@ -302,7 +508,14 @@ class Orchestrator:
             compacted=context_window.compacted,
             summary=context_window.summary,
         )
-        await self.emit(run, "agent_turn_started", "discussion", f"{participant['name']}正在组织这一轮发言", min(82, 15 + len(run.discussion_turns) * 7), {"speaker": participant})
+        await self.emit(
+            run,
+            "agent_turn_started",
+            "discussion",
+            f"{participant['name']}正在通过 {assignment.provider_name} / {assignment.model} 组织发言",
+            min(82, 15 + len(run.discussion_turns) * 7),
+            {"speaker": participant, "provider_id": assignment.provider_id, "model": assignment.model},
+        )
         if speaker_index == 0:
             debate_instruction = "你是第一位发言者。直接回答用户问题，给出清楚的初步观点和依据，为后续辩论建立起点。"
         else:
@@ -317,21 +530,63 @@ class Orchestrator:
             "这是用户全程可参与的公开讨论。必须回应记录中最新的用户插话。"
             "不要替全体宣布最终答案，不展示隐藏思维链，控制在220字以内。"
         )
-        generation = await self._generate_with_fallback(run, request, profile, backends, context_window.prompt, system)
-        turn = DiscussionTurn(id=str(uuid.uuid4()), speaker_type="agent", speaker_id=participant["id"], speaker_name=participant["name"], role_label=participant["role"], content=generation.text.strip(), round=run.discussion_round)
+        generation = await self._generate_with_fallback(run, assignment, backends, context_window.prompt, system)
+        turn = DiscussionTurn(
+            id=str(uuid.uuid4()),
+            speaker_type="agent",
+            speaker_id=participant["id"],
+            speaker_name=participant["name"],
+            role_label=participant["role"],
+            content=generation.text.strip(),
+            round=run.discussion_round,
+            provider_id=assignment.provider_id,
+            provider_name=assignment.provider_name,
+            model=assignment.model,
+        )
         run.discussion_turns.append(turn)
         run.current_speaker_index = speaker_index + 1
-        candidate = make_candidate(f"candidate-{participant['id']}", run.question, participant["role"], run.model, profile.display_name, generation.text, UsageSummary(model_calls=1, input_tokens=generation.input_tokens, output_tokens=generation.output_tokens))
+        candidate = make_candidate(
+            f"candidate-{participant['id']}",
+            run.question,
+            participant["role"],
+            assignment.model,
+            assignment.provider_name,
+            generation.text,
+            UsageSummary(
+                model_calls=1,
+                input_tokens=generation.input_tokens,
+                output_tokens=generation.output_tokens,
+            ),
+        )
         candidate.anonymous_label = participant["name"]
         run.candidates = [item for item in run.candidates if item.candidate_id != candidate.candidate_id] + [candidate]
-        run.usage.model_calls += 1
-        run.usage.input_tokens += generation.input_tokens
-        run.usage.output_tokens += generation.output_tokens
         next_speaker = self.PARTICIPANTS[run.current_speaker_index] if run.current_speaker_index < len(self.PARTICIPANTS) else None
-        await self.emit(run, "agent_turn_completed", "discussion", f"{participant['name']}发言完毕，下一位将继续回应；你可随时插话", min(88, 20 + len(run.discussion_turns) * 14), {"turn": turn.model_dump(mode="json"), "next_speaker": next_speaker})
+        await self.emit(
+            run,
+            "agent_turn_completed",
+            "discussion",
+            f"{participant['name']}发言完毕，下一位将继续回应；你可随时插话",
+            min(88, 20 + len(run.discussion_turns) * 14),
+            {"turn": turn.model_dump(mode="json"), "next_speaker": next_speaker},
+        )
 
-    async def _finalize_debate(self, run: RunRecord, request: RunCreate, profile: Any, backends: dict[str, Any]) -> None:
-        started = time.perf_counter()
+    @staticmethod
+    def _explicit_disagreements(run: RunRecord) -> list[str]:
+        markers = ("表态：反驳", "表态:反驳", "表态：部分认同", "表态:部分认同")
+        return [
+            turn.content
+            for turn in run.discussion_turns
+            if turn.speaker_type == "agent" and turn.content.lstrip().startswith(markers)
+        ]
+
+    async def _finalize_debate(
+        self,
+        run: RunRecord,
+        assignment: ResolvedAgentAssignment,
+        backends: dict[str, ModelBackend],
+    ) -> None:
+        if run.final_decision is not None:
+            return
         context_window = build_context_window(run.question, run.discussion_turns, context_budget_for_mode(run.mode))
         run.context_snapshot = ContextSnapshot(
             token_budget=context_window.token_budget,
@@ -341,53 +596,85 @@ class Orchestrator:
             compacted=context_window.compacted,
             summary=context_window.summary,
         )
-        await self.emit(run, "summary_started", "summary", "四席辩论完成，正在根据公开讨论形成最终答案", 94)
+        await self.emit(run, "summary_started", "summary", "正在根据四席公开讨论和你的最终补充形成答案", 94)
         generation = await self._generate_with_fallback(
             run,
-            request,
-            profile,
+            assignment,
             backends,
             context_window.prompt,
             "你是圆桌记录员。根据四位成员和用户的完整公开讨论，直接给出最终答案。先综合已经形成的共识，再处理明确分歧，最后给出可执行答案和必要边界。不要声称不存在的共识，不展示隐藏思维链。",
         )
-        run.usage.model_calls += 1
-        run.usage.input_tokens += generation.input_tokens
-        run.usage.output_tokens += generation.output_tokens
-        run.usage.duration_ms += int((time.perf_counter() - started) * 1000)
-        provider_type = getattr(profile.provider_type, "value", profile.provider_type)
+        provider_type = getattr(assignment.provider_snapshot.provider_type, "value", assignment.provider_snapshot.provider_type)
         run.final_decision = FinalDecision(
             final_answer=generation.text.strip(),
-            key_reasons=["四席按顺序公开回应", "认同与反驳均保留在完整记录中"],
-            disagreements=[turn.content for turn in run.discussion_turns if turn.speaker_type == "agent"],
-            risks_and_limitations=["最终答案综合公开讨论，不代表四个独立模型的统计投票。"],
-            confidence={"level": "medium", "score": 65, "explanation": "置信度取决于讨论覆盖与输入信息，不代表事实概率。"},
-            provider_summary={"provider": profile.display_name, "protocol": "mock" if provider_type == "mock" else "openai_compatible", "model": run.model, "used_ccswitch": provider_type == "ccswitch_local", "degraded": run.degraded},
+            key_reasons=["四席按顺序公开回应", "用户在最终综合前确认了讨论上下文"],
+            unverified_claims=["模型共识尚未经过外部事实核验"],
+            disagreements=self._explicit_disagreements(run),
+            risks_and_limitations=["模型共识不等于事实验证；关键结论仍需使用第一方资料或可复现测试核对。"],
+            confidence={"level": "unverified", "explanation": "当前版本未执行外部事实核验，因此不提供百分比置信度。"},
+            provider_summary={
+                "provider": assignment.provider_name,
+                "protocol": "mock" if provider_type == "mock" else "openai_compatible",
+                "model": assignment.model,
+                "used_ccswitch": provider_type == "ccswitch_local",
+                "degraded": run.degraded,
+                "seat_providers": [
+                    {"role": item.role, "provider": item.provider_name, "model": item.model}
+                    for item in run.seat_assignments
+                ],
+            },
             usage=run.usage,
         )
+
+    async def _finalize_once(self, run: RunRecord) -> None:
+        if not run.finalizer_assignment:
+            raise RuntimeError("此运行缺少总结席配置快照")
+        backends: dict[str, ModelBackend] = {}
+        try:
+            await self._finalize_debate(run, run.finalizer_assignment, backends)
+        finally:
+            await self._close_backends(backends)
+        run.status = "completed"
+        run.awaiting_user = False
+        run.recoverable = False
+        await self.emit(run, "final_completed", "complete", "圆桌最终答案已生成", 100, {"verification": "unverified"})
 
     async def interject(self, run_id: str, action: DiscussionAction) -> RunRecord | None:
         run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
         if not run:
             return None
-        if run.status != "running" or not action.message.strip():
+        can_interject = run.status == "awaiting_final_input" or (
+            run.status == "running" and run.current_speaker_index < len(self.PARTICIPANTS)
+        )
+        if not can_interject or not action.message.strip():
             return run
         target = next((item for item in self.PARTICIPANTS if item["id"] == action.target_agent), None)
         prefix = f"问{target['name']}：" if action.action == "question" and target else ""
-        run.discussion_turns.append(DiscussionTurn(id=str(uuid.uuid4()), speaker_type="user", speaker_id="user", speaker_name="你", role_label="参与者", content=prefix + action.message.strip(), round=run.discussion_round))
-        run.updated_at = utc_now()
-        await self.store.save_run(run)
-        await self.store.publish(RunEvent(event_id=str(uuid.uuid4()), run_id=run.id, type="user_interjected", stage="discussion", message="你的观点已进入公开讨论，后续成员将会看到", progress=min(90, 12 + len(run.discussion_turns) * 12), data={"target_agent": action.target_agent}))
+        run.discussion_turns.append(
+            DiscussionTurn(
+                id=str(uuid.uuid4()),
+                speaker_type="user",
+                speaker_id="user",
+                speaker_name="你",
+                role_label="最终补充" if run.status == "awaiting_final_input" else "参与者",
+                content=prefix + action.message.strip(),
+                round=run.discussion_round,
+            )
+        )
+        await self.emit(
+            run,
+            "user_interjected",
+            "discussion",
+            "你的补充已进入公开讨论",
+            90 if run.status == "awaiting_final_input" else min(90, 12 + len(run.discussion_turns) * 12),
+            {"target_agent": action.target_agent},
+        )
         return run
 
     async def advance(self, run_id: str, action: DiscussionAction) -> RunRecord | None:
-        run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
-        if not run:
-            return None
-        if run.status != "running":
-            return run
         if action.action in {"interject", "question"}:
             return await self.interject(run_id, action)
-        return run
+        return self.live_runs.get(run_id) or await self.store.get_run(run_id)
 
     async def retry_turn(self, run_id: str) -> RunRecord | None:
         run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
@@ -410,72 +697,143 @@ class Orchestrator:
         run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
         if not run:
             return None
+        self._ensure_run_assignments(run)
+        self._ensure_credentials(run)
         run.status = "running"
         run.awaiting_user = False
         run.error = None
-        run.updated_at = utc_now()
+        run.recoverable = False
         await self.store.save_run(run)
-
-        profile = self._profile_for_run(self.providers.get(run.provider_id) or self.providers["mock"], run)
-        request = RunCreate(question=run.question, mode=run.mode, provider_id=run.provider_id, model=run.model)
         cancel = asyncio.Event()
         self.cancel_events[run_id] = cancel
-        self.tasks[run_id] = asyncio.create_task(self._resume_debate(run, request, profile, cancel))
+        self.tasks[run_id] = asyncio.create_task(self._resume_debate(run, cancel))
         return run
 
-    async def _resume_debate(self, run: RunRecord, request: RunCreate, profile: Any, cancel: asyncio.Event) -> None:
+    async def _resume_debate(self, run: RunRecord, cancel: asyncio.Event) -> None:
         lock = self.run_locks.setdefault(run.id, asyncio.Lock())
         async with lock:
+            started = time.perf_counter()
             try:
-                await self._run_debate_graph(run, request, profile, cancel, resume=True)
+                async with asyncio.timeout(run.limits.timeout_seconds):
+                    await self._run_debate_graph(run, cancel, resume=True)
+                    if run.status == "awaiting_final_input" and run.auto_summarize:
+                        await self._finalize_once(run)
+            except RunLimitReached as exc:
+                await self._stop_for_limit(run, exc)
+            except asyncio.CancelledError:
+                if self.shutting_down:
+                    run.status = "running"
+                    run.recoverable = True
+                else:
+                    raise
             except Exception as exc:
                 run.degraded = True
                 run.status = "failed"
-                run.error = describe_run_error(exc, request.limits.timeout_seconds)
-                await self.emit(run, "run_failed", "discussion", "当前席位重试失败，已保留公开讨论记录", 50, {"error": run.error, "speaker_index": run.current_speaker_index})
+                run.recoverable = True
+                run.error = describe_run_error(exc, run.limits.timeout_seconds)
+                await self.emit(
+                    run,
+                    "run_failed",
+                    "discussion",
+                    "当前席位恢复失败，已保留公开讨论记录",
+                    100,
+                    {"error": run.error, "speaker_index": run.current_speaker_index},
+                )
             finally:
+                run.usage.duration_ms += int((time.perf_counter() - started) * 1000)
                 await self.store.save_run(run)
 
     async def summarize(self, run_id: str) -> RunRecord | None:
-        run = await self.store.get_run(run_id)
+        run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
         if not run:
             return None
-        if run.status != "running" or not run.awaiting_user:
+        if run.status != "awaiting_final_input" or not run.awaiting_user:
             return run
+        self._ensure_run_assignments(run)
+        self._ensure_credentials(run, finalizer_only=True)
+        run.status = "running"
         run.awaiting_user = False
+        run.error = None
         await self.store.save_run(run)
-        profile = self._profile_for_run(self.providers.get(run.provider_id) or self.providers["mock"], run)
-        self.tasks[run_id] = asyncio.create_task(self._summarize_task(run, profile))
+        self.tasks[run_id] = asyncio.create_task(self._summarize_task(run))
         return run
 
-    async def _summarize_task(self, run: RunRecord, profile: Any) -> None:
+    async def _summarize_task(self, run: RunRecord) -> None:
         started = time.perf_counter()
         try:
-            await self.emit(run, "summary_started", "summary", "收到你的指令，正在整理共识、分歧和下一步", 92)
-            generation = await build_backend(profile).generate(
-                f"原始问题：{run.question}\n\n公开圆桌记录：\n{self._transcript(run)}",
-                "你是圆桌记录员。只根据公开对话总结：1.暂时共识；2.关键分歧；3.仍缺信息；4.建议下一步。不要伪造事实或一致意见。",
-                run.model,
-            )
-            run.usage.model_calls += 1
-            run.usage.input_tokens += generation.input_tokens
-            run.usage.output_tokens += generation.output_tokens
-            run.usage.duration_ms += int((time.perf_counter() - started) * 1000)
-            provider_type = getattr(profile.provider_type, "value", profile.provider_type)
-            run.final_decision = FinalDecision(final_answer=generation.text.strip(), key_reasons=["结论仅在你主动要求总结后生成", "保留圆桌中的分歧和未决信息"], verified_claims=[], partially_verified_claims=[], contradicted_claims=[], unverified_claims=["圆桌观点尚未经过外部事实核验"] if not run.analysis or run.analysis.needs_web else [], disagreements=[turn.content for turn in run.discussion_turns if turn.speaker_type == "agent"][-4:], risks_and_limitations=["这是讨论纪要，不是四个独立模型的统计投票。"], confidence={"level": "medium", "score": 65, "explanation": "置信度取决于讨论覆盖，不代表事实概率。"}, sources=[], provider_summary={"provider": profile.display_name, "protocol": "mock" if provider_type == "mock" else "openai_compatible", "model": run.model, "used_ccswitch": provider_type == "ccswitch_local", "degraded": run.degraded}, usage=run.usage)
-            run.status = "completed"
-            run.awaiting_user = False
-            await self.emit(run, "final_completed", "complete", "圆桌纪要已按你的要求生成", 100, {"confidence": "medium"})
+            async with asyncio.timeout(run.limits.timeout_seconds):
+                await self._finalize_once(run)
+        except RunLimitReached as exc:
+            await self._stop_for_limit(run, exc)
         except Exception as exc:
+            run.status = "awaiting_final_input"
             run.awaiting_user = True
-            run.error = str(exc)
-            await self.emit(run, "agent_turn_failed", "summary", "总结请求未完成，讨论记录已保留", 92, {"error": str(exc)})
+            run.recoverable = True
+            run.error = describe_run_error(exc, run.limits.timeout_seconds)
+            await self.emit(
+                run,
+                "agent_turn_failed",
+                "summary",
+                "最终综合未完成，讨论记录和你的补充已保留",
+                92,
+                {"error": run.error},
+            )
         finally:
+            run.usage.duration_ms += int((time.perf_counter() - started) * 1000)
             await self.store.save_run(run)
 
+    def _ensure_run_assignments(self, run: RunRecord) -> None:
+        if len(run.seat_assignments) == len(self.PARTICIPANTS) and run.finalizer_assignment:
+            return
+        config = self.default_assignment_config(run.provider_id, run.model, run.mode)
+        run.seat_assignments = [self._resolve_assignment(item) for item in config.seats]
+        run.finalizer_assignment = self._resolve_assignment(config.finalizer)
+
+    @staticmethod
+    def _ensure_credentials(run: RunRecord, finalizer_only: bool = False) -> None:
+        assignments = [run.finalizer_assignment] if finalizer_only else [*run.seat_assignments, run.finalizer_assignment]
+        for assignment in assignments:
+            if not assignment:
+                continue
+            profile = assignment.provider_snapshot
+            if profile.requires_api_key and not get_provider_secret(profile):
+                raise RuntimeError(f"{assignment.provider_name} 的凭据缺失，未回退到 Mock。请补充 API Key 后重试。")
+
+    async def recover_incomplete_runs(self) -> list[str]:
+        recovered: list[str] = []
+        for run in await self.store.list_runs():
+            if run.status not in {"queued", "running"}:
+                continue
+            self.live_runs[run.id] = run
+            self.run_locks[run.id] = asyncio.Lock()
+            try:
+                self._ensure_run_assignments(run)
+                self._ensure_credentials(run)
+                if not self.store.has_checkpoint(run.id):
+                    raise RuntimeError("找不到有效工作流 checkpoint，无法安全自动恢复。")
+            except Exception as exc:
+                run.status = "failed"
+                run.recoverable = True
+                run.error = str(exc)
+                await self.emit(run, "run_failed", "recovery", "启动恢复未执行模型调用", 100, {"error": run.error})
+                continue
+            cancel = asyncio.Event()
+            self.cancel_events[run.id] = cancel
+            self.tasks[run.id] = asyncio.create_task(self._resume_debate(run, cancel))
+            recovered.append(run.id)
+        return recovered
+
     async def cancel(self, run_id: str) -> RunRecord | None:
-        run = await self.store.get_run(run_id)
-        if run and run.status in {"queued", "running"}:
+        run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
+        if not run:
+            return None
+        if run.status == "awaiting_final_input":
+            run.status = "cancelled"
+            run.awaiting_user = False
+            run.error = "任务已取消"
+            await self.emit(run, "run_cancelled", "cancelled", "审议已取消，已保留当前进度", 100)
+            return run
+        if run.status in {"queued", "running"}:
             self.cancel_events.setdefault(run_id, asyncio.Event()).set()
             task = self.tasks.get(run_id)
             if task:
@@ -486,7 +844,6 @@ class Orchestrator:
         run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
         if not run:
             return False
-
         task = self.tasks.get(run_id)
         if task and not task.done():
             if run.status in {"queued", "running"}:
@@ -494,11 +851,8 @@ class Orchestrator:
                 task.cancel()
             try:
                 await task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
-            except Exception:
-                pass
-
         deleted = await self.store.delete_run(run_id)
         self.tasks.pop(run_id, None)
         self.cancel_events.pop(run_id, None)
@@ -506,3 +860,11 @@ class Orchestrator:
         self.live_runs.pop(run_id, None)
         self.retrying_runs.discard(run_id)
         return deleted
+
+    async def shutdown(self) -> None:
+        self.shutting_down = True
+        active = [task for task in self.tasks.values() if not task.done()]
+        for task in active:
+            task.cancel()
+        if active:
+            await asyncio.gather(*active, return_exceptions=True)

@@ -1,6 +1,6 @@
 # Council Lab
 
-Council is a local-first, human-participatory AI deliberation workspace. Four seats speak in sequence, explicitly agree or challenge earlier arguments, and a fifth independent call produces one final answer from the public discussion.
+Council is a local-first, human-participatory AI deliberation workspace. Four seats speak in sequence and explicitly agree with or challenge earlier arguments. Council then waits for your confirmation or additions before a fifth call produces the final answer.
 
 [中文说明](README.md) · [Download](https://github.com/loveramarois-byte/council-lab/releases/latest) · [Contributing](CONTRIBUTING.md)
 
@@ -10,12 +10,17 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 
 - Four visible, sequential model calls instead of four unrelated answers.
 - Human interjections become context for later seats and the final synthesis.
-- LangGraph workflow, SQLite persistence, checkpoints, and turn-level recovery.
-- Token budgets, rolling summaries, and recent-turn context prioritization.
-- Quick, Standard, and Rigorous modes mapped to Low, High, and Ultra effort.
+- Independently configurable providers and models for all four seats and the finalizer, snapshotted per run.
+- A human confirmation point after seat four, with support for multiple final additions.
+- LangGraph workflow, SQLite persistence, checkpoints, startup recovery, and explicit recoverable failures.
+- Deterministic context clipping that preserves the question, early anchors, recent turns, and the latest user interjection.
+- Quick, Standard, and Rigorous are workflow/context tiers. Native reasoning effort is sent only by capable Responses providers.
+- Enforced defaults of eight model attempts, 12k cumulative tokens, and 120 seconds for the full run.
 - CC Switch, DeepSeek, Zhipu GLM, Kimi, SiliconFlow, OpenAI, custom OpenAI-compatible, and offline Mock providers.
 - Automatic model discovery with OS credential-store protection for API keys.
 - One-viewport desktop and mobile workspace with internally scrolling discussions.
+
+Council does not currently run web searches or a code sandbox, and it does not present model agreement as a percentage fact-confidence score. A final synthesis is model consensus, not external verification.
 
 ## macOS installation
 
@@ -44,6 +49,6 @@ Council does not expose or retain hidden model chain-of-thought. It stores only 
 
 ## Status and license
 
-Version `0.1.0` is an early release for research and decision support. Do not use unreviewed outputs for medical, legal, financial, or safety-critical decisions.
+Version `0.2.0` is an early release for research and decision support. Do not use unreviewed outputs for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

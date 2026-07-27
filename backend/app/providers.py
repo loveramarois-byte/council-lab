@@ -36,10 +36,11 @@ def normalize_base_url(base_url: str, provider_type: ProviderType) -> str:
 
 def is_loopback_url(base_url: str) -> bool:
     parsed = urlparse(base_url)
-    if parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if hostname in {"localhost", "127.0.0.1", "::1"}:
         return True
     try:
-        return bool(parsed.hostname and ipaddress.ip_address(parsed.hostname).is_loopback)
+        return bool(hostname and ipaddress.ip_address(hostname).is_loopback)
     except ValueError:
         return False
 
@@ -48,17 +49,30 @@ def validate_base_url(base_url: str, local_only: bool = False) -> None:
     parsed = urlparse(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("地址必须使用 http 或 https，并包含主机名")
-    if parsed.hostname in BLOCKED_HOSTS:
+    hostname = parsed.hostname.lower().rstrip(".")
+    if hostname in BLOCKED_HOSTS:
         raise ValueError("出于 SSRF 防护，云元数据地址不可用")
     if local_only and not is_loopback_url(base_url):
         raise ValueError("CC Switch 默认只允许本机 loopback 地址")
+
     try:
-        ip = ipaddress.ip_address(parsed.hostname)
-        if ip.is_unspecified or ip.is_multicast or ip.is_reserved:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            records = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise ValueError(f"无法解析 Provider 主机名：{hostname}") from exc
+        addresses = list({ipaddress.ip_address(record[4][0]) for record in records})
+
+    if not addresses:
+        raise ValueError(f"无法解析 Provider 主机名：{hostname}")
+    for address in addresses:
+        if str(address) in BLOCKED_HOSTS or address.is_link_local:
+            raise ValueError("出于 SSRF 防护，云元数据或 link-local 地址不可用")
+        if address.is_unspecified or address.is_multicast or address.is_reserved:
             raise ValueError("地址属于危险保留网段")
-    except ValueError as exc:
-        if "地址属于" in str(exc):
-            raise
+        if local_only and not address.is_loopback:
+            raise ValueError("CC Switch 主机名必须全部解析到 loopback 地址")
 
 
 @dataclass
@@ -67,6 +81,7 @@ class Generation:
     input_tokens: int = 0
     output_tokens: int = 0
     protocol: str = "mock"
+    reasoning_effort_applied: str | None = None
 
 
 class ModelBackend:
@@ -78,6 +93,9 @@ class ModelBackend:
 
     async def generate(self, prompt: str, system: str, model: str, temperature: float = 0.2) -> Generation:
         raise NotImplementedError
+
+    async def aclose(self) -> None:
+        return None
 
 
 def extract_model_ids(payload: Any) -> list[str]:
@@ -139,15 +157,17 @@ def discover_ccswitch_models(db_path: Path | None = None, limit: int = 30) -> li
     return list(dict.fromkeys(models))
 
 
-def build_responses_payload(prompt: str, system: str, model: str, reasoning_effort: str) -> dict[str, Any]:
-    return {
+def build_responses_payload(prompt: str, system: str, model: str, reasoning_effort: str | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "model": model,
         "input": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        "reasoning": {"effort": reasoning_effort},
     }
+    if reasoning_effort:
+        payload["reasoning"] = {"effort": reasoning_effort}
+    return payload
 
 
 def extract_responses_text(payload: dict[str, Any]) -> str:
@@ -232,9 +252,10 @@ class OpenAICompatibleProvider(ModelBackend):
     async def generate(self, prompt: str, system: str, model: str, temperature: float = 0.2) -> Generation:
         protocol = self.profile.protocol_mode
         if protocol in (ProtocolMode.AUTO, ProtocolMode.RESPONSES):
+            effort = self.profile.reasoning_effort if self.profile.capabilities.supports_reasoning_effort else None
             response = await self._post_with_retry(
                 "/responses",
-                build_responses_payload(prompt, system, model, self.profile.reasoning_effort),
+                build_responses_payload(prompt, system, model, effort),
             )
             if response.status_code in (404, 405, 501) and protocol == ProtocolMode.AUTO:
                 protocol = ProtocolMode.CHAT_COMPLETIONS
@@ -246,13 +267,16 @@ class OpenAICompatibleProvider(ModelBackend):
                 if not output:
                     raise RuntimeError("Responses 接口成功但没有返回可用文本")
                 usage = data.get("usage") or {}
-                return Generation(output, usage.get("input_tokens", 0), usage.get("output_tokens", 0), "responses")
+                return Generation(output, usage.get("input_tokens", 0), usage.get("output_tokens", 0), "responses", effort)
         response = await self._post_with_retry("/chat/completions", {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}], "temperature": temperature})
         response.raise_for_status()
         data = response.json()
         text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         usage = data.get("usage") or {}
         return Generation(text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), "chat_completions")
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
 
 
 def build_backend(profile: ProviderProfile) -> ModelBackend:

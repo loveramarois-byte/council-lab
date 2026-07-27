@@ -13,7 +13,7 @@
 
 `protocol_mode=auto` 先使用 Responses；只有明确不支持的 404、405 或 501 才切换到 Chat Completions。CC Switch 自身负责上游供应商切换、故障转移、API Key 和用量路由，Council 不重复实现。
 
-当 Ultra 或 High 档出现上游超时、可重试服务错误，或 CC Switch 返回包装后的 `cc_switch_upstream_error` 时，当前运行会按 Ultra → High → Low 自动降档，并把变化作为公开系统事件写入讨论记录。该行为只调整 Council 请求中的 reasoning effort，不替代 CC Switch 自身的供应商故障转移。
+当席位使用支持原生 reasoning 的 Responses 路径，且 Ultra 或 High 档出现上游超时、可重试服务错误，或 CC Switch 返回包装后的 `cc_switch_upstream_error` 时，当前运行会按 Ultra → High → Low 自动降档，并把变化作为公开系统事件写入讨论记录。该行为只调整 Council 请求中的 reasoning effort，不替代 CC Switch 自身的供应商故障转移；Chat Completions 路径不会声称上游应用了该档位。
 
 Council Lab 与 CC Switch 是独立项目，没有官方隶属、授权或背书关系。
 

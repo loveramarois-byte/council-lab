@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, Clock3, FileCheck2, Gauge, GitBranch, LoaderCircle, MessageCircle, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, Participant, Run, subscribeToRun } from "../../../lib/api";
+import { api, Participant, ResolvedAssignment, Run, subscribeToRun } from "../../../lib/api";
 
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
@@ -43,14 +43,17 @@ export default function RunDetailPage() {
   const agentTurnCount = run?.discussion_turns.filter((turn) => turn.speaker_type === "agent").length || 0;
   const completedSpeakerIds = useMemo(() => new Set(run?.discussion_turns.filter((turn) => turn.speaker_type === "agent").map((turn) => turn.speaker_id) || []), [run?.discussion_turns]);
   const debateActive = run?.status === "running" && agentTurnCount < 4;
+  const awaitingFinal = run?.status === "awaiting_final_input";
+  const canWrite = Boolean(debateActive || awaitingFinal);
   const runFailed = run?.status === "failed";
+  const runStopped = run?.status === "stopped";
   const waitingSeconds = run && run.status === "running" && !run.awaiting_user
     ? Math.max(0, Math.floor((now - Date.parse(run.updated_at)) / 1000))
     : 0;
   const showWaitingRecovery = run?.provider_id === "ccswitch" && waitingSeconds >= 45 && !waitingNoticeDismissed;
 
   const act = async (action: "interject" | "question") => {
-    if (!run || busy || !debateActive || !draft.trim()) return;
+    if (!run || busy || !canWrite || !draft.trim()) return;
     setBusy(true); setError("");
     try {
       const value = await api.interjectRun(run.id, { action, message: draft.trim(), target_agent: action === "question" ? target || undefined : undefined });
@@ -58,6 +61,14 @@ export default function RunDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "这一轮没有发出去");
     } finally { setBusy(false); }
+  };
+
+  const finalize = async () => {
+    if (!run || busy || !awaitingFinal) return;
+    setBusy(true); setError("");
+    try { setRun(await api.summarizeRun(run.id)); }
+    catch (err) { setError(err instanceof Error ? err.message : "最终答案没有生成成功"); }
+    finally { setBusy(false); }
   };
 
   const retryTurn = async () => {
@@ -77,21 +88,21 @@ export default function RunDetailPage() {
   return <div className="council-page">
     <header className="council-topbar">
       <Link href="/" className="back-link"><ArrowLeft size={15} />退出圆桌</Link>
-      <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {run.model} · {run.reasoning_effort}</div>
-      <button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => api.cancelRun(run.id).then(setRun)} disabled={run.status !== "running"}><X size={16} /></button>
+      <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {run.mode === "quick" ? "引导" : run.mode === "rigorous" ? "深挖" : "圆桌"}模式</div>
+      <button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => api.cancelRun(run.id).then(setRun)} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button>
     </header>
 
     <main className="council-stage">
       <section className="council-question">
         <span>本次议题</span>
         <h1>{run.question}</h1>
-        <p>{run.status === "completed" ? "四席独立调用完成，最终答案与过程均已保留。" : runFailed ? `${nextParticipant?.name || "记录员"}调用失败，已保留前面的公开讨论。` : agentTurnCount >= 4 ? "四席调用完成，记录员正在综合公开讨论。" : `${nextParticipant?.name || "成员"}正在独立调用中，你可随时插话。`}</p>
+        <p>{run.status === "completed" ? "四席与总结席调用完成，答案和过程均已保留。" : awaitingFinal ? "四席已完成；补充信息或直接确认生成最终答案。" : runStopped ? run.error : runFailed ? `${nextParticipant?.name || "记录员"}调用失败，已保留前面的公开讨论。` : agentTurnCount >= 4 ? "总结席正在综合公开讨论。" : `${nextParticipant?.name || "成员"}正在调用中，你可随时插话。`}</p>
       </section>
 
       <section className="council-callboard" aria-label="AI 独立调用顺序">
-        <div className="callboard-meta"><Bot size={14} /><strong>4 次独立调用</strong><span>同一模型</span><span>共享公开记录</span><div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="当前工作上下文"><Gauge size={12} />{run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} Token</span></div></div>
+        <div className="callboard-meta"><Bot size={14} /><strong>4 席顺序调用</strong><span>各席独立配置</span><span>共享公开记录</span><div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="当前工作上下文"><Gauge size={12} />{run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} Token</span></div></div>
         <div className="council-seats">
-          {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
+          {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} assignment={run.seat_assignments?.[index]} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
           <div className={`summary-node ${run.status === "completed" ? "completed" : runFailed && agentTurnCount >= 4 ? "failed" : agentTurnCount >= 4 ? "active" : "queued"}`} aria-label="第 5 次调用：记录员总结">
             <FileCheck2 size={17} /><span><strong>最终答案</strong><small>第 5 次调用</small></span>
           </div>
@@ -101,13 +112,13 @@ export default function RunDetailPage() {
       <section className="council-dialogue">
         <div className="dialogue-header">
           <div><MessageCircle size={15} /><strong>公开讨论</strong><span>{agentTurnCount} 次 AI 发言 · {run.discussion_turns.filter((turn) => turn.speaker_type === "user").length} 次你的参与</span></div>
-          <span className={`discussion-state ${runFailed ? "failed" : ""}`}>{run.status === "completed" ? "已完成" : runFailed ? "调用失败" : debateActive ? "全程可插话" : "生成答案"}</span>
+          <span className={`discussion-state ${runFailed || runStopped ? "failed" : ""}`}>{run.status === "completed" ? "已完成" : awaitingFinal ? "等待确认" : runStopped ? "已停止" : runFailed ? "调用失败" : debateActive ? "全程可插话" : "生成答案"}</span>
         </div>
 
         <div className="dialogue-scroll" ref={transcriptRef} aria-live="polite">
           <article className="opening-question"><span>你提出</span><p>{run.question}</p></article>
           {run.discussion_turns.map((turn) => <article key={turn.id} className={`discussion-turn ${turn.speaker_type} speaker-${turn.speaker_id}`}>
-            <header><span className="speaker-avatar">{turn.speaker_type === "user" ? <UserRound size={15} /> : turn.speaker_name.slice(0, 1)}</span><div><strong>{turn.speaker_name}</strong><small>{turn.role_label || "参与者"} · 第 {turn.round} 轮</small></div></header>
+            <header><span className="speaker-avatar">{turn.speaker_type === "user" ? <UserRound size={15} /> : turn.speaker_name.slice(0, 1)}</span><div><strong>{turn.speaker_name}</strong><small>{turn.role_label || "参与者"} · 第 {turn.round} 轮{turn.provider_name ? ` · ${turn.provider_name} / ${turn.model}` : ""}</small></div></header>
             <RichText content={turn.content} />
           </article>)}
           {run.status === "running" && <article className="discussion-thinking">
@@ -122,7 +133,7 @@ export default function RunDetailPage() {
               </div>}
             </div>
           </article>}
-          {run.status === "completed" && run.final_decision && <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 5 次独立调用 · 综合四席讨论与你的插话</small></span></header><RichText content={run.final_decision.final_answer} /></article>}
+          {run.status === "completed" && run.final_decision && <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 5 次调用 · 模型共识未经过外部事实核验</small></span></header><RichText content={run.final_decision.final_answer} /></article>}
         </div>
 
         {runFailed && <div className="failed-actions" role="alert">
@@ -131,16 +142,19 @@ export default function RunDetailPage() {
           <button className="send-button" onClick={retryTurn} disabled={busy}>{busy ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重试{nextParticipant?.name || "总结"}</button>
         </div>}
 
-        {run.status === "running" && <div className="participation-dock">
+        {runStopped && <div className="failed-actions" role="status"><Gauge size={18} /><div><strong>运行已按后端限制停止</strong><span>{run.error}</span></div><Link className="send-button" href="/settings/budget">查看限制</Link></div>}
+
+        {(run.status === "running" || awaitingFinal) && <div className="participation-dock">
           <div className="participation-context">
             {selectedParticipant ? <button onClick={() => setTarget(null)}><span>正在点名</span><strong>{selectedParticipant.name}</strong><X size={13} /></button> : <span>写下你的观点，或点击上方任一席位点名追问</span>}
-            <small>AI 会依次连续发言；你的插话会进入后续成员的上下文。</small>
+            <small>{awaitingFinal ? "这些补充会进入第五次总结调用。" : "席位会依次发言；你的插话会进入后续上下文。"}</small>
           </div>
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!debateActive || busy} placeholder={selectedParticipant ? `向${selectedParticipant.name}追问…` : "我想补充 / 反驳 / 改变讨论方向…"} rows={2} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") act(selectedParticipant ? "question" : "interject"); }} />
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={awaitingFinal ? "最终答案生成前，我还想补充…" : selectedParticipant ? `向${selectedParticipant.name}追问…` : "我想补充 / 反驳 / 改变讨论方向…"} rows={2} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") act(selectedParticipant ? "question" : "interject"); }} />
           <div className="participation-actions">
-            <span className="debate-progress">{debateActive ? `已完成 ${agentTurnCount} / 4 席` : "四席发言完成"}</span>
+            <span className="debate-progress">{debateActive ? `已完成 ${agentTurnCount} / 4 席` : "四席完成，等待你的确认"}</span>
             <span />
-            <button className="send-button" disabled={!debateActive || busy || !draft.trim()} onClick={() => act(selectedParticipant ? "question" : "interject")}>{busy ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}{selectedParticipant ? `问${selectedParticipant.name}` : "加入讨论"}</button>
+            <button className="quiet-button" disabled={!canWrite || busy || !draft.trim()} onClick={() => act(selectedParticipant ? "question" : "interject")}>{busy ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}{awaitingFinal ? "加入最终补充" : selectedParticipant ? `问${selectedParticipant.name}` : "加入讨论"}</button>
+            {awaitingFinal && <button className="send-button" disabled={busy} onClick={finalize}>{busy ? <LoaderCircle className="spin" size={15} /> : <FileCheck2 size={15} />}生成最终答案</button>}
           </div>
           {(error || run.error) && <p className="discussion-error">{error || run.error}</p>}
         </div>}
@@ -151,12 +165,12 @@ export default function RunDetailPage() {
   </div>;
 }
 
-function Seat({ participant, index, selected, status, onSelect }: { participant: Participant; index: number; selected: boolean; status: "queued" | "active" | "completed" | "failed"; onSelect: () => void }) {
+function Seat({ participant, assignment, index, selected, status, onSelect }: { participant: Participant; assignment?: ResolvedAssignment; index: number; selected: boolean; status: "queued" | "active" | "completed" | "failed"; onSelect: () => void }) {
   const statusLabel = status === "failed" ? "调用失败" : status === "completed" ? "已完成" : status === "active" ? "调用中" : selected ? "已点名" : "待调用";
   return <button type="button" className={`council-seat seat-${participant.id} ${selected ? "selected" : ""} ${status}`} onClick={onSelect} aria-pressed={selected}>
     <span className="seat-number">{String(index + 1).padStart(2, "0")}</span>
     <span className="seat-avatar">{participant.name.slice(0, 1)}</span>
-    <span className="seat-copy"><strong>{participant.name}</strong><small>{participant.role}</small></span>
+    <span className="seat-copy"><strong>{participant.name}</strong><small title={assignment ? `${assignment.provider_name} / ${assignment.model}` : participant.role}>{assignment ? `${assignment.provider_name} · ${assignment.model}` : participant.role}</small></span>
     <span className="seat-status">{status === "completed" ? <CheckCircle2 size={12} /> : status === "active" ? <LoaderCircle className="spin" size={12} /> : status === "failed" ? <AlertTriangle size={12} /> : null}{statusLabel}</span>
   </button>;
 }

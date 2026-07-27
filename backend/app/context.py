@@ -85,10 +85,12 @@ def build_context_window(question: str, turns: list[DiscussionTurn], token_budge
     latest_user = next((turn for turn in reversed(turns) if turn.speaker_type == "user"), None)
     recent_candidates = [turn for turn in turns[-6:] if latest_user is None or turn.id != latest_user.id]
 
-    summary_lines = [f"- {_format_turn(turn, 24)}" for turn in turns[:-6]]
-    if not summary_lines:
-        summary_lines = [f"- {_format_turn(turn, 20)}" for turn in turns[:-2]]
-    summary = _truncate_tokens("\n".join(summary_lines) or "较早发言已折叠。", max(48, int(token_budget * 0.25)))
+    older_turns = turns[:-6] or turns[:-2]
+    anchor_indexes = [0, len(older_turns) // 2, len(older_turns) - 1] if older_turns else []
+    anchors = [older_turns[index] for index in dict.fromkeys(anchor_indexes)]
+    summary_ids = {turn.id for turn in anchors}
+    summary_lines = [f"- {_format_turn(turn, 28)}" for turn in anchors]
+    summary = _truncate_tokens("\n".join(summary_lines) or "较早发言已按预算裁剪。", max(48, int(token_budget * 0.25)))
 
     recent_budget = max(32, int(token_budget * 0.22))
     recent_lines: list[str] = []
@@ -108,7 +110,7 @@ def build_context_window(question: str, turns: list[DiscussionTurn], token_budge
 
     sections = [
         f"讨论题：{question_text}",
-        f"较早讨论摘要：\n{summary}",
+        f"较早发言摘录（确定性裁剪）：\n{summary}",
         "最近公开发言：\n" + ("\n\n".join(recent_lines) or "（无）"),
     ]
     if latest_user_text:
@@ -118,7 +120,7 @@ def build_context_window(question: str, turns: list[DiscussionTurn], token_budge
     if estimate_tokens(prompt) > token_budget:
         overflow = estimate_tokens(prompt) - token_budget
         summary = _truncate_tokens(summary, max(12, estimate_tokens(summary) - overflow - 2))
-        sections[1] = f"较早讨论摘要：\n{summary}"
+        sections[1] = f"较早发言摘录（确定性裁剪）：\n{summary}"
         prompt = "\n\n".join(sections)
     if estimate_tokens(prompt) > token_budget:
         # Extremely small budgets retain the question and latest user input ahead of recent agent prose.
@@ -127,7 +129,7 @@ def build_context_window(question: str, turns: list[DiscussionTurn], token_budge
     if estimate_tokens(prompt) > token_budget:
         prompt = _truncate_tokens(prompt, token_budget)
 
-    included_ids = recent_ids | ({latest_user.id} if latest_user else set())
+    included_ids = summary_ids | recent_ids | ({latest_user.id} if latest_user else set())
     return ContextWindow(
         prompt=prompt,
         summary=summary,

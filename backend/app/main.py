@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Request
@@ -10,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .credentials import CredentialStoreError, delete_provider_secret, get_provider_secret, save_provider_secret
-from .models import AgentModelAssignment, DiscussionAction, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate
+from .models import AgentAssignmentsConfig, AgentModelAssignment, DiscussionAction, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate
 from .orchestrator import Orchestrator
 from .paths import database_path
 from .provider_catalog import BUILTIN_PROVIDER_IDS, CATALOG_FIELDS, builtin_providers
@@ -32,10 +33,21 @@ for saved_provider in store.load_providers():
         providers[saved_provider.id] = saved_provider
 if not any(profile.is_active for profile in providers.values()):
     providers["ccswitch"].is_active = True
-assignments = [AgentModelAssignment(role=role, provider_id="mock", model="council-mock") for role in ["question_analyzer", "solver_a", "solver_b", "solver_c", "critic", "verifier", "reviser", "judge"]]
 orchestrator = Orchestrator(store, providers)
+active_profile = next((profile for profile in providers.values() if profile.is_active and profile.default_model), providers["mock"])
+assignments = store.load_assignment_config() or orchestrator.default_assignment_config(active_profile.id, active_profile.default_model)
 
-app = FastAPI(title="Council Lab", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await orchestrator.recover_incomplete_runs()
+    try:
+        yield
+    finally:
+        await orchestrator.shutdown()
+
+
+app = FastAPI(title="Council Lab", version="0.2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -71,11 +83,14 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/runs")
 async def create_run(request: RunCreate):
-    profile = providers.get(request.provider_id)
-    if not profile:
-        raise HTTPException(404, "Provider 不存在")
-    if not (request.model or profile.default_model):
-        raise HTTPException(400, "请先在 Provider 设置中填写默认模型")
+    if request.use_saved_assignments and request.assignment_config is None:
+        request = request.model_copy(update={"assignment_config": assignments})
+    elif request.assignment_config is None:
+        profile = providers.get(request.provider_id)
+        if not profile:
+            raise HTTPException(404, "Provider 不存在")
+        if not (request.model or profile.default_model):
+            raise HTTPException(400, "请先在 Provider 设置中填写默认模型")
     return await orchestrator.start(request)
 
 
@@ -137,7 +152,43 @@ async def rerun(run_id: str):
     source = await store.get_run(run_id)
     if not source:
         raise HTTPException(404, "运行记录不存在")
-    return await orchestrator.start(RunCreate(question=source.question, mode=source.mode, provider_id=source.provider_id, model=source.model))
+    assignment_config = None
+    if source.seat_assignments and source.finalizer_assignment:
+        assignment_config = AgentAssignmentsConfig(
+            seats=[
+                AgentModelAssignment(
+                    role=item.role,
+                    provider_id=item.provider_id,
+                    model=item.model,
+                    protocol=item.protocol,
+                    reasoning_effort=item.reasoning_effort,
+                    max_output_tokens=item.max_output_tokens,
+                    temperature=item.temperature,
+                    timeout_seconds=item.timeout_seconds,
+                )
+                for item in source.seat_assignments
+            ],
+            finalizer=AgentModelAssignment(
+                role=source.finalizer_assignment.role,
+                provider_id=source.finalizer_assignment.provider_id,
+                model=source.finalizer_assignment.model,
+                protocol=source.finalizer_assignment.protocol,
+                reasoning_effort=source.finalizer_assignment.reasoning_effort,
+                max_output_tokens=source.finalizer_assignment.max_output_tokens,
+                temperature=source.finalizer_assignment.temperature,
+                timeout_seconds=source.finalizer_assignment.timeout_seconds,
+            ),
+        )
+    return await orchestrator.start(
+        RunCreate(
+            question=source.question,
+            mode=source.mode,
+            provider_id=source.provider_id,
+            model=source.model,
+            assignment_config=assignment_config,
+            limits=source.limits,
+        )
+    )
 
 
 @app.delete("/api/runs/{run_id}")
@@ -160,7 +211,7 @@ async def run_events(run_id: str, request: Request):
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=15)
                 yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
-                if event.type in {"final_completed", "run_failed", "run_cancelled"}:
+                if event.type in {"final_completed", "run_failed", "run_cancelled", "run_limit_reached"}:
                     break
             except asyncio.TimeoutError:
                 yield ": keep-alive\n\n"
@@ -262,7 +313,10 @@ async def activate_provider(provider_id: str):
 async def detect_ccswitch():
     profile = providers["ccswitch"]
     backend = build_backend(profile)
-    result = await backend.health_check()
+    try:
+        result = await backend.health_check()
+    finally:
+        await backend.aclose()
     profile.last_health_check = datetime.now(timezone.utc)
     profile.last_error = None if result.get("status") in {"connected", "route_reachable"} else result.get("error")
     models = result.get("models") or discover_ccswitch_models()
@@ -290,23 +344,28 @@ async def test_provider(provider_id: str):
     try:
         if profile.requires_api_key and not get_provider_secret(profile):
             raise RuntimeError("尚未配置 API Key。")
-        if profile.provider_type == ProviderType.MOCK:
-            result = await build_backend(profile).health_check()
-        else:
-            generation = await build_backend(profile).generate(
-                "Reply exactly: COUNCIL_CONNECTED",
-                "This is a minimal provider connection test.",
-                profile.default_model,
-            )
-            if not generation.text.strip():
-                raise RuntimeError("生成接口返回了空内容")
-            result = {
-                "status": "connected",
-                "protocol": generation.protocol,
-                "model": profile.default_model,
-                "reasoning_effort": profile.reasoning_effort,
-                "response": generation.text.strip()[:80],
-            }
+        backend = build_backend(profile)
+        try:
+            if profile.provider_type == ProviderType.MOCK:
+                result = await backend.health_check()
+            else:
+                generation = await backend.generate(
+                    "Reply exactly: COUNCIL_CONNECTED",
+                    "This is a minimal provider connection test.",
+                    profile.default_model,
+                )
+                if not generation.text.strip():
+                    raise RuntimeError("生成接口返回了空内容")
+                result = {
+                    "status": "connected",
+                    "protocol": generation.protocol,
+                    "model": profile.default_model,
+                    "reasoning_effort_applied": generation.reasoning_effort_applied,
+                    "mode_capability": "native_reasoning" if generation.reasoning_effort_applied else "workflow_only",
+                    "response": generation.text.strip()[:80],
+                }
+        finally:
+            await backend.aclose()
     except Exception as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
         if profile.provider_type == ProviderType.CCSWITCH and status_code in {429, 500, 502, 503, 504}:
@@ -333,7 +392,11 @@ async def provider_models(provider_id: str):
     try:
         if profile.requires_api_key and not get_provider_secret(profile):
             raise RuntimeError("先填写 API Key，再获取账号可用模型。")
-        models = await build_backend(profile).list_models()
+        backend = build_backend(profile)
+        try:
+            models = await backend.list_models()
+        finally:
+            await backend.aclose()
         source = "provider"
         if profile.provider_type == ProviderType.CCSWITCH and not models:
             models = discover_ccswitch_models()
@@ -367,17 +430,23 @@ async def get_assignments():
 
 
 @app.put("/api/agent-assignments")
-async def put_assignments(payload: list[AgentModelAssignment]):
+async def put_assignments(payload: AgentAssignmentsConfig):
     global assignments
+    try:
+        orchestrator._resolve_config(RunCreate(question="验证席位配置", assignment_config=payload))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     assignments = payload
+    await store.save_assignment_config(payload)
     return assignments
 
 
 @app.get("/api/settings")
 async def settings():
-    return {"default_mode": "standard", "show_event_log": False, "privacy": {"store_questions": True, "send_traces": False}, "appearance": {"theme": "light"}, "budget": {"max_tokens": 12000, "budget_usd": 0.5}}
-
-
-@app.patch("/api/settings")
-async def patch_settings(payload: dict):
-    return {"saved": True, "settings": payload}
+    return {
+        "default_mode": "standard",
+        "fixed_seats": 4,
+        "limits": {"max_model_calls": 8, "max_tokens": 12000, "timeout_seconds": 120},
+        "privacy": {"store_questions": True, "send_traces": False},
+        "appearance": {"theme": "light", "editable": False},
+    }

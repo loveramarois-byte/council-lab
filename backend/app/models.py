@@ -36,6 +36,7 @@ class ProviderCapabilities(BaseModel):
     supports_hosted_web_search: bool = False
     supports_file_input: bool = False
     supports_vision: bool = False
+    supports_reasoning_effort: bool = False
 
 
 class ProviderProfile(BaseModel):
@@ -116,13 +117,28 @@ class AgentModelAssignment(BaseModel):
     timeout_seconds: float = Field(default=30, ge=1, le=180)
 
 
+class AgentAssignmentsConfig(BaseModel):
+    seats: list[AgentModelAssignment] = Field(min_length=4, max_length=4)
+    finalizer: AgentModelAssignment
+
+
+class ResolvedAgentAssignment(BaseModel):
+    role: str
+    provider_id: str
+    provider_name: str
+    model: str
+    protocol: ProtocolMode = ProtocolMode.AUTO
+    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] = "medium"
+    max_output_tokens: int = Field(default=1200, ge=128, le=8000)
+    temperature: float = Field(default=0.2, ge=0, le=2)
+    timeout_seconds: float = Field(default=30, ge=1, le=180)
+    provider_snapshot: ProviderProfile
+
+
 class RunLimits(BaseModel):
-    max_agents: int = Field(default=3, ge=1, le=5)
-    max_model_calls: int = Field(default=16, ge=1, le=50)
-    max_tool_calls: int = Field(default=8, ge=0, le=50)
-    max_tokens: int = Field(default=12000, ge=1000, le=100000)
-    budget_usd: float = Field(default=0.5, ge=0, le=100)
-    timeout_seconds: int = Field(default=120, ge=10, le=900)
+    max_model_calls: int = Field(default=8, ge=1, le=50)
+    max_tokens: int = Field(default=12000, ge=128, le=100000)
+    timeout_seconds: int = Field(default=120, ge=1, le=900)
 
 
 class RunCreate(BaseModel):
@@ -130,7 +146,9 @@ class RunCreate(BaseModel):
     mode: Literal["quick", "standard", "rigorous"] = "standard"
     provider_id: str = "mock"
     model: str | None = None
-    tools_enabled: bool = False
+    assignment_config: AgentAssignmentsConfig | None = None
+    use_saved_assignments: bool = False
+    auto_summarize: bool = False
     limits: RunLimits = Field(default_factory=RunLimits)
 
 
@@ -147,6 +165,9 @@ class DiscussionTurn(BaseModel):
     speaker_name: str
     role_label: str = ""
     content: str
+    provider_id: str | None = None
+    provider_name: str | None = None
+    model: str | None = None
     round: int = 1
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -178,7 +199,7 @@ class UsageSummary(BaseModel):
 
 
 class ContextSnapshot(BaseModel):
-    strategy: str = "token_budget_with_rolling_summary"
+    strategy: str = "deterministic_context_clipping"
     token_budget: int = 0
     estimated_tokens: int = 0
     included_turns: int = 0
@@ -293,7 +314,7 @@ class RunRecord(BaseModel):
     workflow_engine: str = "legacy"
     checkpoint_count: int = 0
     context_snapshot: ContextSnapshot = Field(default_factory=ContextSnapshot)
-    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    status: Literal["queued", "running", "awaiting_final_input", "completed", "failed", "stopped", "cancelled"]
     created_at: datetime
     updated_at: datetime
     analysis: QuestionAnalysis | None = None
@@ -312,3 +333,9 @@ class RunRecord(BaseModel):
     current_speaker_index: int = 0
     discussion_round: int = 1
     awaiting_user: bool = False
+    limits: RunLimits = Field(default_factory=RunLimits)
+    seat_assignments: list[ResolvedAgentAssignment] = Field(default_factory=list)
+    finalizer_assignment: ResolvedAgentAssignment | None = None
+    auto_summarize: bool = False
+    recoverable: bool = False
+    limit_reason: str | None = None

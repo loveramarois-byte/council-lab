@@ -5,7 +5,7 @@ import pytest
 
 from app.context import build_context_window, context_budget_for_mode, estimate_tokens
 from app.credentials import delete_provider_secret, get_provider_secret, save_provider_secret
-from app.models import DiscussionAction, DiscussionTurn, ProviderCreate, ProviderProfile, ProviderType, RunCreate
+from app.models import AgentAssignmentsConfig, AgentModelAssignment, CandidateAnswer, DiscussionAction, DiscussionTurn, ProviderCapabilities, ProviderCreate, ProviderProfile, ProviderType, RunCreate, RunLimits, RunRecord, UsageSummary, utc_now
 from app.orchestrator import Orchestrator, analyze_question, describe_run_error, reasoning_effort_for_mode
 from app.paths import data_dir, database_path
 from app.provider_catalog import builtin_providers
@@ -143,7 +143,7 @@ def test_extract_responses_text_skips_reasoning_items():
 
 def test_timeout_error_has_actionable_message():
     assert "超过 120 秒" in describe_run_error(asyncio.TimeoutError(), 120)
-    assert "重试当前席位" in describe_run_error(asyncio.TimeoutError(), 120)
+    assert "重试未完成席位" in describe_run_error(asyncio.TimeoutError(), 120)
 
 
 def test_context_window_compacts_long_discussion_and_preserves_latest_user_input():
@@ -163,7 +163,7 @@ def test_context_window_compacts_long_discussion_and_preserves_latest_user_input
     assert window.total_turns == 30
     assert window.included_turns < window.total_turns
     assert "编号 27" in window.prompt
-    assert "较早讨论摘要" in window.prompt
+    assert "较早发言摘录（确定性裁剪）" in window.prompt
     assert estimate_tokens(window.prompt) <= window.token_budget
 
 
@@ -198,16 +198,16 @@ async def test_standard_run_builds_backend_with_high_effort(tmp_path, monkeypatc
     run = await orchestrator.start(RunCreate(question="验证圆桌档位", mode="standard", provider_id="ccswitch"))
     for _ in range(100):
         current = await store.get_run(run.id)
-        if current and current.status == "completed":
+        if current and current.status == "awaiting_final_input":
             break
         await asyncio.sleep(0.02)
 
     assert current is not None
     assert current.reasoning_effort == "high"
-    assert captured_efforts == ["high"]
+    assert captured_efforts == ["high"] * 4
 
 
-async def test_four_agents_debate_in_order_user_can_interject_and_final_is_automatic(tmp_path, monkeypatch):
+async def test_four_agents_debate_in_order_user_can_interject_and_confirm_final(tmp_path, monkeypatch):
     class ControlledBackend:
         def __init__(self):
             self.calls = 0
@@ -241,14 +241,14 @@ async def test_four_agents_debate_in_order_user_can_interject_and_final_is_autom
 
     for _ in range(100):
         current = await store.get_run(run.id)
-        if current and current.status == "completed":
+        if current and current.status == "awaiting_final_input":
             break
         await asyncio.sleep(0.02)
 
     assert current is not None
-    assert current.status == "completed"
+    assert current.status == "awaiting_final_input"
     assert current.workflow_engine == "langgraph"
-    assert current.checkpoint_count >= 5
+    assert current.checkpoint_count >= 4
     assert current.context_snapshot.total_turns >= 3
     assert current.context_snapshot.estimated_tokens <= current.context_snapshot.token_budget
     with sqlite3.connect(store.checkpoint_path) as checkpoint_conn:
@@ -257,12 +257,21 @@ async def test_four_agents_debate_in_order_user_can_interject_and_final_is_autom
         ).fetchone()[0]
     assert persisted_checkpoints == current.checkpoint_count
     assert [turn.speaker_name for turn in current.discussion_turns] == ["你", "析理", "诘问", "构策", "观澜"]
-    assert current.final_decision is not None
-    assert current.final_decision.final_answer == "自动形成的最终答案"
+    assert current.final_decision is None
     assert "我的中途观点" in backend.prompts[1]
     assert "明确表态" in backend.systems[1]
     assert "认同" in backend.systems[1]
     assert "反驳" in backend.systems[1]
+    final_input = await orchestrator.interject(run.id, DiscussionAction(action="interject", message="最终补充条件"))
+    assert final_input is not None
+    await orchestrator.summarize(run.id)
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "completed"
+    assert current.final_decision is not None
+    assert current.final_decision.final_answer == "自动形成的最终答案"
+    assert "最终补充条件" in backend.prompts[-1]
+    assert "score" not in current.final_decision.confidence
     events = []
     queue = store.queue(run.id)
     while not queue.empty():
@@ -308,16 +317,21 @@ async def test_failed_run_can_resume_from_current_speaker(tmp_path, monkeypatch)
     assert resumed.status == "running"
     for _ in range(100):
         current = await store.get_run(run.id)
-        if current and current.status == "completed":
+        if current and current.status == "awaiting_final_input":
             break
         await asyncio.sleep(0.02)
 
     assert current is not None
-    assert current.status == "completed"
+    assert current.status == "awaiting_final_input"
     assert current.workflow_engine == "langgraph"
     assert current.checkpoint_count >= 5
-    assert backend.calls == 6
+    assert backend.calls == 5
     assert [turn.speaker_name for turn in current.discussion_turns] == ["析理", "诘问", "构策", "观澜"]
+    await restarted_orchestrator.summarize(run.id)
+    await restarted_orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "completed"
+    assert backend.calls == 6
     assert current.final_decision is not None
 
 
@@ -334,7 +348,7 @@ async def test_deleting_run_removes_persisted_workflow_checkpoints(tmp_path, mon
 
     for _ in range(100):
         current = await store.get_run(run.id)
-        if current and current.status == "completed":
+        if current and current.status == "awaiting_final_input":
             break
         await asyncio.sleep(0.02)
 
@@ -373,6 +387,13 @@ async def test_deleting_completed_run_waits_for_final_save(tmp_path, monkeypatch
     orchestrator = Orchestrator(store, {"mock": profile})
     run = await orchestrator.start(RunCreate(question="验证删除写入竞态", provider_id="mock"))
 
+    for _ in range(100):
+        current = await store.get_run(run.id)
+        if current and current.status == "awaiting_final_input":
+            break
+        await asyncio.sleep(0.02)
+    await orchestrator.summarize(run.id)
+
     await asyncio.wait_for(later_completed_save_started.wait(), timeout=2)
     deletion = asyncio.create_task(orchestrator.delete(run.id))
     await asyncio.sleep(0)
@@ -398,28 +419,28 @@ async def test_ccswitch_timeout_downgrades_reasoning_and_completes(tmp_path, mon
 
     monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: EffortBackend(profile.reasoning_effort))
     store = Store(tmp_path / "council.sqlite3")
-    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH)
+    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH, capabilities=ProviderCapabilities(supports_reasoning_effort=True))
     orchestrator = Orchestrator(store, {"ccswitch": profile, "mock": profile})
-    run = await orchestrator.start(RunCreate(question="验证自动降档", mode="rigorous", provider_id="ccswitch"))
+    run = await orchestrator.start(RunCreate(question="验证自动降档", mode="rigorous", provider_id="ccswitch", limits=RunLimits(max_model_calls=10)))
 
     for _ in range(100):
         current = await store.get_run(run.id)
-        if current and current.status in {"completed", "failed"}:
+        if current and current.status in {"awaiting_final_input", "failed", "stopped"}:
             break
         await asyncio.sleep(0.02)
 
     await orchestrator.tasks[run.id]
 
     assert current is not None
-    assert current.status == "completed"
+    assert current.status == "awaiting_final_input"
     assert current.reasoning_effort == "low"
     assert current.degraded is True
     assert calls[:3] == ["ultra", "high", "low"]
-    assert calls[3:] == ["low", "low", "low", "low"]
+    assert calls[3:] == ["low", "low", "low"]
     route_turns = [turn for turn in current.discussion_turns if turn.speaker_type == "system"]
     assert [turn.content for turn in route_turns] == [
-        "Ultra 档上游超时，已自动降为 High 档继续当前席位。",
-        "High 档上游超时，已自动降为 Low 档继续当前席位。",
+        "Ultra 原生推理档上游超时，已自动降为 High 档重试当前席位。",
+        "High 原生推理档上游超时，已自动降为 Low 档重试当前席位。",
     ]
 
 
@@ -448,24 +469,309 @@ async def test_ccswitch_wrapped_upstream_400_downgrades_reasoning(tmp_path, monk
 
     monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: EffortBackend(profile.reasoning_effort))
     store = Store(tmp_path / "council.sqlite3")
-    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH)
+    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH, capabilities=ProviderCapabilities(supports_reasoning_effort=True))
     orchestrator = Orchestrator(store, {"ccswitch": profile, "mock": profile})
-    run = await orchestrator.start(RunCreate(question="验证上游兼容性错误降档", mode="rigorous", provider_id="ccswitch"))
+    run = await orchestrator.start(RunCreate(question="验证上游兼容性错误降档", mode="rigorous", provider_id="ccswitch", limits=RunLimits(max_model_calls=10)))
 
     for _ in range(100):
         current = await store.get_run(run.id)
-        if current and current.status in {"completed", "failed"}:
+        if current and current.status in {"awaiting_final_input", "failed", "stopped"}:
             break
         await asyncio.sleep(0.02)
 
     await orchestrator.tasks[run.id]
 
     assert current is not None
-    assert current.status == "completed"
+    assert current.status == "awaiting_final_input"
     assert current.reasoning_effort == "high"
     assert current.degraded is True
-    assert calls == ["ultra", "high", "high", "high", "high", "high"]
+    assert calls == ["ultra", "high", "high", "high", "high"]
     route_turns = [turn for turn in current.discussion_turns if turn.speaker_type == "system"]
     assert [turn.content for turn in route_turns] == [
-        "Ultra 档上游暂不可用，已自动降为 High 档继续当前席位。",
+        "Ultra 原生推理档上游暂不可用，已自动降为 High 档重试当前席位。",
     ]
+
+
+def test_chat_compatible_responses_payload_does_not_claim_native_effort():
+    payload = build_responses_payload("ping", "system", "compatible-model", None)
+    assert "reasoning" not in payload
+
+
+def test_provider_dns_resolution_blocks_metadata_alias_and_allows_local_custom(monkeypatch):
+    def fake_getaddrinfo(host, port, type=0):
+        if host == "alias.example":
+            return [(2, 1, 6, "", ("169.254.169.254", port))]
+        if host == "local-provider.test":
+            return [(2, 1, 6, "", ("127.0.0.1", port))]
+        raise AssertionError(host)
+
+    monkeypatch.setattr("app.providers.socket.getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError, match="metadata|link-local"):
+        validate_base_url("http://alias.example/v1")
+    with pytest.raises(ValueError, match="云元数据"):
+        validate_base_url("http://METADATA.GOOGLE.INTERNAL./computeMetadata/v1")
+    validate_base_url("http://local-provider.test/v1", local_only=False)
+
+
+async def test_model_call_limit_stops_before_third_provider_request(tmp_path, monkeypatch):
+    calls = 0
+
+    class CountingBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            nonlocal calls
+            calls += 1
+            return Generation(text=f"发言 {calls}", input_tokens=10, output_tokens=10)
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: CountingBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    run = await orchestrator.start(RunCreate(question="验证调用上限", provider_id="mock", limits=RunLimits(max_model_calls=2)))
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None
+    assert current.status == "stopped"
+    assert current.limit_reason == "max_model_calls"
+    assert current.current_speaker_index == 2
+    assert calls == 2
+
+
+async def test_token_limit_stops_before_next_provider_request(tmp_path, monkeypatch):
+    calls = 0
+
+    class TokenBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            nonlocal calls
+            calls += 1
+            return Generation(text="高 Token 发言", input_tokens=100, output_tokens=50)
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: TokenBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    run = await orchestrator.start(RunCreate(question="验证 Token 上限", provider_id="mock", limits=RunLimits(max_tokens=128)))
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None
+    assert current.status == "stopped"
+    assert current.limit_reason == "max_tokens"
+    assert current.current_speaker_index == 1
+    assert calls == 1
+
+
+async def test_global_run_timeout_covers_the_whole_active_run(tmp_path, monkeypatch):
+    class BlockingBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            await asyncio.sleep(2)
+            return Generation(text="不应完成")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: BlockingBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    run = await orchestrator.start(RunCreate(question="验证完整运行超时", provider_id="mock", limits=RunLimits(timeout_seconds=1)))
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None
+    assert current.status == "failed"
+    assert current.recoverable is True
+    assert "超过 1 秒" in (current.error or "")
+
+
+async def test_backends_close_after_completed_failed_and_cancelled_paths(tmp_path, monkeypatch):
+    closed = 0
+    blockers: list[asyncio.Event] = []
+    mode = "complete"
+
+    class CloseTrackingBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            if mode == "fail":
+                raise RuntimeError("provider failed")
+            if mode == "block":
+                event = asyncio.Event()
+                blockers.append(event)
+                await event.wait()
+            return Generation(text="表态：认同。席位发言")
+
+        async def aclose(self):
+            nonlocal closed
+            closed += 1
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: CloseTrackingBackend())
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+
+    complete_store = Store(tmp_path / "complete.sqlite3")
+    complete = Orchestrator(complete_store, {"mock": profile})
+    run = await complete.start(RunCreate(question="完成关闭", provider_id="mock"))
+    await complete.tasks[run.id]
+    assert closed == 4
+    await complete.summarize(run.id)
+    await complete.tasks[run.id]
+    assert closed == 5
+
+    mode = "fail"
+    failed_store = Store(tmp_path / "failed.sqlite3")
+    failed = Orchestrator(failed_store, {"mock": profile})
+    failed_run = await failed.start(RunCreate(question="失败关闭", provider_id="mock"))
+    await failed.tasks[failed_run.id]
+    assert closed == 6
+
+    mode = "block"
+    cancelled_store = Store(tmp_path / "cancelled.sqlite3")
+    cancelled = Orchestrator(cancelled_store, {"mock": profile})
+    cancelled_run = await cancelled.start(RunCreate(question="取消关闭", provider_id="mock"))
+    for _ in range(100):
+        if blockers:
+            break
+        await asyncio.sleep(0.01)
+    await cancelled.cancel(cancelled_run.id)
+    await cancelled.tasks[cancelled_run.id]
+    assert closed == 7
+
+
+async def test_startup_recovery_skips_business_turn_ahead_of_checkpoint(tmp_path, monkeypatch):
+    class FlakyBackend:
+        def __init__(self):
+            self.calls = 0
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("crash after first checkpoint")
+            return Generation(text=f"表态：认同。调用 {self.calls}")
+
+    backend = FlakyBackend()
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: backend)
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    first = Orchestrator(store, {"mock": profile})
+    run = await first.start(RunCreate(question="验证业务库领先 checkpoint", provider_id="mock"))
+    await first.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "failed" and current.current_speaker_index == 1
+
+    current.discussion_turns.append(DiscussionTurn(id="business-second", speaker_type="agent", speaker_id="challenger", speaker_name="诘问", role_label="挑战者", content="表态：认同。业务库已完整写入第二席", provider_id="mock", provider_name="Mock", model="council-mock"))
+    current.candidates.append(CandidateAnswer(candidate_id="candidate-challenger", answer="业务库已完整写入第二席", model="council-mock", provider="Mock", usage=UsageSummary(model_calls=1)))
+    current.current_speaker_index = 2
+    current.status = "running"
+    await store.save_run(current)
+
+    restarted = Orchestrator(store, {"mock": profile})
+    recovered = await restarted.recover_incomplete_runs()
+    assert recovered == [run.id]
+    await restarted.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "awaiting_final_input"
+    assert backend.calls == 4
+    assert [turn.speaker_id for turn in current.discussion_turns if turn.speaker_type == "agent"].count("challenger") == 1
+
+
+async def test_startup_recovery_without_checkpoint_becomes_recoverable_failure(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    now = utc_now()
+    run = RunRecord(id="missing-checkpoint", question="缺少 checkpoint", mode="standard", provider_id="mock", model="council-mock", status="running", created_at=now, updated_at=now)
+    await store.save_run(run)
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+
+    assert await orchestrator.recover_incomplete_runs() == []
+    current = await store.get_run(run.id)
+    assert current is not None
+    assert current.status == "failed"
+    assert current.recoverable is True
+    assert "checkpoint" in (current.error or "")
+
+
+async def test_startup_recovery_missing_credential_never_falls_back_to_mock(tmp_path, monkeypatch):
+    class ImmediateBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            return Generation(text="表态：认同。席位发言")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: ImmediateBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    first = Orchestrator(store, {"mock": profile})
+    run = await first.start(RunCreate(question="凭据恢复", provider_id="mock"))
+    await first.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.finalizer_assignment
+    current.status = "running"
+    current.finalizer_assignment.provider_name = "需要密钥的 Provider"
+    current.finalizer_assignment.provider_snapshot.requires_api_key = True
+    current.finalizer_assignment.provider_snapshot.credential_saved = False
+    current.finalizer_assignment.provider_snapshot.api_key_reference = None
+    await store.save_run(current)
+
+    restarted = Orchestrator(store, {"mock": profile})
+    assert await restarted.recover_incomplete_runs() == []
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "failed"
+    assert "凭据缺失" in (current.error or "")
+    assert "未回退到 Mock" in (current.error or "")
+
+
+async def test_assignment_settings_persist_across_store_restart(tmp_path):
+    path = tmp_path / "council.sqlite3"
+    store = Store(path)
+    config = AgentAssignmentsConfig(
+        seats=[AgentModelAssignment(role=role, provider_id="mock", model=f"model-{role}") for role in ["analyst", "challenger", "builder", "observer"]],
+        finalizer=AgentModelAssignment(role="finalizer", provider_id="mock", model="model-final"),
+    )
+    await store.save_assignment_config(config)
+    store.close()
+
+    reopened = Store(path)
+    assert reopened.load_assignment_config() == config
+
+
+async def test_each_seat_and_finalizer_use_independent_persisted_snapshots(tmp_path, monkeypatch):
+    calls: list[tuple[str, str, str]] = []
+
+    class IdentifiedBackend:
+        def __init__(self, provider_id: str):
+            self.provider_id = provider_id
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            calls.append((self.provider_id, model, prompt))
+            text = "第一席观点" if "第一位发言者" in system else "表态：认同。没有明确反驳"
+            return Generation(text=text)
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: IdentifiedBackend(profile.id))
+    store = Store(tmp_path / "council.sqlite3")
+    providers = {
+        "p1": ProviderProfile(id="p1", display_name="Provider One", provider_type=ProviderType.MOCK, default_model="one"),
+        "p2": ProviderProfile(id="p2", display_name="Provider Two", provider_type=ProviderType.MOCK, default_model="two"),
+    }
+    config = AgentAssignmentsConfig(
+        seats=[
+            AgentModelAssignment(role="analyst", provider_id="p1", model="one-a"),
+            AgentModelAssignment(role="challenger", provider_id="p2", model="two-b"),
+            AgentModelAssignment(role="builder", provider_id="p1", model="one-c"),
+            AgentModelAssignment(role="observer", provider_id="p2", model="two-d"),
+        ],
+        finalizer=AgentModelAssignment(role="finalizer", provider_id="p2", model="two-final"),
+    )
+    orchestrator = Orchestrator(store, providers)
+    run = await orchestrator.start(RunCreate(question="验证独立席位", assignment_config=config))
+    providers["p1"].display_name = "Changed Later"
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "awaiting_final_input"
+    assert [(turn.provider_id, turn.model) for turn in current.discussion_turns if turn.speaker_type == "agent"] == [
+        ("p1", "one-a"), ("p2", "two-b"), ("p1", "one-c"), ("p2", "two-d")
+    ]
+    assert current.seat_assignments[0].provider_name == "Provider One"
+    await orchestrator.interject(run.id, DiscussionAction(action="interject", message="最终确认补充"))
+    await orchestrator.summarize(run.id)
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "completed"
+    assert calls[-1][0:2] == ("p2", "two-final")
+    assert "最终确认补充" in calls[-1][2]
+    assert current.final_decision is not None
+    assert current.final_decision.disagreements == []
+    assert current.final_decision.confidence["level"] == "unverified"
+    assert "score" not in current.final_decision.confidence

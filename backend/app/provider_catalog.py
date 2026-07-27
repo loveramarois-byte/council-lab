@@ -37,7 +37,13 @@ def builtin_providers() -> dict[str, ProviderProfile]:
             local_only=True,
             supports_api_key=False,
             is_active=True,
-            capabilities=ProviderCapabilities(supports_model_listing=True),
+            capabilities=ProviderCapabilities(
+                supports_responses=True,
+                supports_chat_completions=True,
+                supports_usage=True,
+                supports_model_listing=True,
+                supports_reasoning_effort=True,
+            ),
         ),
         "deepseek": ProviderProfile(
             id="deepseek",
@@ -122,6 +128,7 @@ def builtin_providers() -> dict[str, ProviderProfile]:
                 supports_chat_completions=True,
                 supports_usage=True,
                 supports_model_listing=True,
+                supports_reasoning_effort=True,
             ),
         ),
         "custom": ProviderProfile(

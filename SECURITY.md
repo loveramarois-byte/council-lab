@@ -17,3 +17,9 @@ Council 的本地设置 API 会接收一次明文 Provider 密钥，并立即交
 运行数据库和日志可能包含完整用户问题与模型回答；分享诊断材料前必须脱敏。
 
 本地部署仍需由操作者保护主机账户、数据目录和 CC Switch 配置。不要把后端直接暴露到不可信网络；默认 CORS 和启动命令只面向本机开发环境。
+
+## Provider URL validation
+
+自定义 Provider 在连接前会解析全部 DNS 结果，并拒绝云元数据主机、link-local、unspecified、multicast 和 reserved 地址；为支持本地模型，自定义 Provider 仍允许 private/loopback 地址。CC Switch 则只允许 loopback。
+
+该校验降低常见 SSRF 风险，但 DNS 解析结果可能在校验后变化，因此不能消除 DNS rebinding。请只配置可信 Provider 地址，并继续让后端保持 loopback 监听。

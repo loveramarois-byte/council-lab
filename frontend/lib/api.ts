@@ -15,6 +15,7 @@ export type Provider = {
   credential_source: "environment" | "system" | "none";
   supports_api_key: boolean;
   requires_api_key: boolean;
+  enabled?: boolean;
   is_active: boolean;
   default_model: string;
   reasoning_effort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -24,6 +25,20 @@ export type Provider = {
   last_error?: string | null;
   capabilities?: Record<string, boolean>;
 };
+
+export type AgentAssignment = {
+  role: "analyst" | "challenger" | "builder" | "observer" | "finalizer";
+  provider_id: string;
+  model: string;
+  protocol: "auto" | "responses" | "chat_completions";
+  reasoning_effort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  max_output_tokens: number;
+  temperature: number;
+  timeout_seconds: number;
+};
+
+export type AgentAssignmentsConfig = { seats: AgentAssignment[]; finalizer: AgentAssignment };
+export type ResolvedAssignment = AgentAssignment & { provider_name: string };
 
 export type Run = {
   id: string;
@@ -43,7 +58,7 @@ export type Run = {
     compacted: boolean;
     summary: string;
   };
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  status: "queued" | "running" | "awaiting_final_input" | "completed" | "failed" | "stopped" | "cancelled";
   created_at: string;
   updated_at: string;
   analysis?: Record<string, unknown> | null;
@@ -62,10 +77,16 @@ export type Run = {
   current_speaker_index: number;
   discussion_round: number;
   awaiting_user: boolean;
+  limits: { max_model_calls: number; max_tokens: number; timeout_seconds: number };
+  seat_assignments: ResolvedAssignment[];
+  finalizer_assignment?: ResolvedAssignment | null;
+  auto_summarize: boolean;
+  recoverable: boolean;
+  limit_reason?: string | null;
 };
 
 export type Participant = { id: string; name: string; role: string; brief: string };
-export type DiscussionTurn = { id: string; speaker_type: "user" | "agent" | "system"; speaker_id: string; speaker_name: string; role_label: string; content: string; round: number; created_at: string };
+export type DiscussionTurn = { id: string; speaker_type: "user" | "agent" | "system"; speaker_id: string; speaker_name: string; role_label: string; content: string; provider_id?: string | null; provider_name?: string | null; model?: string | null; round: number; created_at: string };
 
 export type Candidate = { candidate_id: string; anonymous_label?: string; answer: string; model: string; provider: string; status: string; usage: Usage; key_reasons: string[]; uncertainties: string[] };
 export type Critique = { candidate_id: string; severity: string; issue_type: string; issue: string; possible_counterexample: string; confidence: number };
@@ -73,7 +94,7 @@ export type Verification = { task_id: string; claim: string; status: string; evi
 export type Revision = { candidate_id: string; revised_answer: string; accepted_critiques: string[]; remaining_uncertainties: string[] };
 export type Score = { candidate_id: string; evidence_score: number; reasoning_score: number; coverage_score: number; risk_score: number; clarity_score: number; weighted_total: number; explanation: string };
 export type Usage = { model_calls: number; tool_calls: number; input_tokens: number; output_tokens: number; estimated_cost?: number | null; duration_ms: number };
-export type FinalDecision = { final_answer: string; key_reasons: string[]; verified_claims: string[]; partially_verified_claims: string[]; contradicted_claims: string[]; unverified_claims: string[]; disagreements: string[]; risks_and_limitations: string[]; confidence: { level: string; score: number; explanation: string }; sources: string[]; provider_summary: { provider: string; protocol: string; model: string; used_ccswitch: boolean; degraded: boolean }; usage: Usage };
+export type FinalDecision = { final_answer: string; key_reasons: string[]; verified_claims: string[]; partially_verified_claims: string[]; contradicted_claims: string[]; unverified_claims: string[]; disagreements: string[]; risks_and_limitations: string[]; confidence: { level: string; score?: number; explanation: string }; sources: string[]; provider_summary: { provider: string; protocol: string; model: string; used_ccswitch: boolean; degraded: boolean; seat_providers?: { role: string; provider: string; model: string }[] }; usage: Usage };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
@@ -83,13 +104,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   providers: () => request<Provider[]>("/api/providers"),
+  assignments: () => request<AgentAssignmentsConfig>("/api/agent-assignments"),
+  saveAssignments: (body: AgentAssignmentsConfig) => request<AgentAssignmentsConfig>("/api/agent-assignments", { method: "PUT", body: JSON.stringify(body) }),
   patchProvider: (id: string, body: Partial<Pick<Provider, "base_url" | "protocol_mode" | "default_model" | "reasoning_effort">> & { api_key?: string }) => request<Provider>(`/api/providers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   providerModels: (id: string) => request<{ models: string[]; source: string; fetched: number; default_model?: string; error?: string }>(`/api/providers/${id}/models`),
   deleteProviderCredential: (id: string) => request<Provider>(`/api/providers/${id}/credential`, { method: "DELETE" }),
   activateProvider: (id: string) => request<Provider>(`/api/providers/${id}/activate`, { method: "POST" }),
   detectCCSwitch: () => request<Record<string, unknown>>("/api/providers/ccswitch/detect", { method: "POST" }),
   testProvider: (id: string) => request<Record<string, unknown>>(`/api/providers/${id}/test`, { method: "POST" }),
-  createRun: (body: { question: string; mode: string; provider_id: string; model?: string; tools_enabled?: boolean }) => request<Run>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; limits?: { max_model_calls: number; max_tokens: number; timeout_seconds: number } }) => request<Run>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   cancelRun: (id: string) => request<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
@@ -104,10 +127,10 @@ export const api = {
 export function subscribeToRun(id: string, onEvent: (event: any) => void, onEnd?: () => void) {
   const source = new EventSource(`${API_URL}/api/runs/${id}/events`);
   source.onerror = () => { source.close(); onEnd?.(); };
-  const names = ["run_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "summary_started", "final_completed", "provider_degraded", "budget_warning", "run_cancelled", "run_failed"];
+  const names = ["run_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
   names.forEach((name) => source.addEventListener(name, (message) => {
     onEvent(JSON.parse((message as MessageEvent).data));
-    if (["final_completed", "run_failed", "run_cancelled"].includes(name)) { source.close(); onEnd?.(); }
+    if (["final_completed", "run_failed", "run_limit_reached", "run_cancelled"].includes(name)) { source.close(); onEnd?.(); }
   }));
   return () => source.close();
 }

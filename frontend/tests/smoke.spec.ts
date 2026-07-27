@@ -8,14 +8,17 @@ async function createMockRoundtable(request: import("@playwright/test").APIReque
   return response.json() as Promise<{ id: string }>;
 }
 
-test("首页明确四席会连续辩论并自动形成答案", async ({ page }) => {
+test("首页明确四席后由用户确认且不展示未实现工具", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /不是四份答案/ })).toBeVisible();
-  await expect(page.getByText("四位 AI 逐个发言、互相回应，第四位结束后自动形成最终答案。")).toBeVisible();
+  await expect(page.getByText("四个席位逐个调用已配置模型并互相回应。第四席结束后会等你确认或补充，再生成最终答案。")).toBeVisible();
   await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /引导.*Low/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /圆桌.*High/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /深挖.*Ultra/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /引导.*1.8k/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /圆桌.*4k/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /深挖.*7k/ })).toBeVisible();
+  await expect(page.getByText("联网核验")).toHaveCount(0);
+  await expect(page.getByText("代码沙箱")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "附件" })).toHaveCount(0);
   await expect(page.locator(".app-shell")).toHaveCSS("display", "flex");
   const stylesheets = await page.locator('link[rel="stylesheet"]').evaluateAll((links) => links.map((link) => (link as HTMLLinkElement).href));
   expect(stylesheets.length).toBeGreaterThan(0);
@@ -78,23 +81,28 @@ test("CC Switch 打开设置后自动识别模型", async ({ page }) => {
   expect(await page.getByLabel("模型", { exact: true }).locator("option").count()).toBe(2);
 });
 
-test("四位 AI 自动依次辩论并给出最终答案", async ({ page, request }) => {
+test("四席依次辩论并在用户确认后给出最终答案", async ({ page, request }) => {
   const run = await createMockRoundtable(request);
   try {
     await page.goto(`/runs/${run.id}`);
     await expect(page.locator(".council-seat")).toHaveCount(4);
-    await expect(page.getByText("4 次独立调用", { exact: true })).toBeVisible();
-    await expect(page.getByText("同一模型", { exact: true })).toBeVisible();
+    await expect(page.getByText("4 席顺序调用", { exact: true })).toBeVisible();
+    await expect(page.getByText("各席独立配置", { exact: true })).toBeVisible();
     await expect(page.getByText("共享公开记录", { exact: true })).toBeVisible();
     await expect(page.getByText("LangGraph", { exact: true })).toBeVisible();
     await expect(page.getByText(/\d+ 个检查点/)).toBeVisible();
     await expect(page.getByText(/\d+ \/ \d+ Token/)).toBeVisible();
-    await expect(page.locator(".council-session")).toContainText("council-mock · high");
     await expect(page.locator(".discussion-turn.agent")).toHaveCount(4, { timeout: 10_000 });
+    await expect(page.locator(".council-session")).toContainText("等待你的确认");
+    await expect(page.getByPlaceholder("最终答案生成前，我还想补充…")).toBeEnabled();
+    await page.getByPlaceholder("最终答案生成前，我还想补充…").fill("最终答案还要考虑回滚窗口");
+    await page.getByRole("button", { name: "加入最终补充" }).click();
+    await expect(page.getByText("最终答案还要考虑回滚窗口", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "生成最终答案" }).click();
     await expect(page.getByText("圆桌最终答案")).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(".council-seat.completed")).toHaveCount(4);
     await expect(page.locator(".summary-node.completed")).toHaveCount(1);
-    await expect(page.getByText("第 5 次独立调用", { exact: false })).toBeVisible();
+    await expect(page.getByText("第 5 次调用", { exact: false }).first()).toBeVisible();
     await expect(page.locator(".discussion-turn.agent").nth(0)).toContainText("析理");
     await expect(page.locator(".discussion-turn.agent").nth(1)).toContainText("诘问");
     await expect(page.locator(".discussion-turn.agent").nth(2)).toContainText("构策");
@@ -102,6 +110,32 @@ test("四位 AI 自动依次辩论并给出最终答案", async ({ page, request
   } finally {
     await request.delete(`http://127.0.0.1:8001/api/runs/${run.id}`);
   }
+});
+
+test("五个席位配置可保存且明确 Provider 能力", async ({ page, request }) => {
+  const response = await request.get("http://127.0.0.1:8001/api/agent-assignments");
+  const original = await response.json();
+  try {
+    await page.goto("/settings/agents");
+    await expect(page.getByLabel("析理 Provider")).toBeVisible();
+    await expect(page.getByLabel("总结席 模型")).toBeVisible();
+    await page.getByLabel("析理 Provider").selectOption("mock");
+    await page.getByRole("button", { name: "保存席位" }).click();
+    await expect(page.getByText(/五个席位的配置已保存/)).toBeVisible();
+    await page.reload();
+    await expect(page.getByLabel("析理 Provider")).toHaveValue("mock");
+    await expect(page.getByText(/仅工作流档位/).first()).toBeVisible();
+  } finally {
+    await request.put("http://127.0.0.1:8001/api/agent-assignments", { data: original });
+  }
+});
+
+test("评测页没有硬编码模型调用成绩", async ({ page }) => {
+  await page.goto("/evaluations");
+  await expect(page.getByText("暂无真实评测数据")).toBeVisible();
+  const averageCalls = page.locator(".eval-row").filter({ hasText: "平均模型调用" });
+  await expect(averageCalls.locator(".muted-cell")).toHaveCount(3);
+  for (const cell of await averageCalls.locator(".muted-cell").all()) await expect(cell).toHaveText("—");
 });
 
 test("移动端圆桌固定一屏，内部消息区滚动", async ({ page, request }) => {

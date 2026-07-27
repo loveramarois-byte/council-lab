@@ -1,3 +1,69 @@
+"use client";
+
 import Link from "next/link";
-import { ArrowLeft, ChevronRight, SlidersHorizontal } from "lucide-react";
-export default function AgentsSettingsPage() { return <div className="page-wrap simple-settings"><header className="topbar"><div><Link href="/settings/providers" className="back-link"><ArrowLeft size={15} />设置</Link><span className="top-title">角色分配</span></div></header><div className="settings-heading"><p className="eyebrow terracotta">ASSIGNMENTS / 05</p><h1>让审议角色各司其职。</h1><p>默认所有角色共享 Mock Provider；接入 CC Switch 后可以按角色切换模型。</p></div><div className="assignment-list">{["问题分析器", "独立解题代理 A", "独立解题代理 B", "独立解题代理 C", "批评代理", "核查代理", "修订代理", "裁判代理"].map((role, index) => <div className="assignment-row" key={role}><span className="assignment-index">{String(index + 1).padStart(2, "0")}</span><span><strong>{role}</strong><small>{index < 4 ? "独立上下文" : "共享公开结果"}</small></span><button className="assignment-select">Mock Provider · council-mock <ChevronRight size={15} /></button></div>)}</div><div className="settings-note"><SlidersHorizontal size={17} /><span>高级模型参数会在创建下一次审议时生效。</span></div></div>; }
+import { ArrowLeft, Check, LoaderCircle, Save, SlidersHorizontal } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AgentAssignment, AgentAssignmentsConfig, api, Provider } from "../../../lib/api";
+
+const roles = [
+  ["analyst", "析理", "拆解目标、条件和判断标准"],
+  ["challenger", "诘问", "回应前文并寻找反例"],
+  ["builder", "构策", "形成方案、取舍和验证步骤"],
+  ["observer", "观澜", "检查分歧、风险与遗漏"],
+  ["finalizer", "总结席", "在你确认后生成最终答案"],
+] as const;
+
+export default function AgentsSettingsPage() {
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [config, setConfig] = useState<AgentAssignmentsConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    Promise.all([api.providers(), api.assignments()]).then(([nextProviders, nextConfig]) => {
+      setProviders(nextProviders.filter((item) => item.enabled !== false));
+      setConfig(nextConfig);
+    }).catch((error) => setMessage(error instanceof Error ? error.message : "无法读取席位配置"));
+  }, []);
+
+  const assignments = useMemo(() => config ? [...config.seats, config.finalizer] : [], [config]);
+
+  const update = (index: number, patch: Partial<AgentAssignment>) => {
+    if (!config) return;
+    const next = [...assignments];
+    const provider = patch.provider_id ? providers.find((item) => item.id === patch.provider_id) : null;
+    next[index] = { ...next[index], ...patch, ...(provider ? { model: provider.default_model || provider.available_models[0] || "" } : {}) };
+    setConfig({ seats: next.slice(0, 4), finalizer: next[4] });
+    setMessage("");
+  };
+
+  const save = async () => {
+    if (!config || saving) return;
+    setSaving(true); setMessage("");
+    try { setConfig(await api.saveAssignments(config)); setMessage("五个席位的配置已保存，新建圆桌时会固化为运行快照。"); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "席位配置保存失败"); }
+    finally { setSaving(false); }
+  };
+
+  return <div className="page-wrap simple-settings">
+    <header className="topbar"><div><Link href="/settings/providers" className="back-link"><ArrowLeft size={15} />设置</Link><span className="top-title">席位模型</span></div></header>
+    <div className="settings-heading"><p className="eyebrow terracotta">ASSIGNMENTS / 05</p><h1>让每个席位真正独立。</h1><p>四个讨论席与总结席可以分别选择 Provider 和模型。配置会在创建运行时固化，之后修改不会篡改历史记录。</p></div>
+    <div className="assignment-list">
+      {roles.map(([roleId, name, detail], index) => {
+        const assignment = assignments[index];
+        const provider = providers.find((item) => item.id === assignment?.provider_id);
+        const models = provider?.available_models?.length ? provider.available_models : provider?.default_model ? [provider.default_model] : [];
+        return <div className="assignment-row" key={roleId}>
+          <span className="assignment-index">{String(index + 1).padStart(2, "0")}</span>
+          <span><strong>{name}</strong><small>{detail}</small></span>
+          {assignment ? <div className="assignment-controls">
+            <select aria-label={`${name} Provider`} value={assignment.provider_id} onChange={(event) => update(index, { provider_id: event.target.value })}>{providers.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select>
+            <select aria-label={`${name} 模型`} value={assignment.model} onChange={(event) => update(index, { model: event.target.value })}>{models.includes(assignment.model) ? null : <option value={assignment.model}>{assignment.model}</option>}{models.map((model) => <option key={model} value={model}>{model}</option>)}</select>
+            <small>{provider?.capabilities?.supports_reasoning_effort ? "原生推理档位" : "仅工作流档位"}</small>
+          </div> : <span className="assignment-loading"><LoaderCircle className="spin" size={15} />读取中</span>}
+        </div>;
+      })}
+    </div>
+    <div className="settings-note"><SlidersHorizontal size={17} /><span>{message || "Provider 凭据不会进入席位配置或运行数据库；这里只保存引用、模型与公开参数。"}</span><button className="send-button" onClick={save} disabled={!config || saving}>{saving ? <LoaderCircle className="spin" size={15} /> : message.startsWith("五个") ? <Check size={15} /> : <Save size={15} />}{saving ? "保存中" : "保存席位"}</button></div>
+  </div>;
+}

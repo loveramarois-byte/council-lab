@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .models import ProviderProfile, RunEvent, RunRecord
+from .models import AgentAssignmentsConfig, ProviderProfile, RunEvent, RunRecord
 
 
 class Store:
@@ -23,7 +23,25 @@ class Store:
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
         self.conn.execute("CREATE TABLE IF NOT EXISTS provider_profiles (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+        self.conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
         self.conn.commit()
+
+    def load_assignment_config(self) -> AgentAssignmentsConfig | None:
+        row = self.conn.execute("SELECT payload FROM app_settings WHERE key='agent_assignments'").fetchone()
+        if not row:
+            return None
+        try:
+            return AgentAssignmentsConfig.model_validate_json(row[0])
+        except ValueError:
+            return None
+
+    async def save_assignment_config(self, config: AgentAssignmentsConfig) -> None:
+        async with self._lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO app_settings(key,payload) VALUES('agent_assignments',?)",
+                (config.model_dump_json(),),
+            )
+            self.conn.commit()
 
     def load_providers(self) -> list[ProviderProfile]:
         rows = self.conn.execute("SELECT payload FROM provider_profiles").fetchall()
@@ -61,6 +79,23 @@ class Store:
         rows = self.conn.execute("SELECT payload FROM runs ORDER BY created_at DESC").fetchall()
         return [RunRecord.model_validate_json(row[0]) for row in rows]
 
+    def has_checkpoint(self, run_id: str) -> bool:
+        checkpoint_path = Path(self.checkpoint_path)
+        if not checkpoint_path.exists():
+            return False
+        connection = sqlite3.connect(checkpoint_path)
+        try:
+            table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoints'"
+            ).fetchone()
+            if not table:
+                return False
+            return connection.execute(
+                "SELECT 1 FROM checkpoints WHERE thread_id=? LIMIT 1", (run_id,)
+            ).fetchone() is not None
+        finally:
+            connection.close()
+
     async def delete_run(self, run_id: str) -> bool:
         async with self._lock:
             cursor = self.conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
@@ -91,6 +126,9 @@ class Store:
 
     async def seed_events(self, run_id: str) -> None:
         await self.publish(RunEvent(event_id=f"seed-{run_id}", run_id=run_id, type="run_created", stage="setup", message="审议任务已建立", progress=2))
+
+    def close(self) -> None:
+        self.conn.close()
 
 
 def serialize_public_provider(profile: ProviderProfile) -> dict[str, Any]:
