@@ -64,10 +64,18 @@ test("供应商设置为新手提供预设、凭据和模型获取入口", async
 });
 
 test("CC Switch 打开设置后自动识别模型", async ({ page }) => {
+  await page.route("**/api/providers/ccswitch/detect", (route) => route.fulfill({
+    json: {
+      status: "connected",
+      model_source: "provider",
+      default_model: "gpt-test-primary",
+      models: ["gpt-test-primary", "gpt-test-backup"],
+    },
+  }));
   await page.goto("/settings/providers");
-  await expect(page.getByText(/已自动识别 \d+ 个可用模型/)).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByLabel("模型", { exact: true })).not.toHaveValue("");
-  expect(await page.getByLabel("模型", { exact: true }).locator("option").count()).toBeGreaterThan(0);
+  await expect(page.getByText("已自动识别 2 个可用模型。")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("模型", { exact: true })).toHaveValue("gpt-test-primary");
+  expect(await page.getByLabel("模型", { exact: true }).locator("option").count()).toBe(2);
 });
 
 test("四位 AI 自动依次辩论并给出最终答案", async ({ page, request }) => {
