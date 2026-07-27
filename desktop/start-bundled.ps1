@@ -57,6 +57,20 @@ try {
     }
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $Started = [ordered]@{ package_root = $PackageRoot }
+    if (Test-Path $PidFile) {
+        try {
+            $Existing = Get-Content -Raw -Path $PidFile | ConvertFrom-Json
+            if ([string]$Existing.package_root -eq $PackageRoot) {
+                foreach ($Name in @("backend", "frontend")) {
+                    $Property = $Existing.PSObject.Properties[$Name]
+                    if ($null -ne $Property) { $Started[$Name] = [int]$Property.Value }
+                }
+            }
+        }
+        catch {
+            # A stale or partial PID file is replaced after startup succeeds.
+        }
+    }
 
     if (-not (Test-Backend)) {
         if (Test-Port 8001) { throw "Port 8001 is used by another program. Close it, then start Council again." }

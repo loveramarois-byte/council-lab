@@ -13,6 +13,7 @@
 - 增加 Markdown 与自包含 HTML 报告导出。
 - 增加 12 案例可重复评测框架、三种策略执行数据、匿名盲评材料和人工评分汇总。
 - 增加无需系统 Python/Node 的 macOS 与 Windows 自包含 Release 构建、打包后 Smoke test 和桌面快捷方式。
+- Release 同时发布 `SHA256SUMS.txt`，便于校验下载包完整性。
 
 ### Changed
 

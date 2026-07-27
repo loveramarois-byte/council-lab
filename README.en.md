@@ -38,6 +38,8 @@ The release includes its own runtime. Python and Node.js are not required. This 
 
 The release includes its own runtime and needs neither administrator access nor a separate Python/Node.js installation. This open-source build is not commercially code-signed. If SmartScreen appears, verify that the file came from this repository's Release page, then choose **More info -> Run anyway**. `Create Desktop Shortcut.cmd` adds an optional shortcut.
 
+Every release also includes `SHA256SUMS.txt` for verifying the downloaded ZIP.
+
 ## First connection
 
 1. Run one question with **Local Demo**. It is offline, free, and verifies the full four-seat workflow.

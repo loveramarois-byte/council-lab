@@ -72,6 +72,8 @@ Release 包已经内置运行环境，不需要安装 Python 或 Node.js。当�
 
 Release 包已经内置运行环境，不需要管理员权限，也不需要安装 Python 或 Node.js。当前开源构建没有商业代码签名；如果 Windows 弹出 SmartScreen，请确认文件来自本仓库 Release，再点“更多信息”→“仍要运行”。`Create Desktop Shortcut.cmd` 可选创建桌面快捷方式。
 
+每个正式 Release 同时提供 `SHA256SUMS.txt`，需要校验下载时可将 ZIP 的 SHA-256 与其中对应条目比较。
+
 ### 第一次使用
 
 1. 先用首页的 **本地演示** 提一个问题，确认四席流程正常；它不联网也不产生费用。

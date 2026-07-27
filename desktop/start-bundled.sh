@@ -14,7 +14,7 @@ BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 
 mkdir -p "$LOG_DIR"
-: > "$PID_FILE"
+/usr/bin/touch "$PID_FILE"
 
 show_error() {
   /usr/bin/osascript -e "display dialog \"$1\" buttons {\"好\"} with title \"Council 无法启动\"" >/dev/null 2>&1 || true
@@ -39,6 +39,15 @@ wait_for() {
   return 1
 }
 
+record_pid() {
+  local service="$1"
+  local pid="$2"
+  local temp_file="${PID_FILE}.tmp.$$"
+  /usr/bin/awk -v target="$service" '$1 != target' "$PID_FILE" > "$temp_file" 2>/dev/null || true
+  echo "$service $pid" >> "$temp_file"
+  /bin/mv "$temp_file" "$PID_FILE"
+}
+
 if [[ ! -x "$BACKEND_EXE" || ! -x "$NODE_EXE" || ! -f "$WEB_DIR/server.js" ]]; then
   show_error "安装包不完整，请重新下载并解压 Council。"
   exit 1
@@ -51,7 +60,7 @@ if ! is_up "http://127.0.0.1:8001/api/health"; then
   fi
   /usr/bin/nohup "$BACKEND_EXE" >>"$BACKEND_LOG" 2>&1 &
   backend_pid=$!
-  echo "backend $backend_pid" >> "$PID_FILE"
+  record_pid backend "$backend_pid"
   if ! wait_for "http://127.0.0.1:8001/api/health"; then
     show_error "后端启动失败，请查看 ~/Library/Logs/Council/backend.log。"
     exit 1
@@ -68,7 +77,7 @@ if ! is_up "http://127.0.0.1:3000/"; then
     /usr/bin/nohup "$NODE_EXE" "$WEB_DIR/server.js" >>"$FRONTEND_LOG" 2>&1 &
   frontend_pid=$!
   popd >/dev/null
-  echo "frontend $frontend_pid" >> "$PID_FILE"
+  record_pid frontend "$frontend_pid"
   if ! wait_for "http://127.0.0.1:3000/"; then
     show_error "网页启动失败，请查看 ~/Library/Logs/Council/frontend.log。"
     exit 1
