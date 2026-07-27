@@ -4,7 +4,7 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 
 [中文说明](README.md) · [Download](https://github.com/loveramarois-byte/council-lab/releases/latest) · [Contributing](CONTRIBUTING.md)
 
-![Council roundtable](docs/images/roundtable.png)
+![Council roundtable debating a high-stakes research portfolio](docs/images/roundtable-v2.png)
 
 ## Highlights
 

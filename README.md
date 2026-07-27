@@ -17,7 +17,7 @@
 
 <p align="center"><a href="README.en.md">English</a> · <a href="#下载使用">下载</a> · <a href="#工作方式">工作方式</a> · <a href="#provider-支持">Provider</a> · <a href="CONTRIBUTING.md">参与贡献</a> · <a href="https://linux.do/">LINUX DO</a></p>
 
-![四席 AI 公开讨论并形成最终答案](docs/images/roundtable.png)
+![四席 AI 围绕高难度科研决策公开辩论并形成最终答案](docs/images/roundtable-v2.png)
 
 ## Council 是什么
 
