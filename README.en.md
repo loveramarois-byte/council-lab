@@ -12,11 +12,12 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **You remain in the room.** Interjections become public context for later seats and the final synthesis.
 - **Independent seat configuration.** Choose a provider and model for each of the four speakers and the finalizer; the configuration is snapshotted per run.
 - **A deliberate confirmation point.** Council does not finalize after seat four until you approve or add more context.
-- **Projects and evidence.** Add text, public web pages, PDF, DOCX, Markdown, CSV, JSON, or TXT sources and cite frozen run snapshots as `[S1]`.
+- **Projects and evidence.** Add text, public web pages, PDF, DOCX, Markdown, CSV, JSON, or TXT sources and cite complete frozen run snapshots as `[S1]`; model prompts still receive a budgeted working copy.
+- **Decision follow-up.** Record the decision taken, expected result, review date, actual outcome, and which seat hypotheses held up.
 - **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
 - **Portable reports.** Export a completed deliberation as Markdown or a self-contained HTML report.
 - **Local-first credentials.** API keys are stored in the operating-system credential store, not Council's database or browser storage.
-- **Reproducible evaluation.** A 12-case benchmark compares direct answers, same-model councils, and cross-model councils without publishing fabricated quality scores.
+- **Reproducible evaluation.** A 12-case benchmark tracks failures, tokens, latency, optional cost estimates, citation support, and unsupported claims without publishing scores from Mock or incomplete blind reviews.
 
 Council never displays or saves hidden chain-of-thought. It stores only public model responses and run metadata. It does not currently run web searches or a code sandbox, and model agreement is **not** external fact verification.
 

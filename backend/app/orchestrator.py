@@ -238,25 +238,20 @@ class Orchestrator:
             )
             if requested_ids - {source.id for source in selected_sources}:
                 raise ValueError("部分资料不存在或不属于当前资料空间")
-            remaining_chars = 100_000
             for source in selected_sources:
-                excerpt = source.content[: min(30_000, remaining_chars)]
-                if not excerpt:
+                if not source.content:
                     continue
-                remaining_chars -= len(excerpt)
                 source_snapshots.append(
                     RunSourceSnapshot(
                         id=source.id,
                         kind=source.kind,
                         title=source.title,
-                        excerpt=excerpt,
+                        content=source.content,
                         url=source.url,
                         filename=source.filename,
                         sha256=source.sha256,
                     )
                 )
-                if remaining_chars <= 0:
-                    break
             context_parts = []
             if project.instructions.strip():
                 context_parts.append(f"资料空间固定说明：{project.instructions.strip()}")
@@ -314,7 +309,7 @@ class Orchestrator:
         sections = []
         for index, source in enumerate(run.source_snapshots, 1):
             origin = source.url or source.filename or "本地文字资料"
-            sections.append(f"[S{index}] {source.title}\n来源：{origin}\n{source.excerpt}")
+            sections.append(f"[S{index}] {source.title}\n来源：{origin}\n{source.content}")
         return "\n\n".join(sections)
 
     async def emit(

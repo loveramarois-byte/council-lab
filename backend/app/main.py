@@ -14,45 +14,18 @@ from fastapi.responses import Response, StreamingResponse
 
 from .credentials import CredentialStoreError, delete_provider_secret, get_provider_secret, save_provider_secret
 from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_webpage
-from .models import AgentAssignmentsConfig, AgentModelAssignment, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
+from .models import AgentAssignmentsConfig, AgentModelAssignment, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
-from .provider_catalog import BUILTIN_PROVIDER_IDS, CATALOG_FIELDS, builtin_providers
-from .providers import build_backend, discover_ccswitch_models, is_loopback_url, normalize_base_url, validate_base_url
+from .provider_catalog import BUILTIN_PROVIDER_IDS, builtin_providers
+from .providers import build_backend, discover_ccswitch_models, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
 from .reports import run_html, run_markdown
+from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
 from .templates import list_templates
 
 store = Store(database_path())
-providers = builtin_providers()
-legacy_unverified_models = {
-    "gpt-5.6-sol",
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
-    "glm-5.2",
-    "glm-5.1",
-    "kimi-k3",
-    "kimi-k2.7-code",
-    "kimi-k2.6",
-}
-for saved_provider in store.load_providers():
-    if saved_provider.id != "mock":
-        catalog_profile = providers.get(saved_provider.id)
-        if catalog_profile:
-            for field in CATALOG_FIELDS:
-                setattr(saved_provider, field, getattr(catalog_profile, field))
-            saved_provider.api_key_reference = saved_provider.api_key_reference or catalog_profile.api_key_reference
-            saved_provider.requires_api_key = catalog_profile.requires_api_key
-            if not saved_provider.available_models:
-                saved_provider.available_models = catalog_profile.available_models
-                saved_provider.model_source = catalog_profile.model_source
-            elif saved_provider.model_source == "none":
-                saved_provider.model_source = "saved"
-            if saved_provider.default_model in legacy_unverified_models and saved_provider.model_source != "provider":
-                saved_provider.default_model = catalog_profile.default_model
-                saved_provider.available_models = catalog_profile.available_models
-                saved_provider.model_source = catalog_profile.model_source
-        providers[saved_provider.id] = saved_provider
+providers = restore_provider_profiles(store.load_providers())
 if not any(profile.is_active for profile in providers.values()):
     providers["ccswitch"].is_active = True
 orchestrator = Orchestrator(store, providers)
@@ -62,12 +35,7 @@ if active_profile is None:
         profile.is_active = profile.id == "mock"
     active_profile = providers["mock"]
 saved_assignments = store.load_assignment_config()
-saved_assignments_valid = saved_assignments is not None and all(
-    assignment.provider_id in providers
-    and assignment.model.strip()
-    and assignment.model not in legacy_unverified_models
-    for assignment in [*saved_assignments.seats, saved_assignments.finalizer]
-)
+saved_assignments_valid = assignment_config_is_valid(saved_assignments, providers)
 assignments = saved_assignments if saved_assignments_valid else orchestrator.default_assignment_config(active_profile.id, active_profile.default_model)
 
 
@@ -107,6 +75,16 @@ def apply_api_key(profile: ProviderProfile, api_key: object | None) -> None:
     secret_value = api_key.get_secret_value() if hasattr(api_key, "get_secret_value") else str(api_key)
     save_provider_secret(profile.id, secret_value)
     profile.credential_saved = True
+
+
+def offline_model_catalog(profile: ProviderProfile) -> tuple[list[str], str]:
+    if profile.provider_type == ProviderType.CCSWITCH:
+        models = discover_ccswitch_models()
+        return models, "ccswitch_history" if models else "none"
+    catalog = builtin_providers().get(profile.id)
+    if catalog and catalog.model_source == "recommended":
+        return list(catalog.available_models), "recommended"
+    return [], "none"
 
 
 @app.get("/api/health")
@@ -393,6 +371,19 @@ async def rerun(run_id: str):
     )
 
 
+@app.put("/api/runs/{run_id}/decision-review")
+async def save_decision_review(run_id: str, payload: DecisionReviewUpdate):
+    run = await store.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "运行记录不存在")
+    if run.status != "completed" or not run.final_decision:
+        raise HTTPException(409, "圆桌完成后才能记录结果回访")
+    run.decision_review = DecisionReview(**payload.model_dump())
+    run.updated_at = utc_now()
+    await store.save_run(run)
+    return run
+
+
 @app.delete("/api/runs/{run_id}")
 async def delete_run(run_id: str):
     if not await orchestrator.delete(run_id):
@@ -521,14 +512,10 @@ async def detect_ccswitch():
         await backend.aclose()
     profile.last_health_check = datetime.now(timezone.utc)
     profile.last_error = None if result.get("status") in {"connected", "route_reachable"} else result.get("error")
-    models = result.get("models") or discover_ccswitch_models()
-    model_source = "provider" if result.get("models") else "ccswitch_history" if models else "none"
-    if models:
-        profile.available_models = models
-        profile.model_source = model_source
-        if profile.default_model not in models:
-            profile.default_model = models[0]
-        result["models"] = models
+    fallback_models, fallback_source = offline_model_catalog(profile)
+    models, model_source, _ = resolve_model_catalog(result.get("models") or [], fallback_models, fallback_source)
+    replace_model_catalog(profile, models, model_source)
+    result["models"] = profile.available_models
     await store.save_provider(profile)
     return {
         "base_url": profile.base_url,
@@ -602,24 +589,21 @@ async def provider_models(provider_id: str):
             models = await backend.list_models()
         finally:
             await backend.aclose()
-        source = "provider"
-        if profile.provider_type == ProviderType.CCSWITCH and not models:
-            models = discover_ccswitch_models()
-            source = "ccswitch_history" if models else "none"
-        models = list(dict.fromkeys(models)) if profile.provider_type == ProviderType.CCSWITCH else sorted(set(models), key=str.casefold)
-        if models:
-            profile.available_models = models
-            profile.model_source = source
-            if profile.default_model not in models:
-                profile.default_model = models[0]
-            profile.last_error = None
-            profile.last_health_check = datetime.now(timezone.utc)
-            await store.save_provider(profile)
-        return {"models": profile.available_models, "source": source, "fetched": len(models), "default_model": profile.default_model}
+        fallback_models, fallback_source = offline_model_catalog(profile)
+        models, source, fetched = resolve_model_catalog(models, fallback_models, fallback_source)
+        if source == "provider" and profile.provider_type != ProviderType.CCSWITCH:
+            models = sorted(models, key=str.casefold)
+        replace_model_catalog(profile, models, source)
+        profile.last_error = None
+        profile.last_health_check = datetime.now(timezone.utc)
+        await store.save_provider(profile)
+        return {"models": profile.available_models, "source": source, "fetched": fetched, "default_model": profile.default_model}
     except Exception as exc:
         profile.last_error = provider_error_message(exc)
+        models, source = offline_model_catalog(profile)
+        replace_model_catalog(profile, models, source)
         await store.save_provider(profile)
-        return {"models": profile.available_models, "source": profile.model_source, "fetched": 0, "default_model": profile.default_model, "error": profile.last_error}
+        return {"models": profile.available_models, "source": source, "fetched": 0, "default_model": profile.default_model, "error": profile.last_error}
 
 
 @app.get("/api/providers/{provider_id}/capabilities")

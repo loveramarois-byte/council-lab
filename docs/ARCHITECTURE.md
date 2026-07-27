@@ -8,7 +8,7 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 运行数据分成两个 SQLite 文件：
 
-- `council.sqlite3` 保存应用设置、完整公开 Run、五席快照、发言、最终答案、用量和上下文快照。
+- `council.sqlite3` 保存应用设置、完整公开 Run、五席快照、发言、最终答案、结果回访、用量和上下文快照。
 - `council.checkpoints.sqlite3` 由 LangGraph SQLite saver 保存节点状态。
 
 数据库不存放在源码树。默认使用平台用户数据目录，macOS 为 `~/Library/Application Support/Council/data/`，Linux 为 `${XDG_DATA_HOME:-~/.local/share}/council/data/`，Windows 为 `%LOCALAPPDATA%\\Council\\data\\`；测试和部署可用 `COUNCIL_DATA_DIR` 覆盖。
@@ -19,7 +19,9 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 模型适配层保持薄接口：`health_check`、`list_models`、`generate` 和 `aclose`。Provider 注册表集中维护官方地址、保守的离线推荐、协议、能力和文档入口；远程 `/models` 成功时使用账号实际目录，失败时可显示明确标注的离线推荐。`model_source` 区分 Provider 实时目录、CC Switch 近期成功记录、内置 Mock、离线推荐和无目录，避免把推荐值冒充实时可用模型。Mock Provider 让自动化测试无需密钥。自动协议策略先尝试 Responses，只有明确的 404/405/501 才回退 Chat Completions；只有声明支持原生 reasoning 的 Responses Provider 才接收 effort，普通 Chat Completions Provider 只应用 Council 的上下文和流程档位。
 
-资料空间保存可复用的项目说明与来源。文字和上传文件在本地解析；公开网页导入限制协议、解析后的 IP、重定向次数和响应大小，拒绝本机、内网、云元数据与保留地址。创建 Run 时复制所选来源的正文、SHA-256 和来源元数据，历史 Run 不受资料后续编辑或删除影响。最终 Markdown/HTML 报告只导出这份冻结快照与公开讨论。
+资料空间保存可复用的项目说明与来源。文字和上传文件在本地解析；公开网页导入限制协议、解析后的 IP、重定向次数和响应大小，拒绝本机、内网、云元数据与保留地址。创建 Run 时完整复制所选来源的正文、SHA-256 和来源元数据，历史 Run 不受资料后续编辑或删除影响；调用模型时再由上下文层按 Token 预算裁剪工作副本。最终 Markdown/HTML 报告包含冻结全文、公开讨论和可选结果回访，因此分享报告前应检查敏感信息。
+
+完成 Run 后可写入一份决策回访：最终采用的决定、预期结果、复盘日期、实际结果和四席观点验证状态。它属于同一 Run 的可编辑本地记录，不会触发额外模型调用，也不会反向改写当时的讨论和答案。
 
 桌面 Release 使用 PyInstaller 打包后端、Next standalone 打包网页，并附带 Node runtime。普通用户不依赖系统 Python/Node；源码开发仍使用项目虚拟环境和 npm。macOS 构建执行 ad-hoc codesign 但不做 Apple notarization，Windows 构建目前没有商业代码签名，这两个限制必须在下载说明中保持可见。
 

@@ -84,4 +84,6 @@ if ! is_up "http://127.0.0.1:3000/"; then
   fi
 fi
 
-/usr/bin/open "http://localhost:3000"
+if [[ "${COUNCIL_NO_BROWSER:-0}" != "1" ]]; then
+  /usr/bin/open "http://localhost:3000"
+fi

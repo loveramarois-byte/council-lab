@@ -28,30 +28,59 @@ from app.models import (  # noqa: E402
 )
 from app.orchestrator import Orchestrator  # noqa: E402
 from app.paths import database_path  # noqa: E402
-from app.provider_catalog import CATALOG_FIELDS, builtin_providers  # noqa: E402
 from app.providers import build_backend  # noqa: E402
+from app.runtime_config import assignment_config_is_valid, restore_provider_profiles  # noqa: E402
 from app.store import Store  # noqa: E402
 from evals.scoring import STRATEGIES, aggregate_execution, blind_labels, load_dataset  # noqa: E402
 
 
+def provider_reality(profiles: dict[str, ProviderProfile], profile_ids: set[str]) -> tuple[bool, bool]:
+    provider_types = [profiles[provider_id].provider_type for provider_id in profile_ids]
+    any_real = any(provider_type != ProviderType.MOCK for provider_type in provider_types)
+    all_real = bool(provider_types) and all(provider_type != ProviderType.MOCK for provider_type in provider_types)
+    return any_real, all_real
+
+
+def load_pricing(path: Path | None) -> dict[str, dict[str, float]]:
+    if path is None:
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    pricing: dict[str, dict[str, float]] = {}
+    if not isinstance(payload, dict):
+        raise ValueError("pricing 文件必须是 JSON 对象")
+    for key, rates in payload.items():
+        if not isinstance(key, str) or not isinstance(rates, dict):
+            raise ValueError("pricing 键和值格式无效")
+        input_rate = rates.get("input_per_million")
+        output_rate = rates.get("output_per_million")
+        if not isinstance(input_rate, (int, float)) or not isinstance(output_rate, (int, float)) or input_rate < 0 or output_rate < 0:
+            raise ValueError(f"pricing {key} 必须提供非负的 input_per_million 和 output_per_million")
+        pricing[key] = {"input_per_million": float(input_rate), "output_per_million": float(output_rate)}
+    return pricing
+
+
+def estimate_provider_cost(provider_usage: list[dict[str, Any]], pricing: dict[str, dict[str, float]]) -> tuple[float | None, list[str]]:
+    if not provider_usage or not pricing:
+        return None, sorted({f"{row.get('provider_id')}:{row.get('model')}" for row in provider_usage})
+    total = 0.0
+    missing: list[str] = []
+    for row in provider_usage:
+        key = f"{row['provider_id']}:{row['model']}"
+        rates = pricing.get(key) or pricing.get(row["provider_id"])
+        if not rates:
+            missing.append(key)
+            continue
+        total += int(row.get("input_tokens", 0)) * rates["input_per_million"] / 1_000_000
+        total += int(row.get("output_tokens", 0)) * rates["output_per_million"] / 1_000_000
+    return (round(total, 6), []) if not missing else (None, sorted(set(missing)))
+
+
 def load_runtime() -> tuple[dict[str, ProviderProfile], AgentAssignmentsConfig | None]:
     store = Store(database_path())
-    providers = builtin_providers()
-    for saved in store.load_providers():
-        if saved.id == "mock":
-            continue
-        catalog = providers.get(saved.id)
-        if catalog:
-            for field in CATALOG_FIELDS:
-                setattr(saved, field, getattr(catalog, field))
-            saved.api_key_reference = saved.api_key_reference or catalog.api_key_reference
-            saved.requires_api_key = catalog.requires_api_key
-            if not saved.available_models:
-                saved.available_models = catalog.available_models
-        providers[saved.id] = saved
+    providers = restore_provider_profiles(store.load_providers())
     assignments = store.load_assignment_config()
     store.close()
-    return providers, assignments
+    return providers, assignments if assignment_config_is_valid(assignments, providers) else None
 
 
 def evidence_snapshots(case: dict[str, Any]) -> list[RunSourceSnapshot]:
@@ -60,7 +89,7 @@ def evidence_snapshots(case: dict[str, Any]) -> list[RunSourceSnapshot]:
             id=f"{case['id']}-source-{index}",
             kind="text",
             title=material["title"],
-            excerpt=material["content"],
+            content=material["content"],
             sha256="benchmark-v1",
         )
         for index, material in enumerate(case.get("materials", []), 1)
@@ -104,6 +133,7 @@ async def run_direct(case: dict[str, Any], profile: ProviderProfile, model: str)
             "output_tokens": generation.output_tokens,
             "duration_ms": int((time.perf_counter() - started) * 1000),
             "providers": [{"provider": profile.display_name, "model": model}],
+            "provider_usage": [{"provider_id": profile.id, "provider": profile.display_name, "model": model, "model_calls": 1, "input_tokens": generation.input_tokens, "output_tokens": generation.output_tokens}],
         }
     finally:
         await backend.aclose()
@@ -136,10 +166,35 @@ async def run_council(
         if not current or current.status != "completed" or not current.final_decision:
             raise RuntimeError(current.error if current else "评测 Run 未保存")
         providers = [
-            {"role": assignment.role, "provider": assignment.provider_name, "model": assignment.model}
+            {"role": assignment.role, "provider_id": assignment.provider_id, "provider": assignment.provider_name, "model": assignment.model}
             for assignment in [*current.seat_assignments, current.finalizer_assignment]
             if assignment
         ]
+        provider_usage = []
+        for assignment, candidate in zip(current.seat_assignments, current.candidates, strict=False):
+            provider_usage.append({
+                "role": assignment.role,
+                "provider_id": assignment.provider_id,
+                "provider": assignment.provider_name,
+                "model": assignment.model,
+                "model_calls": candidate.usage.model_calls,
+                "input_tokens": candidate.usage.input_tokens,
+                "output_tokens": candidate.usage.output_tokens,
+            })
+        seat_input = sum(item["input_tokens"] for item in provider_usage)
+        seat_output = sum(item["output_tokens"] for item in provider_usage)
+        seat_calls = sum(item["model_calls"] for item in provider_usage)
+        finalizer = current.finalizer_assignment
+        if finalizer:
+            provider_usage.append({
+                "role": finalizer.role,
+                "provider_id": finalizer.provider_id,
+                "provider": finalizer.provider_name,
+                "model": finalizer.model,
+                "model_calls": max(0, current.usage.model_calls - seat_calls),
+                "input_tokens": max(0, current.usage.input_tokens - seat_input),
+                "output_tokens": max(0, current.usage.output_tokens - seat_output),
+            })
         return {
             "status": "completed",
             "answer": current.final_decision.final_answer,
@@ -148,6 +203,7 @@ async def run_council(
             "output_tokens": current.usage.output_tokens,
             "duration_ms": int((time.perf_counter() - started) * 1000),
             "providers": providers,
+            "provider_usage": provider_usage,
             "workflow": strategy,
         }
     finally:
@@ -163,6 +219,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
     strategies = [value.strip() for value in args.strategies.split(",") if value.strip()]
     if not strategies or any(strategy not in STRATEGIES for strategy in strategies):
         raise ValueError(f"strategies 只能使用：{', '.join(STRATEGIES)}")
+    pricing = load_pricing(args.pricing)
 
     profiles, saved_config = load_runtime()
     profile = profiles.get(args.provider_id)
@@ -179,12 +236,12 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         cross_config = ensure_cross_model(saved_config) if "cross_model_council" in strategies else None
         await helper.shutdown()
 
-        profile_ids = {profile.id}
+        profile_ids = {profile.id} if {"direct", "same_model_council"} & set(strategies) else set()
         if cross_config:
             profile_ids.update(item.provider_id for item in [*cross_config.seats, cross_config.finalizer])
-        uses_real_provider = any(profiles[item].provider_type != ProviderType.MOCK for item in profile_ids)
+        uses_any_real_provider, uses_only_real_providers = provider_reality(profiles, profile_ids)
         planned_calls = len(cases) * sum(1 if strategy == "direct" else 5 for strategy in strategies)
-        if uses_real_provider and not args.confirm_cost:
+        if uses_any_real_provider and not args.confirm_cost:
             raise ValueError(
                 f"本次最多会发起 {planned_calls} 次真实模型请求。确认费用后重新运行并添加 --confirm-cost。"
             )
@@ -214,7 +271,11 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
                         "output_tokens": 0,
                         "duration_ms": 0,
                         "providers": [],
+                        "provider_usage": [],
                     }
+                estimated_cost, unpriced_models = estimate_provider_cost(outcome.get("provider_usage", []), pricing)
+                outcome["estimated_cost"] = estimated_cost
+                outcome["unpriced_models"] = unpriced_models
                 variants.append({"strategy": strategy, "blind_label": labels[strategy], **outcome})
             result_cases.append(
                 {
@@ -236,8 +297,9 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "strategies": strategies,
         "quality_scored": False,
-        "quality_claims_allowed": uses_real_provider,
-        "mock_workflow_only": not uses_real_provider,
+        "quality_claims_allowed": uses_only_real_providers,
+        "mock_workflow_only": not uses_any_real_provider,
+        "contains_mock_provider": not uses_only_real_providers,
         "execution": aggregate_execution(result_cases),
         "cases": result_cases,
     }
@@ -273,6 +335,8 @@ def review_template(result: dict[str, Any]) -> dict[str, Any]:
             {
                 "case_id": case["id"],
                 "scores": {variant["blind_label"]: dict(empty_scores) for variant in case["variants"]},
+                "citation_checks": {variant["blind_label"]: {"supported": None, "total": None} for variant in case["variants"]},
+                "unsupported_claims": {variant["blind_label"]: None for variant in case["variants"]},
                 "preferred": "",
                 "notes": "",
             }
@@ -291,6 +355,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--case", action="append", help="只运行指定案例，可重复")
     parser.add_argument("--case-timeout", type=int, default=900)
     parser.add_argument("--confirm-cost", action="store_true", help="确认真实 Provider 调用可能产生费用")
+    parser.add_argument("--pricing", type=Path, help="可选 Token 单价 JSON，用于估算成本")
     return parser.parse_args()
 
 

@@ -28,8 +28,8 @@ def markdown(summary: dict) -> str:
         f"- 已盲评案例：{summary['reviewed_cases']}",
         f"- 允许质量结论：{'是' if summary['quality_claims_allowed'] else '否'}",
         "",
-        "| 方案 | 完成/总数 | 失败率 | 调用 | Token | 耗时 | 人类偏好 | 五项均分 |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| 方案 | 完成/总数 | 失败率 | 调用 | Token | 估算成本 | 引用支持率 | 未支持主张 | 人类偏好 | 五项均分 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for strategy in STRATEGIES:
         execution = summary["execution"][strategy]
@@ -37,10 +37,13 @@ def markdown(summary: dict) -> str:
         values = [quality[field] for field in SCORE_FIELDS if quality[field] is not None]
         average = round(sum(values) / len(values), 3) if values else "—"
         tokens = execution["input_tokens"] + execution["output_tokens"]
+        estimated_cost = f"${execution['estimated_cost']:.4f}" if execution.get("estimated_cost") is not None else "—"
+        citation_accuracy = f"{quality['citation_accuracy']:.1%}" if quality.get("citation_accuracy") is not None else "—"
+        unsupported = quality.get("unsupported_claims") if quality.get("unsupported_claims") is not None else "—"
         lines.append(
             f"| {LABELS[strategy]} | {execution['completed']}/{execution['cases']} | "
             f"{execution['failure_rate']:.1%} | {execution['model_calls']} | {tokens} | "
-            f"{execution['duration_ms'] / 1000:.1f}s | {quality['preferred_cases']} | {average} |"
+            f"{estimated_cost} | {citation_accuracy} | {unsupported} | {quality['preferred_cases']} | {average} |"
         )
     if not summary["quality_claims_allowed"]:
         lines.extend(["", "> 本次包含 Mock 或尚未完成有效盲评，不能据此宣称某种方案质量更高。"])

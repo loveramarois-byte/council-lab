@@ -11,3 +11,7 @@ the first launch, Control-click Council.app, choose Open, then confirm Open.
 
 Double-click "Stop Council.command" to stop the local services. Your data remains
 in ~/Library/Application Support/Council/data.
+
+To update, stop Council, download the new release, and replace Council.app. Data
+and API keys live outside the app. To uninstall, stop Council and remove the app;
+delete the data directory only if you also want to erase local history.

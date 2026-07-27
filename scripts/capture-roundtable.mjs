@@ -16,10 +16,10 @@ const participants = [
 ];
 
 const assignments = [
-  ["analyst", "OpenAI", "gpt-4.1"],
-  ["challenger", "Anthropic", "claude-3-7-sonnet"],
-  ["builder", "DeepSeek", "deepseek-reasoner"],
-  ["observer", "Google", "gemini-2.5-pro"],
+  ["analyst", "CC Switch", "gpt-5.6-sol"],
+  ["challenger", "CC Switch", "claude-opus-5"],
+  ["builder", "CC Switch", "claude-fable-5"],
+  ["observer", "CC Switch", "gemini-3.1-pro-preview"],
 ].map(([role, provider_name, model]) => ({
   role,
   provider_id: provider_name === "CC Switch" ? "ccswitch" : provider_name.toLowerCase().replace(/\s+/g, "-"),
@@ -36,12 +36,12 @@ const turns = [
   {
     id: "turn-1", speaker_type: "agent", speaker_id: "analyst", speaker_name: "析理", role_label: "问题架构师",
     content: "**先拆掉“AI 等于岗位消失”的前提。** 任务会先重组，真正要守住的是中位数实际收入、每周工时、再就业周期和代际流动。技术只提高 GDP 而不改善这四项，就不算成功。",
-    provider_id: "openai", provider_name: "OpenAI", model: "gpt-4.1", round: 1, created_at: now,
+    provider_id: "ccswitch", provider_name: "CC Switch", model: "gpt-5.6-sol", round: 1, created_at: now,
   },
   {
     id: "turn-2", speaker_type: "agent", speaker_id: "challenger", speaker_name: "诘问", role_label: "制度审查者",
     content: "**反驳把全民基本收入当万能解。** 如果住房、医疗和教育供给不变，现金可能被价格吸收，还会默认人退出劳动市场。更稳的是工资保险、可携带福利与基本公共服务打底。",
-    provider_id: "anthropic", provider_name: "Anthropic", model: "claude-3-7-sonnet", round: 1, created_at: now,
+    provider_id: "ccswitch", provider_name: "CC Switch", model: "claude-opus-5", round: 1, created_at: now,
   },
   {
     id: "turn-user", speaker_type: "user", speaker_id: "user", speaker_name: "你", role_label: "主持人",
@@ -51,18 +51,18 @@ const turns = [
   {
     id: "turn-3", speaker_type: "agent", speaker_id: "builder", speaker_name: "构策", role_label: "政策设计师",
     content: "**采纳质疑，改用双轨方案。** 企业只有分享 AI 增益才获税收抵扣，推动 32 小时工作周；个人能力按 20% AI 协作、35% 领域判断、25% 沟通担责、20% 可复用资产配置。",
-    provider_id: "deepseek", provider_name: "DeepSeek", model: "deepseek-reasoner", round: 1, created_at: now,
+    provider_id: "ccswitch", provider_name: "CC Switch", model: "claude-fable-5", round: 1, created_at: now,
   },
   {
     id: "turn-4", speaker_type: "agent", speaker_id: "observer", speaker_name: "观澜", role_label: "风险与公平观察者",
     content: "**部分认同，但反对按“机器人数量”征税。** 那会惩罚采用技术的小企业；应税的是超额利润和垄断租。试点须按地区、年龄和收入分层，两年未改善实际收入或再就业即退出。",
-    provider_id: "google", provider_name: "Google", model: "gemini-2.5-pro", round: 1, created_at: now,
+    provider_id: "ccswitch", provider_name: "CC Switch", model: "gemini-3.1-pro-preview", round: 1, created_at: now,
   },
 ];
 
 const question = "当 AI 能完成大多数知识工作后，普通人靠什么获得收入、尊严和上升通道？社会应该先缩短工时、改革教育，还是重写分配规则？";
 const run = {
-  id: "showcase", question, mode: "rigorous", provider_id: "openai", model: "gpt-4.1", reasoning_effort: "high",
+  id: "showcase", question, mode: "rigorous", provider_id: "ccswitch", model: "gpt-5.6-sol", reasoning_effort: "high",
   workflow_engine: "langgraph", checkpoint_count: 9,
   context_snapshot: { strategy: "deterministic", token_budget: 12000, estimated_tokens: 6840, included_turns: 5, total_turns: 5, compacted: false, summary: "" },
   status: "completed", created_at: now, updated_at: now, analysis: null,
@@ -81,17 +81,17 @@ const run = {
   degraded: false, error: null, protocol: "responses", discussion_turns: turns, participant_roles: participants,
   current_speaker_index: 4, discussion_round: 1, awaiting_user: false,
   limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 },
-  seat_assignments: assignments,
-  finalizer_assignment: { ...assignments[0], role: "finalizer", provider_id: "openai", provider_name: "OpenAI", model: "gpt-4.1" },
+  seat_assignments: assignments, template_name: "演示会话 · 示例模型配置",
+  finalizer_assignment: { ...assignments[0], role: "finalizer" },
   auto_summarize: false, recoverable: false, limit_reason: null,
 };
 
 const provider = {
-  id: "openai", preset_id: "openai", display_name: "OpenAI", description: "官方 API",
-  provider_type: "openai_official", protocol_mode: "responses", base_url: "https://api.openai.com/v1",
-  has_api_key: true, credential_source: "system", supports_api_key: true, requires_api_key: true,
-  enabled: true, is_active: true, default_model: "gpt-4.1", reasoning_effort: "high",
-  available_models: ["gpt-4.1"], model_source: "provider", local_only: false, last_health_check: now, last_error: null,
+  id: "ccswitch", preset_id: "ccswitch", display_name: "CC Switch", description: "本机路由",
+  provider_type: "ccswitch", protocol_mode: "auto", base_url: "http://127.0.0.1:15721/v1",
+  has_api_key: false, credential_source: "none", supports_api_key: false, requires_api_key: false,
+  enabled: true, is_active: true, default_model: "gpt-5.6-sol", reasoning_effort: "high",
+  available_models: assignments.map((item) => item.model), model_source: "provider", local_only: true, last_health_check: now, last_error: null,
 };
 
 const browser = await chromium.launch({ headless: true });

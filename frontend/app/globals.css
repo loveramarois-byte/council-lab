@@ -508,3 +508,23 @@ body:has(.council-page) .sidebar-footnote { border-color: var(--border); }
 .source-strip > strong, .source-strip > span { color: var(--muted); }
 .source-strip > span { border-color: var(--border); background: var(--surface); }
 .source-strip b { color: var(--accent); }
+
+.decision-review-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 12px; background: rgba(38, 34, 30, .34); backdrop-filter: blur(3px); }
+.decision-review-dialog { width: min(760px, 100%); max-height: calc(100vh - 24px); overflow: auto; border: 1px solid var(--border-strong); border-radius: 8px; background: #f9f6f1; box-shadow: 0 24px 70px rgba(47, 39, 33, .2); }
+.decision-review-dialog > header { display: flex; justify-content: space-between; align-items: flex-start; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+.decision-review-dialog > header span { color: var(--accent); font-size: 9px; font-weight: 700; }
+.decision-review-dialog > header h2 { margin: 3px 0 1px; font: 500 24px/1.1 var(--serif); }
+.decision-review-dialog > header p { margin: 0; color: var(--muted); font-size: 10px; }
+.decision-review-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; padding: 14px 20px 11px; }
+.review-wide { grid-column: 1 / 3; }
+.review-field { display: grid; gap: 4px; color: var(--muted); font-size: 9px; font-weight: 600; }
+.review-field textarea, .review-field input, .review-field select, .seat-review-list input, .seat-review-list select { width: 100%; border: 1px solid var(--border); border-radius: 5px; outline: 0; background: var(--surface); color: var(--foreground); font: 11px/1.45 var(--sans); }
+.review-field textarea { min-height: 48px; resize: vertical; padding: 7px 8px; }.review-field input, .review-field select { height: 32px; padding: 0 8px; }
+.review-field textarea:focus, .review-field input:focus, .review-field select:focus, .seat-review-list input:focus, .seat-review-list select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.seat-review-list { padding: 0 20px 14px; }.seat-review-list > span { display: block; padding: 4px 0 6px; color: var(--muted); font-size: 9px; font-weight: 600; }
+.seat-review-list > div { display: grid; grid-template-columns: 58px 120px minmax(0, 1fr); align-items: center; gap: 7px; min-height: 34px; border-top: 1px solid var(--border); }.seat-review-list strong { font-size: 10px; }.seat-review-list select, .seat-review-list input { height: 26px; padding: 0 7px; font-size: 9px; }
+.decision-review-dialog > footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-height: 50px; padding: 8px 20px; border-top: 1px solid var(--border); background: #f2ede6; }.decision-review-dialog > footer > span { margin-right: auto; color: var(--muted); font-size: 9px; }.decision-review-dialog > footer .review-error { color: var(--danger); }
+
+@media (max-width: 680px) {
+  .decision-review-backdrop { padding: 6px; }.decision-review-dialog { max-height: calc(100vh - 12px); }.decision-review-dialog > header { padding: 12px; }.decision-review-fields { padding: 10px 12px 8px; gap: 7px; }.seat-review-list { padding: 0 12px 9px; }.seat-review-list > div { grid-template-columns: 40px 105px minmax(0, 1fr); gap: 4px; }.decision-review-dialog > footer { padding: 6px 12px; }
+}

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 def utc_now() -> datetime:
@@ -266,10 +266,37 @@ class RunSourceSnapshot(BaseModel):
     id: str
     kind: Literal["text", "file", "url"]
     title: str
-    excerpt: str
+    content: str = Field(validation_alias=AliasChoices("content", "excerpt"))
     url: str = ""
     filename: str = ""
     sha256: str = ""
+
+
+class SeatOutcomeReview(BaseModel):
+    role: Literal["analyst", "challenger", "builder", "observer"]
+    status: Literal["pending", "supported", "mixed", "contradicted"] = "pending"
+    note: str = Field(default="", max_length=1000)
+
+
+class DecisionReviewUpdate(BaseModel):
+    selected_decision: str = Field(min_length=1, max_length=6000)
+    expected_result: str = Field(min_length=1, max_length=6000)
+    review_date: date | None = None
+    actual_result: str = Field(default="", max_length=6000)
+    outcome_status: Literal["pending", "successful", "partial", "unsuccessful", "unclear"] = "pending"
+    seat_outcomes: list[SeatOutcomeReview] = Field(default_factory=list, max_length=4)
+
+    @field_validator("seat_outcomes")
+    @classmethod
+    def unique_seats(cls, value: list[SeatOutcomeReview]) -> list[SeatOutcomeReview]:
+        roles = [item.role for item in value]
+        if len(roles) != len(set(roles)):
+            raise ValueError("每个席位只能记录一次回访结果")
+        return value
+
+
+class DecisionReview(DecisionReviewUpdate):
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class DeliberationTemplate(BaseModel):
@@ -417,3 +444,4 @@ class RunRecord(BaseModel):
     template_id: str = "open_discussion"
     template_name: str = "开放讨论"
     source_snapshots: list[RunSourceSnapshot] = Field(default_factory=list)
+    decision_review: DecisionReview | None = None

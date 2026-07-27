@@ -137,6 +137,25 @@ test("CC Switch 不可达时不会显示为已连接", async ({ page }) => {
   await expect(page.getByText("无法连接服务地址，请确认程序已启动。")).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(".provider-state")).toContainText("不可用");
   await expect(page.locator(".provider-state")).not.toContainText("已连接");
+  await expect(page.locator('select[aria-label="模型"]')).toHaveCount(0);
+});
+
+test("CC Switch 历史模型不会被标成当前可用", async ({ page }) => {
+  await page.route("**/api/providers/ccswitch/detect", (route) => route.fulfill({
+    json: {
+      status: "connection_refused",
+      model_source: "ccswitch_history",
+      default_model: "recent-model",
+      models: ["recent-model"],
+      error: "无法连接 CC Switch 本地路由。",
+    },
+  }));
+
+  await page.goto("/settings/providers");
+  await expect(page.getByText(/读取到 1 个近期成功模型记录/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/这些记录不代表模型现在可用/)).toBeVisible();
+  await expect(page.locator(".provider-state")).toContainText("不可用");
+  await expect(page.getByText(/已自动识别 1 个可用模型/)).toHaveCount(0);
 });
 
 test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商", async ({ page }) => {
@@ -223,6 +242,14 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await expect(page.locator(".discussion-turn.agent").nth(1)).toContainText("诘问");
     await expect(page.locator(".discussion-turn.agent").nth(2)).toContainText("构策");
     await expect(page.locator(".discussion-turn.agent").nth(3)).toContainText("观澜");
+    await page.getByRole("button", { name: "结果回访" }).click();
+    await page.getByLabel("预期结果").fill("两周内验证回滚方案");
+    await page.getByLabel("结果状态").selectOption("partial");
+    await page.getByLabel("实际发生了什么").fill("回滚方案通过了演练");
+    await page.getByRole("button", { name: "保存回访" }).click();
+    await expect(page.getByRole("button", { name: "编辑回访" })).toBeVisible();
+    const saved = await (await request.get(`http://127.0.0.1:8001/api/runs/${run.id}`)).json() as { decision_review?: { expected_result: string; outcome_status: string } };
+    expect(saved.decision_review).toMatchObject({ expected_result: "两周内验证回滚方案", outcome_status: "partial" });
   } finally {
     await request.delete(`http://127.0.0.1:8001/api/runs/${run.id}`);
   }
@@ -371,7 +398,7 @@ test("席位失败时明确显示原因并允许从当前席位重试", async ({
   expect(retryRequested).toBeTruthy();
 });
 
-test("CC Switch 长时间等待时显示故障转移状态并允许重试当前席位", async ({ page }) => {
+test("CC Switch 长时间等待时显示路由边界并允许重试当前席位", async ({ page }) => {
   const waitingSince = new Date(Date.now() - 48_000).toISOString();
   const waitingRun = {
     id: "waiting-fixture",
@@ -422,7 +449,8 @@ test("CC Switch 长时间等待时显示故障转移状态并允许重试当前�
   await page.getByRole("button", { name: "加入讨论" }).click();
   await expect(page.getByText("这是我的中途观点", { exact: true })).toBeVisible();
   expect(interjectionRequested).toBeTruthy();
-  await expect(page.getByText("CC Switch 正在切换上游")).toBeVisible();
+  await expect(page.getByText("正在等待 CC Switch 返回上游响应")).toBeVisible();
+  await expect(page.getByText(/若已配置故障转移，将由它处理/)).toBeVisible();
   await expect(page.getByText(/已等待 \d+ 秒/)).toBeVisible();
   await expect(page.getByRole("button", { name: "继续等待" })).toBeVisible();
   await page.getByRole("button", { name: "重试本席" }).click();

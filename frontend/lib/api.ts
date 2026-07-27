@@ -64,8 +64,11 @@ export type ProjectSource = {
   sha256: string;
   created_at: string;
 };
-export type RunSourceSnapshot = Omit<ProjectSource, "project_id" | "content" | "media_type" | "size_bytes" | "created_at"> & { excerpt: string };
+export type RunSourceSnapshot = Omit<ProjectSource, "project_id" | "media_type" | "size_bytes" | "created_at">;
 export type DeliberationTemplate = { id: string; name: string; description: string; prompt_hint: string; system_guidance: string };
+export type SeatOutcomeReview = { role: "analyst" | "challenger" | "builder" | "observer"; status: "pending" | "supported" | "mixed" | "contradicted"; note: string };
+export type DecisionReview = { selected_decision: string; expected_result: string; review_date?: string | null; actual_result: string; outcome_status: "pending" | "successful" | "partial" | "unsuccessful" | "unclear"; seat_outcomes: SeatOutcomeReview[]; updated_at: string };
+export type DecisionReviewInput = Omit<DecisionReview, "updated_at">;
 
 export type Run = {
   id: string;
@@ -118,6 +121,7 @@ export type Run = {
   template_id?: string;
   template_name?: string;
   source_snapshots?: RunSourceSnapshot[];
+  decision_review?: DecisionReview | null;
 };
 
 export type Participant = { id: string; name: string; role: string; brief: string };
@@ -174,6 +178,7 @@ export const api = {
   resumeRun: (id: string, limits: RunLimits) => request<Run>(`/api/runs/${id}/resume`, { method: "POST", body: JSON.stringify(limits) }),
   summarizeRun: (id: string) => request<Run>(`/api/runs/${id}/summarize`, { method: "POST" }),
   rerun: (id: string) => request<Run>(`/api/runs/${id}/rerun`, { method: "POST" }),
+  saveDecisionReview: (id: string, body: DecisionReviewInput) => request<Run>(`/api/runs/${id}/decision-review`, { method: "PUT", body: JSON.stringify(body) }),
   deleteRun: (id: string) => request<{ deleted: boolean }>(`/api/runs/${id}`, { method: "DELETE" }),
 };
 

@@ -96,13 +96,17 @@ export default function ProvidersSettingsPage() {
           const models = Array.isArray(result.models) ? result.models.filter((model): model is string => typeof model === "string") : [];
           const defaultModel = typeof result.default_model === "string" ? result.default_model : current.default_model || models[0] || "";
           const modelSource = typeof result.model_source === "string" ? result.model_source as Provider["model_source"] : current.model_source;
-          setProviders((items) => items.map((item) => item.id === current.id ? { ...item, ...(models.length ? { available_models: models } : {}), default_model: defaultModel, model_source: modelSource } : item));
+          setProviders((items) => items.map((item) => item.id === current.id ? { ...item, available_models: models, default_model: defaultModel, model_source: modelSource } : item));
           const nextStatus = String(result.status || "unknown");
+          const liveRoute = ["connected", "route_reachable"].includes(nextStatus);
           setConnectionStatus(nextStatus);
-          if (models.length) {
+          if (models.length && modelSource === "ccswitch_history") {
+            setMessage(`读取到 ${models.length} 个近期成功模型记录，但当前 CC Switch 路由不可用。这些记录不代表模型现在可用。`);
+            setMessageTone("error");
+          } else if (models.length && liveRoute) {
             setMessage(`已自动识别 ${models.length} 个可用模型。`);
             setMessageTone("success");
-          } else if (["connected", "route_reachable"].includes(nextStatus)) {
+          } else if (liveRoute) {
             setMessage("CC Switch 本地路由可访问，但没有公布模型目录。可刷新或手动填写模型 ID。");
             setMessageTone("info");
           } else {
@@ -203,7 +207,7 @@ export default function ProvidersSettingsPage() {
       const models = Array.isArray(result.models) ? result.models.filter((model): model is string => typeof model === "string") : [];
       const defaultModel = typeof result.default_model === "string" ? result.default_model : current.default_model || models[0] || "";
       const modelSource = typeof result.model_source === "string" ? result.model_source as Provider["model_source"] : current.model_source;
-      if (models.length) updateCurrent({ available_models: models, default_model: defaultModel, model_source: modelSource });
+      updateCurrent({ available_models: models, default_model: defaultModel, model_source: modelSource });
       const nextStatus = String(result.status || "unknown");
       setConnectionStatus(nextStatus);
       setMessage(statusCopy[nextStatus] || String(result.error || "CC Switch 检测完成。"));

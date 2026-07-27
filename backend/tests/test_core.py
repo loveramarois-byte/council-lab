@@ -14,6 +14,7 @@ from app.models import (
     DiscussionAction,
     DiscussionTurn,
     FinalDecision,
+    DecisionReview,
     ProjectRecord,
     ProjectSource,
     ProviderCapabilities,
@@ -30,10 +31,12 @@ from app.models import (
 from app.orchestrator import Orchestrator, analyze_question, describe_run_error, reasoning_effort_for_mode
 from app.paths import data_dir, database_path
 from app.provider_catalog import builtin_providers
-from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, validate_base_url
+from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
 from app.reports import run_html, run_markdown
+from app.runtime_config import assignment_config_is_valid, restore_provider_profiles
 from app.store import Store, serialize_public_provider
 from evals.scoring import aggregate_execution, blind_labels, load_dataset, summarize_human_reviews
+from evals.run_benchmark import estimate_provider_cost, provider_reality
 
 
 def test_data_directory_can_be_overridden(tmp_path, monkeypatch):
@@ -129,6 +132,52 @@ def test_model_list_formats():
     assert extract_model_ids({"models": [{"slug": "gpt-c"}, {"model": "gpt-d"}]}) == ["gpt-c", "gpt-d"]
 
 
+def test_empty_model_catalog_replaces_stale_live_models_with_honest_fallback():
+    profile = ProviderProfile(
+        id="deepseek",
+        display_name="DeepSeek",
+        provider_type=ProviderType.COMPATIBLE,
+        default_model="stale-live-model",
+        available_models=["stale-live-model"],
+        model_source="provider",
+    )
+
+    models, source, fetched = resolve_model_catalog([], ["recommended-model"], "recommended")
+    replace_model_catalog(profile, models, source)
+
+    assert fetched == 0
+    assert profile.available_models == ["recommended-model"]
+    assert profile.model_source == "recommended"
+    assert profile.default_model == "stale-live-model"
+
+    models, source, fetched = resolve_model_catalog([], [], "ccswitch_history")
+    replace_model_catalog(profile, models, source)
+    assert (models, source, fetched) == ([], "none", 0)
+    assert profile.available_models == []
+    assert profile.model_source == "none"
+
+
+def test_runtime_restore_rejects_legacy_unverified_models_for_app_and_evals():
+    saved = ProviderProfile(
+        id="deepseek",
+        preset_id="deepseek",
+        display_name="Old DeepSeek",
+        provider_type=ProviderType.COMPATIBLE,
+        default_model="deepseek-v4-pro",
+        available_models=["deepseek-v4-pro"],
+        model_source="recommended",
+    )
+    profiles = restore_provider_profiles([saved])
+    assert profiles["deepseek"].default_model == "deepseek-chat"
+    assert "deepseek-v4-pro" not in profiles["deepseek"].available_models
+
+    invalid = AgentAssignmentsConfig(
+        seats=[AgentModelAssignment(role=role, provider_id="deepseek", model="deepseek-v4-pro") for role in ["analyst", "challenger", "builder", "observer"]],
+        finalizer=AgentModelAssignment(role="finalizer", provider_id="deepseek", model="deepseek-v4-pro"),
+    )
+    assert assignment_config_is_valid(invalid, profiles) is False
+
+
 def test_ccswitch_model_discovery_uses_recent_successful_requests(tmp_path):
     db_path = tmp_path / "cc-switch.db"
     connection = sqlite3.connect(db_path)
@@ -191,6 +240,31 @@ def test_context_window_compacts_long_discussion_and_preserves_latest_user_input
     assert window.included_turns < window.total_turns
     assert "编号 27" in window.prompt
     assert "较早发言摘录（确定性裁剪）" in window.prompt
+    assert estimate_tokens(window.prompt) <= window.token_budget
+
+
+def test_context_with_long_evidence_never_truncates_latest_user_input_from_tail():
+    marker = "LATEST_USER_TAIL_MARKER"
+    turns = [
+        DiscussionTurn(
+            id=f"turn-{index}",
+            speaker_type="user" if index == 8 else "agent",
+            speaker_id="user" if index == 8 else f"agent-{index}",
+            speaker_name="你" if index == 8 else f"成员{index}",
+            content=(("用户补充" * 80) + marker) if index == 8 else ("历史观点" * 120),
+        )
+        for index in range(10)
+    ]
+    window = build_context_window(
+        "原始问题也必须保留",
+        turns,
+        token_budget=420,
+        evidence_context="[S1] 超长资料\n" + ("证据正文" * 1000),
+        project_history="历史结论" * 800,
+    )
+
+    assert "原始问题也必须保留" in window.prompt
+    assert marker in window.prompt
     assert estimate_tokens(window.prompt) <= window.token_budget
 
 
@@ -998,12 +1072,14 @@ async def test_run_freezes_sources_uses_citations_and_replays_deleted_material(t
     monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: CaptureBackend())
     store = Store(tmp_path / "council.sqlite3")
     project = ProjectRecord(id="project-a", name="迁移计划", instructions="先保护可回滚性")
+    frozen_tail = "FULL_SNAPSHOT_TAIL"
+    source_content = "本季度预算上限为十万元。" + ("完整附件正文" * 6000) + frozen_tail
     source = ProjectSource(
         id="source-a",
         project_id=project.id,
         kind="text",
         title="预算说明",
-        content="本季度预算上限为十万元。",
+        content=source_content,
         size_bytes=39,
         sha256="snapshot-sha",
     )
@@ -1025,7 +1101,8 @@ async def test_run_freezes_sources_uses_citations_and_replays_deleted_material(t
     current = await store.get_run(run.id)
     assert current is not None and current.status == "awaiting_final_input"
     assert current.template_name == "资料研判"
-    assert current.source_snapshots[0].excerpt == "本季度预算上限为十万元。"
+    assert current.source_snapshots[0].content == source_content
+    assert current.source_snapshots[0].content.endswith(frozen_tail)
     assert "[S1] 预算说明" in prompts[0]
     assert "资料本身尚未经过 Council 独立核验" in prompts[0]
     assert "禁止编造来源" in systems[0]
@@ -1106,7 +1183,7 @@ async def test_project_history_enters_context_and_reports_keep_sources(tmp_path,
             id="source-1",
             kind="text",
             title="一手资料",
-            excerpt="事实正文",
+            content="事实正文",
             sha256="source-hash",
         )
     ]
@@ -1117,11 +1194,30 @@ async def test_project_history_enters_context_and_reports_keep_sources(tmp_path,
         provider_summary={"provider": "Mock"},
         usage=UsageSummary(),
     )
+    current.decision_review = DecisionReview(
+        selected_decision="先做小范围试点",
+        expected_result="两周内验证关键假设",
+        actual_result="关键假设得到部分支持",
+        outcome_status="partial",
+    )
     markdown = run_markdown(current)
     html = run_html(current)
     assert "[S1]" in markdown and "source-hash" in markdown
+    assert "事实正文" in markdown
     assert "最终答案引用 [S1]" in markdown
     assert "[S1] 一手资料" in html and "最终答案引用 [S1]" in html
+    assert "决策回访" in markdown and "两周内验证关键假设" in html
+
+
+def test_source_snapshot_reads_legacy_excerpt_without_losing_content():
+    snapshot = RunSourceSnapshot.model_validate({
+        "id": "legacy",
+        "kind": "text",
+        "title": "旧快照",
+        "excerpt": "旧版本保存的正文",
+    })
+    assert snapshot.content == "旧版本保存的正文"
+    assert snapshot.model_dump()["content"] == "旧版本保存的正文"
 
 
 def test_benchmark_dataset_is_balanced_and_blinding_is_deterministic():
@@ -1141,9 +1237,9 @@ def test_benchmark_dataset_is_balanced_and_blinding_is_deterministic():
 
 def test_benchmark_execution_and_human_scores_remain_separate():
     variants = [
-        {"strategy": "direct", "blind_label": "B", "status": "completed", "model_calls": 1, "input_tokens": 100, "output_tokens": 30, "duration_ms": 500},
-        {"strategy": "same_model_council", "blind_label": "A", "status": "completed", "model_calls": 5, "input_tokens": 600, "output_tokens": 120, "duration_ms": 2400},
-        {"strategy": "cross_model_council", "blind_label": "C", "status": "failed", "model_calls": 2, "input_tokens": 200, "output_tokens": 20, "duration_ms": 1800},
+        {"strategy": "direct", "blind_label": "B", "status": "completed", "answer": "B answer", "model_calls": 1, "input_tokens": 100, "output_tokens": 30, "duration_ms": 500},
+        {"strategy": "same_model_council", "blind_label": "A", "status": "completed", "answer": "A answer", "model_calls": 5, "input_tokens": 600, "output_tokens": 120, "duration_ms": 2400},
+        {"strategy": "cross_model_council", "blind_label": "C", "status": "completed", "answer": "C answer", "model_calls": 2, "input_tokens": 200, "output_tokens": 20, "duration_ms": 1800},
     ]
     result = {
         "run_id": "eval-run",
@@ -1153,16 +1249,76 @@ def test_benchmark_execution_and_human_scores_remain_separate():
     }
     execution = aggregate_execution(result["cases"])
     assert execution["direct"]["model_calls"] == 1
-    assert execution["cross_model_council"]["failure_rate"] == 1
+    assert execution["cross_model_council"]["failure_rate"] == 0
 
     score = {field: 4 for field in ["accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty"]}
-    reviews = {"run_id": "eval-run", "reviews": [{"case_id": "case-1", "scores": {"A": score, "B": score, "C": score}, "preferred": "A"}]}
+    reviews = {"run_id": "eval-run", "reviews": [{
+        "case_id": "case-1",
+        "scores": {"A": score, "B": score, "C": score},
+        "citation_checks": {"A": {"supported": 3, "total": 4}, "B": {"supported": 2, "total": 2}, "C": {"supported": 0, "total": 0}},
+        "unsupported_claims": {"A": 1, "B": 0, "C": 2},
+        "preferred": "A",
+    }]}
     summary = summarize_human_reviews(result, reviews)
     assert summary["quality_scored"] is True
     assert summary["quality_claims_allowed"] is True
     assert summary["quality"]["same_model_council"]["preferred_cases"] == 1
     assert summary["quality"]["direct"]["accuracy"] == 4
+    assert summary["quality"]["same_model_council"]["citation_accuracy"] == 0.75
+    assert summary["quality"]["direct"]["unsupported_claims"] == 0
+
+    failed_result = {
+        **result,
+        "cases": [{"id": "case-1", "variants": [{**variant, "status": "failed", "answer": ""} if variant["strategy"] == "cross_model_council" else variant for variant in variants]}],
+    }
+    failed_summary = summarize_human_reviews(failed_result, reviews)
+    assert failed_summary["all_variants_completed"] is False
+    assert failed_summary["quality_claims_allowed"] is False
+
+    incomplete_metrics = {**reviews, "reviews": [{**reviews["reviews"][0], "citation_checks": {"A": {"supported": 3, "total": 4}}}]}
+    incomplete_summary = summarize_human_reviews(result, incomplete_metrics)
+    assert incomplete_summary["complete_review_metrics"] is False
+    assert incomplete_summary["quality_claims_allowed"] is False
 
     invalid = {"run_id": "eval-run", "reviews": [{"case_id": "case-1", "scores": {"A": {**score, "accuracy": 6}}}]}
     with pytest.raises(ValueError, match="必须为 1-5"):
         summarize_human_reviews(result, invalid)
+
+
+def test_quality_claims_require_all_real_providers_and_complete_blind_review():
+    profiles = {
+        "real": ProviderProfile(id="real", display_name="Real", provider_type=ProviderType.COMPATIBLE),
+        "mock": ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK),
+    }
+    assert provider_reality(profiles, {"real"}) == (True, True)
+    assert provider_reality(profiles, {"real", "mock"}) == (True, False)
+    assert provider_reality(profiles, {"mock"}) == (False, False)
+
+    score = {field: 4 for field in ["accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty"]}
+    result = {
+        "run_id": "partial-review",
+        "benchmark_version": "council-benchmark-v1",
+        "quality_claims_allowed": True,
+        "cases": [
+            {"id": "case-1", "variants": [{"strategy": "direct", "blind_label": "A", "status": "completed"}]},
+            {"id": "case-2", "variants": [{"strategy": "direct", "blind_label": "B", "status": "completed"}]},
+        ],
+    }
+    summary = summarize_human_reviews(result, {"run_id": "partial-review", "reviews": [{"case_id": "case-1", "scores": {"A": score}}]})
+    assert summary["complete_blind_review"] is False
+    assert summary["quality_claims_allowed"] is False
+
+
+def test_cost_estimation_requires_explicit_prices_for_every_model():
+    usage = [
+        {"provider_id": "deepseek", "model": "model-a", "input_tokens": 1_000_000, "output_tokens": 500_000},
+        {"provider_id": "zhipu", "model": "model-b", "input_tokens": 500_000, "output_tokens": 100_000},
+    ]
+    pricing = {
+        "deepseek:model-a": {"input_per_million": 1.0, "output_per_million": 2.0},
+        "zhipu": {"input_per_million": 2.0, "output_per_million": 5.0},
+    }
+    assert estimate_provider_cost(usage, pricing) == (3.5, [])
+    cost, missing = estimate_provider_cost(usage, {"deepseek:model-a": pricing["deepseek:model-a"]})
+    assert cost is None
+    assert missing == ["zhipu:model-b"]

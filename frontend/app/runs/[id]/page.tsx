@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, MessageCircle, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, MessageCircle, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, Participant, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
+import { api, DecisionReviewInput, Participant, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
+const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
 
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
@@ -19,6 +20,10 @@ export default function RunDetailPage() {
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
   const [waitingNoticeDismissed, setWaitingNoticeDismissed] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewDraft, setReviewDraft] = useState<DecisionReviewInput>(EMPTY_REVIEW);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState("");
 
   const refresh = () => params.id && api.run(params.id).then(setRun).catch(() => router.push("/runs"));
   useEffect(() => { refresh(); }, [params.id]);
@@ -43,6 +48,13 @@ export default function RunDetailPage() {
   const nextParticipant = useMemo(() => run?.participant_roles[run.current_speaker_index], [run]);
   const selectedParticipant = run?.participant_roles.find((item) => item.id === target) || null;
   const agentTurnCount = run?.discussion_turns.filter((turn) => turn.speaker_type === "agent").length || 0;
+  const activeAssignment = run
+    ? agentTurnCount < 4
+      ? run.seat_assignments?.[run.current_speaker_index]
+      : run.finalizer_assignment
+    : undefined;
+  const activeProviderId = activeAssignment?.provider_id || run?.provider_id;
+  const currentRequestUsesCCSwitch = activeProviderId === "ccswitch";
   const completedSpeakerIds = useMemo(() => new Set(run?.discussion_turns.filter((turn) => turn.speaker_type === "agent").map((turn) => turn.speaker_id) || []), [run?.discussion_turns]);
   const debateActive = run?.status === "running" && agentTurnCount < 4;
   const awaitingFinal = run?.status === "awaiting_final_input";
@@ -56,7 +68,39 @@ export default function RunDetailPage() {
   const waitingSeconds = run && run.status === "running" && !run.awaiting_user
     ? Math.max(0, Math.floor((now - Date.parse(run.updated_at)) / 1000))
     : 0;
-  const showWaitingRecovery = run?.provider_id === "ccswitch" && waitingSeconds >= 45 && !waitingNoticeDismissed;
+  const showWaitingRecovery = currentRequestUsesCCSwitch && waitingSeconds >= 45 && !waitingNoticeDismissed;
+
+  const openDecisionReview = () => {
+    if (!run?.final_decision) return;
+    setReviewDraft(run.decision_review ? {
+      selected_decision: run.decision_review.selected_decision,
+      expected_result: run.decision_review.expected_result,
+      review_date: run.decision_review.review_date || null,
+      actual_result: run.decision_review.actual_result,
+      outcome_status: run.decision_review.outcome_status,
+      seat_outcomes: run.decision_review.seat_outcomes,
+    } : {
+      selected_decision: run.final_decision.final_answer.slice(0, 6000),
+      expected_result: "",
+      review_date: null,
+      actual_result: "",
+      outcome_status: "pending",
+      seat_outcomes: run.participant_roles.map((item) => ({ role: item.id as "analyst" | "challenger" | "builder" | "observer", status: "pending", note: "" })),
+    });
+    setReviewError("");
+    setReviewOpen(true);
+  };
+
+  const saveDecisionReview = async () => {
+    if (!run || reviewBusy || !reviewDraft.selected_decision.trim() || !reviewDraft.expected_result.trim()) return;
+    setReviewBusy(true); setReviewError("");
+    try {
+      setRun(await api.saveDecisionReview(run.id, reviewDraft));
+      setReviewOpen(false);
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : "回访没有保存成功");
+    } finally { setReviewBusy(false); }
+  };
 
   const act = async (action: "interject" | "question") => {
     if (!run || busy || !canWrite || !draft.trim()) return;
@@ -146,8 +190,8 @@ export default function RunDetailPage() {
           {run.status === "running" && <article className="discussion-thinking">
             <LoaderCircle className="spin" size={17} />
             <div className="discussion-thinking-copy">
-              <span><strong>{debateActive ? nextParticipant?.name || "下一位成员" : "记录员"}</strong>{run.provider_id === "ccswitch" && waitingSeconds >= 10 ? "CC Switch 正在切换上游" : debateActive ? "正在阅读并回应前面的发言" : "正在综合四席讨论"}</span>
-              <small><Clock3 size={12} />已等待 {waitingSeconds} 秒{run.provider_id === "ccswitch" ? " · 请求已进入 CC Switch，故障转移由它处理" : ""}</small>
+              <span><strong>{debateActive ? nextParticipant?.name || "下一位成员" : "记录员"}</strong>{currentRequestUsesCCSwitch && waitingSeconds >= 10 ? "正在等待 CC Switch 返回上游响应" : debateActive ? "正在阅读并回应前面的发言" : "正在综合四席讨论"}</span>
+              <small><Clock3 size={12} />已等待 {waitingSeconds} 秒{currentRequestUsesCCSwitch ? " · 请求由 CC Switch 路由；若已配置故障转移，将由它处理" : ""}</small>
               {showWaitingRecovery && <div className="discussion-recovery">
                 <span>上游响应较慢，你可以继续等，或中止这次请求并重试当前席位。</span>
                 <button className="quiet-button" onClick={() => setWaitingNoticeDismissed(true)}>继续等待</button>
@@ -181,9 +225,26 @@ export default function RunDetailPage() {
           {(error || run.error) && <p className="discussion-error">{error || run.error}</p>}
         </div>}
 
-        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><span /><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
+        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button><span /><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
       </section>
     </main>
+    {reviewOpen && <div className="decision-review-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReviewOpen(false); }}>
+      <section className="decision-review-dialog" role="dialog" aria-modal="true" aria-labelledby="decision-review-title">
+        <header><div><span>DECISION FOLLOW-UP</span><h2 id="decision-review-title">结果回访</h2><p>把当时的判断和后来发生的事放在一起。</p></div><button className="icon-button" onClick={() => setReviewOpen(false)} aria-label="关闭结果回访"><X size={16} /></button></header>
+        <div className="decision-review-fields">
+          <label className="review-field review-wide"><span>最终采用的决定</span><textarea aria-label="最终采用的决定" rows={2} maxLength={6000} value={reviewDraft.selected_decision} onChange={(event) => setReviewDraft({ ...reviewDraft, selected_decision: event.target.value })} /></label>
+          <label className="review-field review-wide"><span>预期结果</span><textarea aria-label="预期结果" rows={2} maxLength={6000} value={reviewDraft.expected_result} onChange={(event) => setReviewDraft({ ...reviewDraft, expected_result: event.target.value })} placeholder="当时希望发生什么" /></label>
+          <label className="review-field"><span>复盘日期</span><input aria-label="复盘日期" type="date" value={reviewDraft.review_date || ""} onChange={(event) => setReviewDraft({ ...reviewDraft, review_date: event.target.value || null })} /></label>
+          <label className="review-field"><span>实际结果</span><select aria-label="结果状态" value={reviewDraft.outcome_status} onChange={(event) => setReviewDraft({ ...reviewDraft, outcome_status: event.target.value as DecisionReviewInput["outcome_status"] })}><option value="pending">等待回访</option><option value="successful">达到预期</option><option value="partial">部分达到</option><option value="unsuccessful">未达到</option><option value="unclear">暂不明确</option></select></label>
+          <label className="review-field review-wide"><span>实际发生了什么</span><textarea aria-label="实际发生了什么" rows={2} maxLength={6000} value={reviewDraft.actual_result} onChange={(event) => setReviewDraft({ ...reviewDraft, actual_result: event.target.value })} placeholder="可以稍后再填写" /></label>
+        </div>
+        <div className="seat-review-list"><span>四席观点验证</span>{reviewDraft.seat_outcomes.map((item, index) => {
+          const participant = run.participant_roles.find((entry) => entry.id === item.role);
+          return <div key={item.role}><strong>{participant?.name || item.role}</strong><select aria-label={`${participant?.name || item.role}观点验证`} value={item.status} onChange={(event) => { const next = [...reviewDraft.seat_outcomes]; next[index] = { ...item, status: event.target.value as typeof item.status }; setReviewDraft({ ...reviewDraft, seat_outcomes: next }); }}><option value="pending">待验证</option><option value="supported">得到支持</option><option value="mixed">部分成立</option><option value="contradicted">被结果反驳</option></select><input aria-label={`${participant?.name || item.role}验证备注`} value={item.note} maxLength={1000} onChange={(event) => { const next = [...reviewDraft.seat_outcomes]; next[index] = { ...item, note: event.target.value }; setReviewDraft({ ...reviewDraft, seat_outcomes: next }); }} placeholder="备注（可选）" /></div>;
+        })}</div>
+        <footer>{reviewError ? <span className="review-error">{reviewError}</span> : <span>回访会写入本地记录和导出报告。</span>}<button className="send-button" onClick={saveDecisionReview} disabled={reviewBusy || !reviewDraft.selected_decision.trim() || !reviewDraft.expected_result.trim()}>{reviewBusy ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存回访</button></footer>
+      </section>
+    </div>}
   </div>;
 }
 

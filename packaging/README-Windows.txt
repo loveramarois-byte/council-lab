@@ -12,3 +12,7 @@ choose More info > Run anyway after verifying the GitHub release source.
 "Create Desktop Shortcut.cmd" adds an optional desktop shortcut.
 "Stop Council.cmd" stops the local services. Your data remains in
 %LOCALAPPDATA%\Council\data.
+
+To update, stop Council, extract the new release to a new folder, start it, and
+recreate the desktop shortcut if used. To uninstall, stop Council and remove the
+extracted folder; delete the data directory only to erase local history.

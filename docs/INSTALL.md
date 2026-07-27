@@ -48,6 +48,31 @@ CC Switch 必须已在本机启动。Council 只检测本地路由、读取路�
 - **模型列表为空**：点击模型框旁的刷新按钮；仍为空时按官方文档手填模型 ID。
 - **换电脑后没有 Key**：凭据保存在当前操作系统账户，不随项目文件或数据库迁移，需要重新录入。
 
+## 手动更新
+
+Council 当前没有应用内自动更新，不会静默替换本机文件。
+
+### macOS
+
+1. 双击旧包中的 `Stop Council.command`。
+2. 从 Release 下载新版 ZIP 并解压。
+3. 用新版 `Council.app` 替换旧版，再启动。数据和 Key 位于应用外，不会因替换 `.app` 消失。
+
+### Windows
+
+1. 双击旧目录中的 `Stop Council.cmd`。
+2. 下载并完整解压新版到新目录，不要覆盖正在运行的旧目录。
+3. 启动新版；若使用桌面快捷方式，在新版目录重新运行 `Create Desktop Shortcut.cmd`。
+
+更新前可备份上方数据目录。跨大版本升级时请先阅读 `CHANGELOG.md` 和 Release Notes。
+
+## 卸载
+
+1. 先用包内停止脚本结束本地服务。
+2. macOS 删除 `Council.app` 和解压目录；Windows 删除 Council 解压目录及桌面快捷方式。
+3. 需要同时清除历史记录时，再手动删除对应数据与日志目录。该步骤不可恢复，保留目录即可保留数据。
+4. 需要清除 API Key 时，建议在卸载前进入“设置 → 模型供应商”逐个点击删除凭据；也可在 macOS“钥匙串访问”或 Windows“凭据管理器”中删除服务名为 `Council Lab Provider Credentials` 的条目。
+
 ## 源码运行（开发者 / Linux）
 
 源码开发需要 Python 3.12+ 和 Node.js 22+：
