@@ -53,15 +53,29 @@ jobs:
           backend_pid=$!
           (cd "$resources/web" && HOSTNAME=127.0.0.1 PORT=3000 NODE_ENV=production "$resources/runtime/node" server.js >"$RUNNER_TEMP/frontend.log" 2>&1) &
           frontend_pid=$!
-          trap 'kill "$backend_pid" "$frontend_pid" 2>/dev/null || true' EXIT
+          cleanup() {
+            kill "$backend_pid" "$frontend_pid" 2>/dev/null || true
+            wait "$backend_pid" "$frontend_pid" 2>/dev/null || true
+            for attempt in {1..40}; do
+              if ! curl -fsS http://127.0.0.1:8001/api/health >/dev/null 2>&1 && ! curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
+                break
+              fi
+              sleep 0.1
+            done
+          }
+          trap cleanup EXIT
+          healthy=0
           for attempt in {1..80}; do
             if curl -fsS http://127.0.0.1:8001/api/health >/dev/null && curl -fsS http://127.0.0.1:3000/ | grep -q Council; then
-              exit 0
+              healthy=1
+              break
             fi
             sleep 0.25
           done
-          cat "$RUNNER_TEMP/backend.log" "$RUNNER_TEMP/frontend.log"
-          exit 1
+          if [[ "$healthy" != 1 ]]; then
+            cat "$RUNNER_TEMP/backend.log" "$RUNNER_TEMP/frontend.log"
+            exit 1
+          fi
       - name: Smoke-test launcher repeat and partial recovery
         run: |
           package="$GITHUB_WORKSPACE/artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
