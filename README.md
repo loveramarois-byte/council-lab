@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/data-local--first-2f855a" alt="Local first">
 </p>
 
-<p align="center"><a href="README.en.md">English</a> · <a href="#下载使用">下载</a> · <a href="#工作方式">工作方式</a> · <a href="#provider-支持">Provider</a> · <a href="CONTRIBUTING.md">参与贡献</a></p>
+<p align="center"><a href="README.en.md">English</a> · <a href="#下载使用">下载</a> · <a href="#工作方式">工作方式</a> · <a href="#provider-支持">Provider</a> · <a href="CONTRIBUTING.md">参与贡献</a> · <a href="https://linux.do/">LINUX DO</a></p>
 
 ![四席 AI 公开讨论并形成最终答案](docs/images/roundtable.png)
 
@@ -137,6 +137,10 @@ docs/          架构、设计决策、评测与集成说明
 当前版本为 `0.1.0`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
 
 欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](CONTRIBUTING.md)、[行为规范](CODE_OF_CONDUCT.md) 和 [安全政策](SECURITY.md)。
+
+## 社区认可
+
+Council Lab 认可并感谢 [LINUX DO](https://linux.do/) 社区及佬友们对开源交流、软件开发和项目成长提供的支持。
 
 ## License
 
