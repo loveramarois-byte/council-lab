@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, Clock3, FileCheck2, Gauge, GitBranch, LoaderCircle, MessageCircle, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, Clock3, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, MessageCircle, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Participant, ResolvedAssignment, Run, subscribeToRun } from "../../../lib/api";
+
+const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
@@ -47,6 +49,10 @@ export default function RunDetailPage() {
   const canWrite = Boolean(debateActive || awaitingFinal);
   const runFailed = run?.status === "failed";
   const runStopped = run?.status === "stopped";
+  const providerTokens = (run?.usage.input_tokens || 0) + (run?.usage.output_tokens || 0);
+  const runLimits = run?.limits || DEFAULT_RUN_LIMITS;
+  const canResumeLimit = Boolean(runStopped && ["max_tokens", "max_model_calls"].includes(run?.limit_reason || ""));
+  const suggestedTokenLimit = Math.min(100000, Math.max(40000, Math.ceil((providerTokens + 20000) / 10000) * 10000));
   const waitingSeconds = run && run.status === "running" && !run.awaiting_user
     ? Math.max(0, Math.floor((now - Date.parse(run.updated_at)) / 1000))
     : 0;
@@ -83,6 +89,20 @@ export default function RunDetailPage() {
     } finally { setBusy(false); }
   };
 
+  const resumeAfterLimit = async () => {
+    if (!run || busy || !canResumeLimit) return;
+    setBusy(true); setError("");
+    try {
+      setRun(await api.resumeRun(run.id, {
+        max_model_calls: Math.min(50, Math.max(runLimits.max_model_calls, run.usage.model_calls + 3)),
+        max_tokens: suggestedTokenLimit,
+        timeout_seconds: runLimits.timeout_seconds,
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "提高限额后仍未能继续");
+    } finally { setBusy(false); }
+  };
+
   if (!run) return <div className="loading-state"><LoaderCircle className="spin" size={22} />正在进入圆桌…</div>;
 
   return <div className="council-page">
@@ -100,7 +120,7 @@ export default function RunDetailPage() {
       </section>
 
       <section className="council-callboard" aria-label="AI 独立调用顺序">
-        <div className="callboard-meta"><Bot size={14} /><strong>4 席顺序调用</strong><span>各席独立配置</span><span>共享公开记录</span><div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="当前工作上下文"><Gauge size={12} />{run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} Token</span></div></div>
+        <div className="callboard-meta"><Bot size={14} /><strong>4 席顺序调用</strong><span>各席独立配置</span><span>共享公开记录</span><div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="本席发送的讨论上下文"><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
         <div className="council-seats">
           {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} assignment={run.seat_assignments?.[index]} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
           <div className={`summary-node ${run.status === "completed" ? "completed" : runFailed && agentTurnCount >= 4 ? "failed" : agentTurnCount >= 4 ? "active" : "queued"}`} aria-label="第 5 次调用：记录员总结">
@@ -142,7 +162,7 @@ export default function RunDetailPage() {
           <button className="send-button" onClick={retryTurn} disabled={busy}>{busy ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重试{nextParticipant?.name || "总结"}</button>
         </div>}
 
-        {runStopped && <div className="failed-actions" role="status"><Gauge size={18} /><div><strong>运行已按后端限制停止</strong><span>{run.error}</span></div><Link className="send-button" href="/settings/budget">查看限制</Link></div>}
+        {runStopped && <div className="failed-actions" role="status"><Gauge size={18} /><div><strong>运行已按后端限制停止，已完成内容不会重复调用</strong><span>{error || run.error}</span></div>{canResumeLimit ? <button className="send-button" onClick={resumeAfterLimit} disabled={busy}>{busy ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}提高到 {suggestedTokenLimit.toLocaleString()} Token 并继续</button> : <Link className="send-button" href="/settings/budget">查看限制</Link>}</div>}
 
         {(run.status === "running" || awaitingFinal) && <div className="participation-dock">
           <div className="participation-context">

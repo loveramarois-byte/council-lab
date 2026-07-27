@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-28
+
+### Fixed
+
+- 将默认 Provider 累计 Token 边界从 12k 调整为 40k，覆盖 CC Switch Codex 路径每次约 4k-5k 的基础 instructions 开销。
+- 圆桌页分开显示单次讨论上下文与 Provider 全程累计 usage，避免把 `630 / 4000` 与全局限额混为一谈。
+- 达到调用或 Token 边界的 Run 可提高限额并从未完成席位继续，已完成席位不会重复请求。
+
 ## [0.2.0] - 2026-07-27
 
 ### Added

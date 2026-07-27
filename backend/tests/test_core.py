@@ -82,10 +82,11 @@ def test_loopback_and_ssrf():
 
 
 def test_question_analysis():
-    analysis = analyze_question("请计算这个公式", "standard")
+    analysis = analyze_question("请计算这个公式", "standard", 45000)
     assert analysis.question_type == "mathematical"
     assert analysis.needs_math
     assert analysis.recommended_agents == 4
+    assert analysis.expected_token_limit == 45000
 
 
 def test_discussion_models_support_user_participation():
@@ -559,6 +560,119 @@ async def test_token_limit_stops_before_next_provider_request(tmp_path, monkeypa
     assert current.limit_reason == "max_tokens"
     assert current.current_speaker_index == 1
     assert calls == 1
+
+
+async def test_default_token_limit_covers_five_council_calls_with_codex_overhead(tmp_path, monkeypatch):
+    calls = 0
+
+    class CodexSizedBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            nonlocal calls
+            calls += 1
+            return Generation(
+                text="最终答案" if "记录员" in system else f"第{calls}席发言",
+                input_tokens=5000,
+                output_tokens=250,
+            )
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: CodexSizedBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH)
+    orchestrator = Orchestrator(store, {"ccswitch": profile})
+    run = await orchestrator.start(RunCreate(question="验证 Codex 固定指令开销", provider_id="ccswitch"))
+    await orchestrator.tasks[run.id]
+
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "awaiting_final_input"
+    await orchestrator.summarize(run.id)
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None and current.status == "completed"
+    assert current.limits.max_tokens == 40000
+    assert current.usage.input_tokens + current.usage.output_tokens == 26250
+    assert calls == 5
+
+
+async def test_token_limited_run_can_raise_limit_and_resume_without_repeating_turns(tmp_path, monkeypatch):
+    calls = 0
+
+    class CodexSizedBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            nonlocal calls
+            calls += 1
+            return Generation(text=f"第{calls}席发言", input_tokens=5000, output_tokens=200)
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: CodexSizedBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH)
+    orchestrator = Orchestrator(store, {"ccswitch": profile})
+    run = await orchestrator.start(
+        RunCreate(question="验证提额续跑", provider_id="ccswitch", limits=RunLimits(max_tokens=12000))
+    )
+    await orchestrator.tasks[run.id]
+
+    stopped = await store.get_run(run.id)
+    assert stopped is not None and stopped.status == "stopped"
+    assert stopped.current_speaker_index == 3
+    assert calls == 3
+
+    with pytest.raises(ValueError, match="必须高于当前累计用量"):
+        await orchestrator.resume_with_limits(
+            run.id,
+            RunLimits(max_model_calls=8, max_tokens=15000, timeout_seconds=120),
+        )
+
+    resumed = await orchestrator.resume_with_limits(
+        run.id,
+        RunLimits(max_model_calls=8, max_tokens=40000, timeout_seconds=120),
+    )
+    assert resumed is not None and resumed.status == "running"
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None and current.status == "awaiting_final_input"
+    assert current.limit_reason is None
+    assert [turn.speaker_name for turn in current.discussion_turns] == ["析理", "诘问", "构策", "观澜"]
+    assert calls == 4
+
+
+async def test_limit_resume_keeps_recovery_state_when_credentials_are_missing(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(
+        id="custom",
+        display_name="Custom",
+        provider_type=ProviderType.COMPATIBLE,
+        base_url="https://example.com/v1",
+        requires_api_key=True,
+    )
+    orchestrator = Orchestrator(store, {"custom": profile})
+    run = RunRecord(
+        id="limit-resume-missing-credential",
+        question="验证续跑凭据检查",
+        mode="standard",
+        provider_id="custom",
+        model="test-model",
+        status="stopped",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+        limit_reason="max_tokens",
+        error="已达到 Token 上限",
+        limits=RunLimits(max_tokens=12000),
+        usage=UsageSummary(input_tokens=13000, output_tokens=100),
+    )
+    orchestrator._ensure_run_assignments(run)
+    await store.save_run(run)
+
+    with pytest.raises(RuntimeError, match="API Key"):
+        await orchestrator.resume_with_limits(run.id, RunLimits(max_tokens=40000))
+
+    current = await store.get_run(run.id)
+    assert current is not None
+    assert current.status == "stopped"
+    assert current.limit_reason == "max_tokens"
+    assert current.error == "已达到 Token 上限"
+    assert current.limits.max_tokens == 12000
 
 
 async def test_global_run_timeout_covers_the_whole_active_run(tmp_path, monkeypatch):

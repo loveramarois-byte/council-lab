@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .credentials import CredentialStoreError, delete_provider_secret, get_provider_secret, save_provider_secret
-from .models import AgentAssignmentsConfig, AgentModelAssignment, DiscussionAction, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate
+from .models import AgentAssignmentsConfig, AgentModelAssignment, DiscussionAction, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits
 from .orchestrator import Orchestrator
 from .paths import database_path
 from .provider_catalog import BUILTIN_PROVIDER_IDS, CATALOG_FIELDS, builtin_providers
@@ -47,7 +47,7 @@ async def lifespan(_: FastAPI):
         await orchestrator.shutdown()
 
 
-app = FastAPI(title="Council Lab", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Council Lab", version="0.2.1", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -134,6 +134,17 @@ async def interject_run(run_id: str, request: DiscussionAction):
 @app.post("/api/runs/{run_id}/retry-turn")
 async def retry_run_turn(run_id: str):
     run = await orchestrator.retry_turn(run_id)
+    if not run:
+        raise HTTPException(404, "运行记录不存在")
+    return run
+
+
+@app.post("/api/runs/{run_id}/resume")
+async def resume_run(run_id: str, limits: RunLimits):
+    try:
+        run = await orchestrator.resume_with_limits(run_id, limits)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if not run:
         raise HTTPException(404, "运行记录不存在")
     return run
@@ -446,7 +457,7 @@ async def settings():
     return {
         "default_mode": "standard",
         "fixed_seats": 4,
-        "limits": {"max_model_calls": 8, "max_tokens": 12000, "timeout_seconds": 120},
+        "limits": {"max_model_calls": 8, "max_tokens": 40000, "timeout_seconds": 120},
         "privacy": {"store_questions": True, "send_traces": False},
         "appearance": {"theme": "light", "editable": False},
     }

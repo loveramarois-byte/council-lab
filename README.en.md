@@ -15,12 +15,15 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - LangGraph workflow, SQLite persistence, checkpoints, startup recovery, and explicit recoverable failures.
 - Deterministic context clipping that preserves the question, early anchors, recent turns, and the latest user interjection.
 - Quick, Standard, and Rigorous are workflow/context tiers. Native reasoning effort is sent only by capable Responses providers.
-- Enforced defaults of eight model attempts, 12k cumulative tokens, and 120 seconds for the full run.
+- Enforced defaults of eight model attempts, 40k provider-reported cumulative tokens, and 120 seconds for the full run.
+- Limit-stopped runs can raise their boundary and continue from the unfinished seat without repeating completed calls.
 - CC Switch, DeepSeek, Zhipu GLM, Kimi, SiliconFlow, OpenAI, custom OpenAI-compatible, and offline Mock providers.
 - Automatic model discovery with OS credential-store protection for API keys.
 - One-viewport desktop and mobile workspace with internally scrolling discussions.
 
 Council does not currently run web searches or a code sandbox, and it does not present model agreement as a percentage fact-confidence score. A final synthesis is model consensus, not external verification.
+
+The run screen separates the per-call discussion context from cumulative provider usage. CC Switch Codex routes may attach roughly 4k-5k base-instruction tokens to each request, so provider usage can be much higher than the visible context window. Council checks the cumulative boundary before each request; the last allowed response can therefore take the total slightly past that boundary.
 
 ## macOS installation
 
@@ -49,6 +52,6 @@ Council does not expose or retain hidden model chain-of-thought. It stores only 
 
 ## Status and license
 
-Version `0.2.0` is an early release for research and decision support. Do not use unreviewed outputs for medical, legal, financial, or safety-critical decisions.
+Version `0.2.1` is an early release for research and decision support. Do not use unreviewed outputs for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

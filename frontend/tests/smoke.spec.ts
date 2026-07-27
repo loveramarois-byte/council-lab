@@ -91,7 +91,8 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await expect(page.getByText("共享公开记录", { exact: true })).toBeVisible();
     await expect(page.getByText("LangGraph", { exact: true })).toBeVisible();
     await expect(page.getByText(/\d+ 个检查点/)).toBeVisible();
-    await expect(page.getByText(/\d+ \/ \d+ Token/)).toBeVisible();
+    await expect(page.getByText(/上下文 \d+ \/ \d+/)).toBeVisible();
+    await expect(page.getByText(/上游累计 [\d,]+ \/ [\d,]+/)).toBeVisible();
     await expect(page.locator(".discussion-turn.agent")).toHaveCount(4, { timeout: 10_000 });
     await expect(page.locator(".council-session")).toContainText("等待你的确认");
     await expect(page.getByPlaceholder("最终答案生成前，我还想补充…")).toBeEnabled();
@@ -110,6 +111,58 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
   } finally {
     await request.delete(`http://127.0.0.1:8001/api/runs/${run.id}`);
   }
+});
+
+test("Token 限额与上下文分开显示，并可提额续跑", async ({ page }) => {
+  const stoppedRun = {
+    id: "token-limit-fixture",
+    question: "为什么第三席之后停止？",
+    mode: "standard",
+    provider_id: "ccswitch",
+    model: "gpt-5.6-sol",
+    reasoning_effort: "high",
+    status: "stopped",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    analysis: null,
+    candidates: [], critiques: [], verifications: [], revisions: [], scores: [],
+    final_decision: null,
+    usage: { model_calls: 3, tool_calls: 0, input_tokens: 14803, output_tokens: 588, estimated_cost: null, duration_ms: 32338 },
+    error: "已达到 Token 上限（12000），未继续请求下一席。",
+    degraded: false,
+    protocol: "responses",
+    workflow_engine: "langgraph",
+    checkpoint_count: 3,
+    context_snapshot: { strategy: "deterministic_context_clipping", token_budget: 4000, estimated_tokens: 630, included_turns: 3, total_turns: 3, compacted: false, summary: "" },
+    limits: { max_model_calls: 8, max_tokens: 12000, timeout_seconds: 120 },
+    discussion_turns: [],
+    participant_roles: [
+      { id: "analyst", name: "析理", role: "拆解者", brief: "拆解问题" },
+      { id: "challenger", name: "诘问", role: "挑战者", brief: "寻找反例" },
+      { id: "builder", name: "构策", role: "方案师", brief: "提出方案" },
+      { id: "observer", name: "观澜", role: "观察者", brief: "观察分歧" },
+    ],
+    seat_assignments: [],
+    finalizer_assignment: null,
+    current_speaker_index: 3,
+    discussion_round: 1,
+    awaiting_user: false,
+    auto_summarize: false,
+    recoverable: false,
+    limit_reason: "max_tokens",
+  };
+  let resumePayload: Record<string, number> | null = null;
+  await page.route("**/api/runs/token-limit-fixture", (route) => route.fulfill({ json: stoppedRun }));
+  await page.route("**/api/runs/token-limit-fixture/resume", async (route) => {
+    resumePayload = route.request().postDataJSON() as Record<string, number>;
+    return route.fulfill({ json: { ...stoppedRun, status: "running", error: null, limit_reason: null, limits: resumePayload } });
+  });
+
+  await page.goto("/runs/token-limit-fixture");
+  await expect(page.getByText("上下文 630 / 4000", { exact: true })).toBeVisible();
+  await expect(page.getByText("上游累计 15,391 / 12,000", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "提高到 40,000 Token 并继续" }).click();
+  expect(resumePayload).toEqual({ max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 });
 });
 
 test("五个席位配置可保存且明确 Provider 能力", async ({ page, request }) => {

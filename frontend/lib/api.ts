@@ -39,6 +39,7 @@ export type AgentAssignment = {
 
 export type AgentAssignmentsConfig = { seats: AgentAssignment[]; finalizer: AgentAssignment };
 export type ResolvedAssignment = AgentAssignment & { provider_name: string };
+export type RunLimits = { max_model_calls: number; max_tokens: number; timeout_seconds: number };
 
 export type Run = {
   id: string;
@@ -77,7 +78,7 @@ export type Run = {
   current_speaker_index: number;
   discussion_round: number;
   awaiting_user: boolean;
-  limits: { max_model_calls: number; max_tokens: number; timeout_seconds: number };
+  limits: RunLimits;
   seat_assignments: ResolvedAssignment[];
   finalizer_assignment?: ResolvedAssignment | null;
   auto_summarize: boolean;
@@ -112,13 +113,14 @@ export const api = {
   activateProvider: (id: string) => request<Provider>(`/api/providers/${id}/activate`, { method: "POST" }),
   detectCCSwitch: () => request<Record<string, unknown>>("/api/providers/ccswitch/detect", { method: "POST" }),
   testProvider: (id: string) => request<Record<string, unknown>>(`/api/providers/${id}/test`, { method: "POST" }),
-  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; limits?: { max_model_calls: number; max_tokens: number; timeout_seconds: number } }) => request<Run>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; limits?: RunLimits }) => request<Run>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   cancelRun: (id: string) => request<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
   advanceRun: (id: string, body: { action: "continue" | "interject" | "question"; message?: string; target_agent?: string }) => request<Run>(`/api/runs/${id}/advance`, { method: "POST", body: JSON.stringify(body) }),
   interjectRun: (id: string, body: { action: "interject" | "question"; message: string; target_agent?: string }) => request<Run>(`/api/runs/${id}/interject`, { method: "POST", body: JSON.stringify(body) }),
   retryTurn: (id: string) => request<Run>(`/api/runs/${id}/retry-turn`, { method: "POST" }),
+  resumeRun: (id: string, limits: RunLimits) => request<Run>(`/api/runs/${id}/resume`, { method: "POST", body: JSON.stringify(limits) }),
   summarizeRun: (id: string) => request<Run>(`/api/runs/${id}/summarize`, { method: "POST" }),
   rerun: (id: string) => request<Run>(`/api/runs/${id}/rerun`, { method: "POST" }),
   deleteRun: (id: string) => request<{ deleted: boolean }>(`/api/runs/${id}`, { method: "DELETE" }),

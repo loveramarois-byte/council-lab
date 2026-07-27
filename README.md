@@ -42,7 +42,8 @@ Council 是一个本地优先的多 AI 审议工具。你提出问题后，四�
 - **可恢复运行**：启动时检查未完成任务；有效 checkpoint 可续跑，缺少 checkpoint 或凭据会明确标记为可恢复失败。
 - **受控上下文**：按 Token 预算确定性保留原问题、早期关键摘录、最近发言和最新用户插话。
 - **三档工作流模式**：引导 / 圆桌 / 深挖控制上下文预算；仅支持 Responses reasoning 的 Provider 会收到原生 effort 参数。
-- **真实运行边界**：默认最多 8 次模型请求、12k 累计 Token 和 120 秒完整运行时间，失败请求也计入限额。
+- **真实运行边界**：默认最多 8 次模型请求、40k Provider 累计 Token 和 120 秒完整运行时间，失败请求也计入调用限额。
+- **限额后可续跑**：达到调用或 Token 边界时保留全部进度，可提高额度后从未完成席位继续，不重复已有发言。
 - **多 Provider**：CC Switch、DeepSeek、智谱 GLM、Kimi、硅基流动、OpenAI、自定义兼容接口和 Mock。
 - **模型自动识别**：连接后自动拉取模型；CC Switch 空目录时可只读识别近期成功模型。
 - **本地优先与密钥保护**：数据默认留在本机，API Key 交给系统凭据库保存。
@@ -113,6 +114,8 @@ flowchart LR
 
 Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于上游模型的 Low / High / Ultra。设置页会明确显示“原生推理档位”或“仅工作流档位”；只有前者会发送 reasoning effort。
 
+圆桌页分开显示两种 Token：`上下文`是本席发送的公开讨论窗口，`上游累计`是 Provider 返回的全程真实 usage。CC Switch 的 Codex 路径可能为每次请求附加约 4k-5k 基础 instructions，因此后者通常明显更高。累计值达到边界后，Council 不再发起下一次请求；由于发出请求前无法预知其最终 usage，最后一次已允许的请求可能让累计值略微超过边界。
+
 ## 数据与安全
 
 - API Key 不进入 Council SQLite、日志或前端存储；桌面录入后写入 macOS Keychain、Windows Credential Locker 或 Linux Secret Service。
@@ -142,7 +145,7 @@ docs/          架构、设计决策、评测与集成说明
 
 ## 项目状态
 
-当前版本为 `0.2.0`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
+当前版本为 `0.2.1`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
 
 欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](CONTRIBUTING.md)、[行为规范](CODE_OF_CONDUCT.md) 和 [安全政策](SECURITY.md)。
 

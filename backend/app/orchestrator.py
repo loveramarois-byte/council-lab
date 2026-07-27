@@ -22,6 +22,7 @@ from .models import (
     ResolvedAgentAssignment,
     RunCreate,
     RunEvent,
+    RunLimits,
     RunRecord,
     UsageSummary,
     utc_now,
@@ -68,7 +69,7 @@ def describe_run_error(exc: Exception, timeout_seconds: int | float = 120) -> st
     return message or f"{type(exc).__name__}：当前席位调用失败，请重试。"
 
 
-def analyze_question(question: str, mode: str) -> QuestionAnalysis:
+def analyze_question(question: str, mode: str, token_limit: int = 40000) -> QuestionAnalysis:
     lower = question.lower()
     question_type = (
         "coding"
@@ -90,7 +91,7 @@ def analyze_question(question: str, mode: str) -> QuestionAnalysis:
         recommended_agents=4,
         recommended_mode=mode,
         expected_model_calls=5,
-        expected_token_limit=12000 if mode != "rigorous" else 20000,
+        expected_token_limit=token_limit,
         expected_tool_calls=0,
     )
 
@@ -264,7 +265,7 @@ class Orchestrator:
             run.status = "running"
             run.recoverable = False
             await self.emit(run, "question_analyzed", "analysis", "问题已放上圆桌，第一位成员正在准备发言", 8)
-            run.analysis = analyze_question(run.question, run.mode)
+            run.analysis = analyze_question(run.question, run.mode, run.limits.max_tokens)
             async with asyncio.timeout(run.limits.timeout_seconds):
                 await self._run_debate_graph(run, cancel, resume=False)
                 if run.status == "awaiting_final_input" and run.auto_summarize:
@@ -683,6 +684,28 @@ class Orchestrator:
         if run.status not in {"running", "failed"}:
             return run
 
+        return await self._restart_debate(run_id)
+
+    async def resume_with_limits(self, run_id: str, limits: RunLimits) -> RunRecord | None:
+        run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
+        if not run:
+            return None
+        if run.status != "stopped" or run.limit_reason not in {"max_tokens", "max_model_calls"}:
+            raise ValueError("只有达到模型调用或 Token 上限而停止的运行可以提额续跑。")
+
+        used_tokens = run.usage.input_tokens + run.usage.output_tokens
+        if limits.max_tokens <= used_tokens:
+            raise ValueError(f"新的 Token 上限必须高于当前累计用量（{used_tokens}）。")
+        if limits.max_model_calls <= run.usage.model_calls:
+            raise ValueError(f"新的模型调用上限必须高于当前调用次数（{run.usage.model_calls}）。")
+
+        return await self._restart_debate(run_id, limits)
+
+    async def _restart_debate(self, run_id: str, limits: RunLimits | None = None) -> RunRecord | None:
+        run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
+        if not run:
+            return None
+
         active_task = self.tasks.get(run_id)
         if active_task and not active_task.done():
             self.retrying_runs.add(run_id)
@@ -699,9 +722,12 @@ class Orchestrator:
             return None
         self._ensure_run_assignments(run)
         self._ensure_credentials(run)
+        if limits is not None:
+            run.limits = limits
         run.status = "running"
         run.awaiting_user = False
         run.error = None
+        run.limit_reason = None
         run.recoverable = False
         await self.store.save_run(run)
         cancel = asyncio.Event()

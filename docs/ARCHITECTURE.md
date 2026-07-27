@@ -19,7 +19,7 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 模型适配层保持薄接口：`health_check`、`list_models`、`generate` 和 `aclose`。Provider 注册表集中维护官方地址、推荐模型、协议、能力和文档入口；远程 `/models` 成功时覆盖推荐列表，失败时保留本地回退。Mock Provider 让自动化测试无需密钥。自动协议策略先尝试 Responses，只有明确的 404/405/501 才回退 Chat Completions；只有声明支持原生 reasoning 的 Responses Provider 才接收 effort，普通 Chat Completions Provider 只应用 Council 的上下文和流程档位。
 
-每次模型请求前执行真实边界检查：默认最多 8 次尝试（失败请求也计算）、12,000 累计 Token、120 秒完整运行时间。达到边界后 Run 进入 `stopped`，保留已经完成的公开发言。由于没有稳定的跨 Provider 定价数据，系统不伪造美元预算。
+每次模型请求前执行真实边界检查：默认最多 8 次尝试（失败请求也计算）、40,000 Provider 累计 Token、120 秒完整运行时间。上下文窗口与累计 usage 是两个指标；CC Switch Codex 路径可能附加约 4k-5k 基础 instructions，因此默认额度按五次真实调用预留。达到边界后 Run 进入 `stopped` 并保留已完成发言；用户可提高边界，通过原 checkpoint 从未完成席位继续。检查发生在请求前，无法预知本次返回的最终 usage，所以最后一次允许的请求可能使累计值超过边界。由于没有稳定的跨 Provider 定价数据，系统不伪造美元预算。
 
 Provider API Key 使用 `keyring` 交给平台凭据库。SQLite 只保存 `credential_saved` 标记与环境变量名，公开 Provider 响应只暴露 `has_api_key` 和 `credential_source`。运行时优先读取环境变量，其次读取系统凭据库。
 

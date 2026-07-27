@@ -137,7 +137,7 @@ class ResolvedAgentAssignment(BaseModel):
 
 class RunLimits(BaseModel):
     max_model_calls: int = Field(default=8, ge=1, le=50)
-    max_tokens: int = Field(default=12000, ge=128, le=100000)
+    max_tokens: int = Field(default=40000, ge=128, le=100000)
     timeout_seconds: int = Field(default=120, ge=1, le=900)
 
 
@@ -185,7 +185,7 @@ class QuestionAnalysis(BaseModel):
     recommended_agents: int = 3
     recommended_mode: str = "standard"
     expected_model_calls: int = 8
-    expected_token_limit: int = 12000
+    expected_token_limit: int = 40000
     expected_tool_calls: int = 0
 
 
