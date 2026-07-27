@@ -5,7 +5,7 @@
 <h1 align="center">Council Lab · 审议台</h1>
 
 <p align="center">
-  让四位 AI 依次发言、公开反驳并形成一个最终答案，而不是同时给你四份互不相干的回复。
+  让四个模型席位依次发言、公开回应并形成一个最终答案，而不是同时给你四份互不相干的回复。
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ## Council 是什么
 
-Council 是一个本地优先的多 AI 审议工具。你提出问题后，四个席位按顺序进行独立模型调用：
+Council 是一个本地优先、允许用户参与的 AI 审议工具。你提出问题后，四个席位按顺序进行独立 API 调用：
 
 1. **析理**先拆解目标、条件与判断标准。
 2. **诘问**明确认同、部分认同或反驳第一席，并寻找反例。
@@ -46,7 +46,11 @@ Council 是一个本地优先的多 AI 审议工具。你提出问题后，四�
 - **限额后可续跑**：达到调用或 Token 边界时保留全部进度，可提高额度后从未完成席位继续，不重复已有发言。
 - **多 Provider**：CC Switch、DeepSeek、智谱 GLM、Kimi、硅基流动、OpenAI、自定义兼容接口和 Mock。
 - **模型自动识别**：连接后自动拉取模型；CC Switch 空目录时可只读识别近期成功模型。
+- **资料空间与引用**：导入文字、网页、PDF、DOCX、Markdown、CSV、JSON 或 TXT，运行时固化所选资料全文并使用 `[S1]` 引用；发给模型的副本仍受上下文预算控制。
+- **决策回访**：答案生成后记录最终选择、预期结果、复盘日期、实际结果，以及四席观点后来得到支持还是被结果反驳。
+- **可移交报告**：审议完成后导出 Markdown 或单文件 HTML，保留问题、逐席发言、模型记录、用量、冻结资料和结果回访。
 - **本地优先与密钥保护**：数据默认留在本机，API Key 交给系统凭据库保存。
+- **可重复评测**：内置 12 个决策、事实核查、风险和规划案例，记录失败率、Token、耗时、可选成本估算、引用支持率和未经支持主张；Mock 或不完整盲评不能形成效果结论。
 - **单页工作台**：桌面与移动端均固定一屏，讨论区内部滚动。
 
 Council 当前不执行联网搜索或代码沙箱，也不提供百分比事实置信度。最终答案是模型对公开讨论的综合，**不等于外部事实核验**。
@@ -55,25 +59,29 @@ Council 当前不执行联网搜索或代码沙箱，也不提供百分比事实
 
 ### 普通用户（macOS）
 
-首次使用需要安装 [Python 3.12+](https://www.python.org/downloads/) 和 [Node.js 22+](https://nodejs.org/)。两者都使用官方网站的默认安装方式即可。
-
 1. 打开 [最新版本下载页](https://github.com/loveramarois-byte/council-lab/releases/latest)。
 2. 下载 `Council-v*-macOS.zip` 并解压。
-3. 双击文件夹里的 **`安装 Council.command`**。
-4. 安装完成后，双击桌面的 **`Council.app`**。
+3. 双击 **`Council.app`**。
 
-首次被 macOS 阻止时，按住 Control 点击安装器，选择“打开”。安装器只在当前项目内安装依赖并创建桌面启动入口，不会删除已有审议记录。
+Release 包已经内置运行环境，不需要安装 Python 或 Node.js。当前开源构建未做 Apple notarization；首次被 macOS 阻止时，按住 Control 点击 `Council.app`，选择“打开”。
 
 ### 普通用户（Windows 10 / 11）
 
-首次使用需要安装 [Python 3.12+](https://www.python.org/downloads/windows/) 和 [Node.js 22+](https://nodejs.org/)。安装 Python 时勾选 **Add python.exe to PATH**。
-
 1. 打开 [最新版本下载页](https://github.com/loveramarois-byte/council-lab/releases/latest)。
 2. 下载 `Council-v*-Windows.zip`，右键选择“全部解压缩”。
-3. 双击解压后文件夹里的 **`Install Council.cmd`**。
-4. 安装完成后，双击桌面的 **`Council`** 快捷方式。
+3. 双击 **`Start Council.cmd`**。
 
-如果 Windows 弹出 SmartScreen，点“更多信息”→“仍要运行”。启动和停止也可直接双击项目里的 `Start Council.cmd` / `Stop Council.cmd`。安装器不需要管理员权限。
+Release 包已经内置运行环境，不需要管理员权限，也不需要安装 Python 或 Node.js。当前开源构建没有商业代码签名；如果 Windows 弹出 SmartScreen，请确认文件来自本仓库 Release，再点“更多信息”→“仍要运行”。`Create Desktop Shortcut.cmd` 可选创建桌面快捷方式。
+
+每个正式 Release 同时提供 `SHA256SUMS.txt`，需要校验下载时可将 ZIP 的 SHA-256 与其中对应条目比较。
+
+### 第一次使用
+
+1. 先用首页的 **本地演示** 提一个问题，确认四席流程正常；它不联网也不产生费用。
+2. 使用真实模型时进入 **设置 → 模型供应商**，选择 DeepSeek、智谱、Kimi、硅基流动、OpenAI 或自定义接口。
+3. 点击“获取 API Key”进入官方页面，粘贴 Key，再点 **保存并测试**。Council 会先保存到系统凭据库、读取账号真实模型列表、选择模型并执行最小连接测试。
+
+模型目录读取失败时，页面会给出 Key、权限、余额、网络或地址检查提示。少数内置 Provider 会显示明确标注的“离线备选”，它们只是便于排错的参考，不代表账号实时可用；实际列表始终以 Provider `/models` 返回为准。
 
 ### 开发者
 
@@ -111,11 +119,11 @@ flowchart LR
 | Provider | 配置方式 | 模型发现 | 说明 |
 | --- | --- | --- | --- |
 | CC Switch | 本机路由，无需在 Council 重填密钥 | 自动 | 上游切换与故障转移由 CC Switch 管理 |
-| DeepSeek | API Key | 自动 + 推荐列表 | 官方兼容接口 |
-| 智谱 GLM | API Key | 自动 + 推荐列表 | 官方 OpenAI-compatible 接口 |
-| Kimi | API Key | 自动 + 推荐列表 | 月之暗面官方接口 |
+| DeepSeek | API Key | 实时目录 + 离线备选 | 官方兼容接口 |
+| 智谱 GLM | API Key | 实时目录 + 离线备选 | 官方 OpenAI-compatible 接口 |
+| Kimi | API Key | 实时目录 + 离线备选 | 月之暗面官方接口 |
 | 硅基流动 | API Key | 自动 | 一个密钥访问多种开源模型 |
-| OpenAI | API Key | 自动 + 推荐列表 | Responses / Chat Completions |
+| OpenAI | API Key | 实时目录 + 离线备选 | Responses / Chat Completions |
 | 自定义兼容接口 | 地址 + 可选 API Key | 自动或手填 | 适合中转站和自托管服务 |
 | 本地演示 | 无需配置 | 固定 Mock | 用于体验和测试，不联网 |
 
@@ -156,7 +164,7 @@ docs/          架构、设计决策、评测与集成说明
 
 ## 项目状态
 
-当前版本为 `0.2.2`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
+当前版本为 `0.3.0`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
 
 欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](CONTRIBUTING.md)、[行为规范](CODE_OF_CONDUCT.md) 和 [安全政策](SECURITY.md)。
 

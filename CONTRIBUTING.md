@@ -22,6 +22,19 @@ cd frontend
 npm test
 ```
 
+完整发布前还应运行：
+
+```bash
+backend/.venv/bin/python -m pytest -q backend/tests
+cd frontend
+npm run lint
+npm run build
+npm test
+npm audit --omit=dev --audit-level=high
+```
+
+macOS 自包含包使用 `./packaging/build-macos-release.sh` 构建；Windows 包必须在 Windows PowerShell 中运行 `./packaging/build-windows-release.ps1`。构建机需要 Python 3.12、Node.js 22 和 PyInstaller，但生成的 Release 包不要求最终用户安装这些依赖。
+
 新增行为应带有聚焦测试。修复 bug 时，优先加入能在修复前失败的回归测试。
 
 ## Pull Request

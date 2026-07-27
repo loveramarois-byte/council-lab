@@ -58,6 +58,11 @@ jobs:
           if ($health.status -ne "ok" -or $health.service -ne "council-lab") { throw "Backend health check failed" }
           $page = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:3000/
           if ($page.StatusCode -ne 200 -or $page.Content -notmatch "Council") { throw "Frontend smoke test failed" }
+          $pidFile = Join-Path $env:LOCALAPPDATA "Council\logs\council-pids.json"
+          $first = Get-Content -Raw $pidFile | ConvertFrom-Json
+          ./desktop/start-council.ps1 -NoBrowser
+          $repeat = Get-Content -Raw $pidFile | ConvertFrom-Json
+          if ($first.backend -ne $repeat.backend -or $first.frontend -ne $repeat.frontend) { throw "Repeated launch replaced healthy processes" }
           ./desktop/stop-council.ps1
 
   backend:
@@ -70,7 +75,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.lock
       - run: python -m pip install -r backend/requirements.lock
-      - run: PYTHONPATH=backend pytest -q backend/tests
+      - run: PYTHONPATH=backend:. pytest -q backend/tests
 
   frontend:
     runs-on: ubuntu-latest

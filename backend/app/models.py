@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 
 def utc_now() -> datetime:
@@ -58,6 +58,7 @@ class ProviderProfile(BaseModel):
     default_model: str = "council-mock"
     reasoning_effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] = "high"
     available_models: list[str] = Field(default_factory=list)
+    model_source: Literal["none", "recommended", "provider", "ccswitch_history", "built_in", "saved"] = "none"
     timeout_seconds: float = Field(default=30, ge=1, le=180)
     max_retries: int = Field(default=1, ge=0, le=4)
     enabled: bool = True
@@ -149,6 +150,10 @@ class RunCreate(BaseModel):
     assignment_config: AgentAssignmentsConfig | None = None
     use_saved_assignments: bool = False
     auto_summarize: bool = False
+    project_id: str | None = None
+    source_ids: list[str] | None = Field(default=None, max_length=20)
+    include_project_history: bool = True
+    template_id: str = "open_discussion"
     limits: RunLimits = Field(default_factory=RunLimits)
 
 
@@ -206,6 +211,100 @@ class ContextSnapshot(BaseModel):
     total_turns: int = 0
     compacted: bool = False
     summary: str = ""
+    source_tokens: int = 0
+    history_tokens: int = 0
+
+
+class ProjectRecord(BaseModel):
+    id: str
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    instructions: str = Field(default="", max_length=4000)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    source_count: int = 0
+    run_count: int = 0
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(default="", max_length=500)
+    instructions: str = Field(default="", max_length=4000)
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    instructions: str | None = Field(default=None, max_length=4000)
+
+
+class SourceTextCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=200000)
+
+
+class SourceURLCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+    title: str = Field(default="", max_length=160)
+
+
+class ProjectSource(BaseModel):
+    id: str
+    project_id: str
+    kind: Literal["text", "file", "url"]
+    title: str
+    content: str = ""
+    url: str = ""
+    filename: str = ""
+    media_type: str = "text/plain"
+    size_bytes: int = 0
+    sha256: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class RunSourceSnapshot(BaseModel):
+    id: str
+    kind: Literal["text", "file", "url"]
+    title: str
+    content: str = Field(validation_alias=AliasChoices("content", "excerpt"))
+    url: str = ""
+    filename: str = ""
+    sha256: str = ""
+
+
+class SeatOutcomeReview(BaseModel):
+    role: Literal["analyst", "challenger", "builder", "observer"]
+    status: Literal["pending", "supported", "mixed", "contradicted"] = "pending"
+    note: str = Field(default="", max_length=1000)
+
+
+class DecisionReviewUpdate(BaseModel):
+    selected_decision: str = Field(min_length=1, max_length=6000)
+    expected_result: str = Field(min_length=1, max_length=6000)
+    review_date: date | None = None
+    actual_result: str = Field(default="", max_length=6000)
+    outcome_status: Literal["pending", "successful", "partial", "unsuccessful", "unclear"] = "pending"
+    seat_outcomes: list[SeatOutcomeReview] = Field(default_factory=list, max_length=4)
+
+    @field_validator("seat_outcomes")
+    @classmethod
+    def unique_seats(cls, value: list[SeatOutcomeReview]) -> list[SeatOutcomeReview]:
+        roles = [item.role for item in value]
+        if len(roles) != len(set(roles)):
+            raise ValueError("每个席位只能记录一次回访结果")
+        return value
+
+
+class DecisionReview(DecisionReviewUpdate):
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class DeliberationTemplate(BaseModel):
+    id: str
+    name: str
+    description: str
+    prompt_hint: str
+    system_guidance: str
 
 
 class CandidateAnswer(BaseModel):
@@ -339,3 +438,10 @@ class RunRecord(BaseModel):
     auto_summarize: bool = False
     recoverable: bool = False
     limit_reason: str | None = None
+    project_id: str | None = None
+    project_name: str = ""
+    project_context: str = ""
+    template_id: str = "open_discussion"
+    template_name: str = "开放讨论"
+    source_snapshots: list[RunSourceSnapshot] = Field(default_factory=list)
+    decision_review: DecisionReview | None = None

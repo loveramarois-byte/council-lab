@@ -1,16 +1,42 @@
 import asyncio
+import io
 import sqlite3
 
 import pytest
 
 from app.context import build_context_window, context_budget_for_mode, estimate_tokens
 from app.credentials import delete_provider_secret, get_provider_secret, save_provider_secret
-from app.models import AgentAssignmentsConfig, AgentModelAssignment, CandidateAnswer, DiscussionAction, DiscussionTurn, ProviderCapabilities, ProviderCreate, ProviderProfile, ProviderType, RunCreate, RunLimits, RunRecord, UsageSummary, utc_now
+from app.evidence import content_hash, extract_file_text, validate_public_url
+from app.models import (
+    AgentAssignmentsConfig,
+    AgentModelAssignment,
+    CandidateAnswer,
+    DiscussionAction,
+    DiscussionTurn,
+    FinalDecision,
+    DecisionReview,
+    ProjectRecord,
+    ProjectSource,
+    ProviderCapabilities,
+    ProviderCreate,
+    ProviderProfile,
+    ProviderType,
+    RunCreate,
+    RunLimits,
+    RunRecord,
+    RunSourceSnapshot,
+    UsageSummary,
+    utc_now,
+)
 from app.orchestrator import Orchestrator, analyze_question, describe_run_error, reasoning_effort_for_mode
 from app.paths import data_dir, database_path
 from app.provider_catalog import builtin_providers
-from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, validate_base_url
+from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
+from app.reports import run_html, run_markdown
+from app.runtime_config import assignment_config_is_valid, restore_provider_profiles
 from app.store import Store, serialize_public_provider
+from evals.scoring import aggregate_execution, blind_labels, load_dataset, summarize_human_reviews
+from evals.run_benchmark import estimate_provider_cost, provider_reality
 
 
 def test_data_directory_can_be_overridden(tmp_path, monkeypatch):
@@ -37,8 +63,11 @@ def test_builtin_provider_catalog_uses_official_api_roots():
     assert catalog["deepseek"].base_url == "https://api.deepseek.com"
     assert catalog["zhipu"].base_url == "https://open.bigmodel.cn/api/paas/v4"
     assert catalog["kimi"].base_url == "https://api.moonshot.cn/v1"
-    assert catalog["deepseek"].default_model == "deepseek-v4-flash"
-    assert catalog["zhipu"].default_model == "glm-5.2"
+    assert catalog["ccswitch"].default_model == ""
+    assert catalog["deepseek"].default_model == "deepseek-chat"
+    assert catalog["deepseek"].model_source == "recommended"
+    assert catalog["zhipu"].default_model == "glm-4-flash"
+    assert not any("5.6" in model or "v4-" in model or "k3" in model for profile in catalog.values() for model in [profile.default_model, *profile.available_models])
     assert normalize_base_url(catalog["zhipu"].base_url, ProviderType.COMPATIBLE) == catalog["zhipu"].base_url
 
 
@@ -103,6 +132,52 @@ def test_model_list_formats():
     assert extract_model_ids({"models": [{"slug": "gpt-c"}, {"model": "gpt-d"}]}) == ["gpt-c", "gpt-d"]
 
 
+def test_empty_model_catalog_replaces_stale_live_models_with_honest_fallback():
+    profile = ProviderProfile(
+        id="deepseek",
+        display_name="DeepSeek",
+        provider_type=ProviderType.COMPATIBLE,
+        default_model="stale-live-model",
+        available_models=["stale-live-model"],
+        model_source="provider",
+    )
+
+    models, source, fetched = resolve_model_catalog([], ["recommended-model"], "recommended")
+    replace_model_catalog(profile, models, source)
+
+    assert fetched == 0
+    assert profile.available_models == ["recommended-model"]
+    assert profile.model_source == "recommended"
+    assert profile.default_model == "stale-live-model"
+
+    models, source, fetched = resolve_model_catalog([], [], "ccswitch_history")
+    replace_model_catalog(profile, models, source)
+    assert (models, source, fetched) == ([], "none", 0)
+    assert profile.available_models == []
+    assert profile.model_source == "none"
+
+
+def test_runtime_restore_rejects_legacy_unverified_models_for_app_and_evals():
+    saved = ProviderProfile(
+        id="deepseek",
+        preset_id="deepseek",
+        display_name="Old DeepSeek",
+        provider_type=ProviderType.COMPATIBLE,
+        default_model="deepseek-v4-pro",
+        available_models=["deepseek-v4-pro"],
+        model_source="recommended",
+    )
+    profiles = restore_provider_profiles([saved])
+    assert profiles["deepseek"].default_model == "deepseek-chat"
+    assert "deepseek-v4-pro" not in profiles["deepseek"].available_models
+
+    invalid = AgentAssignmentsConfig(
+        seats=[AgentModelAssignment(role=role, provider_id="deepseek", model="deepseek-v4-pro") for role in ["analyst", "challenger", "builder", "observer"]],
+        finalizer=AgentModelAssignment(role="finalizer", provider_id="deepseek", model="deepseek-v4-pro"),
+    )
+    assert assignment_config_is_valid(invalid, profiles) is False
+
+
 def test_ccswitch_model_discovery_uses_recent_successful_requests(tmp_path):
     db_path = tmp_path / "cc-switch.db"
     connection = sqlite3.connect(db_path)
@@ -127,7 +202,7 @@ def test_ccswitch_model_discovery_uses_recent_successful_requests(tmp_path):
 
 
 def test_responses_payload_uses_highest_reasoning_effort():
-    payload = build_responses_payload("ping", "system", "gpt-5.6-sol", "ultra")
+    payload = build_responses_payload("ping", "system", "test-reasoning-model", "ultra")
     assert payload["reasoning"] == {"effort": "ultra"}
     assert "temperature" not in payload
 
@@ -165,6 +240,31 @@ def test_context_window_compacts_long_discussion_and_preserves_latest_user_input
     assert window.included_turns < window.total_turns
     assert "编号 27" in window.prompt
     assert "较早发言摘录（确定性裁剪）" in window.prompt
+    assert estimate_tokens(window.prompt) <= window.token_budget
+
+
+def test_context_with_long_evidence_never_truncates_latest_user_input_from_tail():
+    marker = "LATEST_USER_TAIL_MARKER"
+    turns = [
+        DiscussionTurn(
+            id=f"turn-{index}",
+            speaker_type="user" if index == 8 else "agent",
+            speaker_id="user" if index == 8 else f"agent-{index}",
+            speaker_name="你" if index == 8 else f"成员{index}",
+            content=(("用户补充" * 80) + marker) if index == 8 else ("历史观点" * 120),
+        )
+        for index in range(10)
+    ]
+    window = build_context_window(
+        "原始问题也必须保留",
+        turns,
+        token_budget=420,
+        evidence_context="[S1] 超长资料\n" + ("证据正文" * 1000),
+        project_history="历史结论" * 800,
+    )
+
+    assert "原始问题也必须保留" in window.prompt
+    assert marker in window.prompt
     assert estimate_tokens(window.prompt) <= window.token_budget
 
 
@@ -889,3 +989,336 @@ async def test_each_seat_and_finalizer_use_independent_persisted_snapshots(tmp_p
     assert current.final_decision.disagreements == []
     assert current.final_decision.confidence["level"] == "unverified"
     assert "score" not in current.final_decision.confidence
+
+
+def test_evidence_file_limits_hashing_and_text_extraction():
+    raw = "标题\n一条可引用的事实".encode("utf-8")
+    text, media_type = extract_file_text("notes.md", raw)
+    assert text == "标题\n一条可引用的事实"
+    assert media_type == "text/plain"
+    assert content_hash(raw) == "624cb7a6a3bac5a51195ade8f43f71f274b1625c1fd544cdece47ae8aba056b4"
+
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("DOCX 中的项目资料")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    docx_text, docx_media_type = extract_file_text("brief.docx", buffer.getvalue())
+    assert "DOCX 中的项目资料" in docx_text
+    assert "wordprocessingml" in docx_media_type
+
+    with pytest.raises(ValueError, match="支持 TXT"):
+        extract_file_text("payload.exe", b"not allowed")
+    with pytest.raises(ValueError, match="10 MB"):
+        extract_file_text("large.txt", b"x" * (10 * 1024 * 1024 + 1))
+
+
+def test_web_evidence_rejects_private_and_dns_rebinding_targets(monkeypatch):
+    for url in [
+        "http://127.0.0.1/admin",
+        "http://169.254.169.254/latest/meta-data",
+        "http://[::1]/",
+        "http://localhost:8000/",
+    ]:
+        with pytest.raises(ValueError, match="公开互联网|不能访问"):
+            validate_public_url(url)
+
+    monkeypatch.setattr(
+        "app.evidence.socket.getaddrinfo",
+        lambda *args, **kwargs: [(None, None, None, None, ("10.20.30.40", 443))],
+    )
+    with pytest.raises(ValueError, match="内网"):
+        validate_public_url("https://public-looking.example/source")
+
+
+async def test_project_and_source_crud_is_scoped_and_counted(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    first = ProjectRecord(id="project-a", name="产品决策", description="长期上下文")
+    second = ProjectRecord(id="project-b", name="风险审计")
+    await store.save_project(first)
+    await store.save_project(second)
+    source = ProjectSource(
+        id="source-a",
+        project_id=first.id,
+        kind="text",
+        title="约束",
+        content="预算不超过十万元",
+        size_bytes=30,
+        sha256="abc123",
+    )
+    await store.save_source(source)
+
+    projects = {project.id: project for project in await store.list_projects()}
+    assert projects[first.id].source_count == 1
+    assert projects[second.id].source_count == 0
+    assert await store.list_sources(second.id) == []
+    assert await store.delete_source(second.id, source.id) is False
+    assert await store.get_source(source.id) is not None
+    assert await store.delete_project(first.id) is True
+    assert await store.get_source(source.id) is None
+
+
+async def test_run_freezes_sources_uses_citations_and_replays_deleted_material(tmp_path, monkeypatch):
+    prompts: list[str] = []
+    systems: list[str] = []
+
+    class CaptureBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            prompts.append(prompt)
+            systems.append(system)
+            return Generation(text="表态：认同。根据 [S1]，应先验证预算约束。")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: CaptureBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    project = ProjectRecord(id="project-a", name="迁移计划", instructions="先保护可回滚性")
+    frozen_tail = "FULL_SNAPSHOT_TAIL"
+    source_content = "本季度预算上限为十万元。" + ("完整附件正文" * 6000) + frozen_tail
+    source = ProjectSource(
+        id="source-a",
+        project_id=project.id,
+        kind="text",
+        title="预算说明",
+        content=source_content,
+        size_bytes=39,
+        sha256="snapshot-sha",
+    )
+    await store.save_project(project)
+    await store.save_source(source)
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+
+    run = await orchestrator.start(
+        RunCreate(
+            question="是否现在迁移？",
+            provider_id="mock",
+            project_id=project.id,
+            source_ids=[source.id],
+            template_id="research_synthesis",
+        )
+    )
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None and current.status == "awaiting_final_input"
+    assert current.template_name == "资料研判"
+    assert current.source_snapshots[0].content == source_content
+    assert current.source_snapshots[0].content.endswith(frozen_tail)
+    assert "[S1] 预算说明" in prompts[0]
+    assert "资料本身尚未经过 Council 独立核验" in prompts[0]
+    assert "禁止编造来源" in systems[0]
+
+    await store.delete_source(project.id, source.id)
+    replay = await orchestrator.start(
+        RunCreate(
+            question=current.question,
+            provider_id="mock",
+            project_id=current.project_id,
+            template_id=current.template_id,
+        ),
+        frozen_sources=current.source_snapshots,
+        frozen_project_name=current.project_name,
+        frozen_project_context=current.project_context,
+    )
+    await orchestrator.tasks[replay.id]
+    replayed = await store.get_run(replay.id)
+    assert replayed is not None
+    assert replayed.source_snapshots[0].sha256 == "snapshot-sha"
+    assert replayed.project_name == "迁移计划"
+
+    other = ProjectRecord(id="project-b", name="其他空间")
+    await store.save_project(other)
+    with pytest.raises(ValueError, match="不属于当前资料空间"):
+        await orchestrator.start(
+            RunCreate(
+                question="跨项目引用",
+                provider_id="mock",
+                project_id=other.id,
+                source_ids=["source-a"],
+            )
+        )
+
+
+async def test_project_history_enters_context_and_reports_keep_sources(tmp_path, monkeypatch):
+    class ImmediateBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            return Generation(text="表态：认同。继续验证历史结论。")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: ImmediateBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    project = ProjectRecord(id="project-a", name="长期研究")
+    await store.save_project(project)
+    now = utc_now()
+    previous = RunRecord(
+        id="previous",
+        question="上一轮的问题",
+        mode="standard",
+        provider_id="mock",
+        model="council-mock",
+        status="completed",
+        created_at=now,
+        updated_at=now,
+        project_id=project.id,
+        project_name=project.name,
+        final_decision=FinalDecision(
+            final_answer="上一轮的明确结论",
+            confidence={"level": "unverified", "explanation": "测试"},
+            provider_summary={"provider": "Mock"},
+            usage=UsageSummary(),
+        ),
+    )
+    await store.save_run(previous)
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    run = await orchestrator.start(
+        RunCreate(question="根据历史继续判断", provider_id="mock", project_id=project.id)
+    )
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+    assert current is not None
+    assert "上一轮的问题" in current.project_context
+    assert "上一轮的明确结论" in current.project_context
+
+    current.source_snapshots = [
+        RunSourceSnapshot(
+            id="source-1",
+            kind="text",
+            title="一手资料",
+            content="事实正文",
+            sha256="source-hash",
+        )
+    ]
+    current.final_decision = FinalDecision(
+        final_answer="最终答案引用 [S1]。",
+        disagreements=["仍需验证一个条件"],
+        confidence={"level": "source_grounded", "explanation": "测试"},
+        provider_summary={"provider": "Mock"},
+        usage=UsageSummary(),
+    )
+    current.decision_review = DecisionReview(
+        selected_decision="先做小范围试点",
+        expected_result="两周内验证关键假设",
+        actual_result="关键假设得到部分支持",
+        outcome_status="partial",
+    )
+    markdown = run_markdown(current)
+    html = run_html(current)
+    assert "[S1]" in markdown and "source-hash" in markdown
+    assert "事实正文" in markdown
+    assert "最终答案引用 [S1]" in markdown
+    assert "[S1] 一手资料" in html and "最终答案引用 [S1]" in html
+    assert "决策回访" in markdown and "两周内验证关键假设" in html
+
+
+def test_source_snapshot_reads_legacy_excerpt_without_losing_content():
+    snapshot = RunSourceSnapshot.model_validate({
+        "id": "legacy",
+        "kind": "text",
+        "title": "旧快照",
+        "excerpt": "旧版本保存的正文",
+    })
+    assert snapshot.content == "旧版本保存的正文"
+    assert snapshot.model_dump()["content"] == "旧版本保存的正文"
+
+
+def test_benchmark_dataset_is_balanced_and_blinding_is_deterministic():
+    dataset = load_dataset("evals/council_benchmark_v1.json")
+    categories = [case["category"] for case in dataset["cases"]]
+    assert len(dataset["cases"]) == 12
+    assert {category: categories.count(category) for category in set(categories)} == {
+        "decision": 3,
+        "fact_check": 3,
+        "risk": 3,
+        "planning": 3,
+    }
+    labels = blind_labels("run-1", "case-1", ["direct", "same_model_council", "cross_model_council"])
+    assert labels == blind_labels("run-1", "case-1", ["direct", "same_model_council", "cross_model_council"])
+    assert set(labels.values()) == {"A", "B", "C"}
+
+
+def test_benchmark_execution_and_human_scores_remain_separate():
+    variants = [
+        {"strategy": "direct", "blind_label": "B", "status": "completed", "answer": "B answer", "model_calls": 1, "input_tokens": 100, "output_tokens": 30, "duration_ms": 500},
+        {"strategy": "same_model_council", "blind_label": "A", "status": "completed", "answer": "A answer", "model_calls": 5, "input_tokens": 600, "output_tokens": 120, "duration_ms": 2400},
+        {"strategy": "cross_model_council", "blind_label": "C", "status": "completed", "answer": "C answer", "model_calls": 2, "input_tokens": 200, "output_tokens": 20, "duration_ms": 1800},
+    ]
+    result = {
+        "run_id": "eval-run",
+        "benchmark_version": "council-benchmark-v1",
+        "quality_claims_allowed": True,
+        "cases": [{"id": "case-1", "variants": variants}],
+    }
+    execution = aggregate_execution(result["cases"])
+    assert execution["direct"]["model_calls"] == 1
+    assert execution["cross_model_council"]["failure_rate"] == 0
+
+    score = {field: 4 for field in ["accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty"]}
+    reviews = {"run_id": "eval-run", "reviews": [{
+        "case_id": "case-1",
+        "scores": {"A": score, "B": score, "C": score},
+        "citation_checks": {"A": {"supported": 3, "total": 4}, "B": {"supported": 2, "total": 2}, "C": {"supported": 0, "total": 0}},
+        "unsupported_claims": {"A": 1, "B": 0, "C": 2},
+        "preferred": "A",
+    }]}
+    summary = summarize_human_reviews(result, reviews)
+    assert summary["quality_scored"] is True
+    assert summary["quality_claims_allowed"] is True
+    assert summary["quality"]["same_model_council"]["preferred_cases"] == 1
+    assert summary["quality"]["direct"]["accuracy"] == 4
+    assert summary["quality"]["same_model_council"]["citation_accuracy"] == 0.75
+    assert summary["quality"]["direct"]["unsupported_claims"] == 0
+
+    failed_result = {
+        **result,
+        "cases": [{"id": "case-1", "variants": [{**variant, "status": "failed", "answer": ""} if variant["strategy"] == "cross_model_council" else variant for variant in variants]}],
+    }
+    failed_summary = summarize_human_reviews(failed_result, reviews)
+    assert failed_summary["all_variants_completed"] is False
+    assert failed_summary["quality_claims_allowed"] is False
+
+    incomplete_metrics = {**reviews, "reviews": [{**reviews["reviews"][0], "citation_checks": {"A": {"supported": 3, "total": 4}}}]}
+    incomplete_summary = summarize_human_reviews(result, incomplete_metrics)
+    assert incomplete_summary["complete_review_metrics"] is False
+    assert incomplete_summary["quality_claims_allowed"] is False
+
+    invalid = {"run_id": "eval-run", "reviews": [{"case_id": "case-1", "scores": {"A": {**score, "accuracy": 6}}}]}
+    with pytest.raises(ValueError, match="必须为 1-5"):
+        summarize_human_reviews(result, invalid)
+
+
+def test_quality_claims_require_all_real_providers_and_complete_blind_review():
+    profiles = {
+        "real": ProviderProfile(id="real", display_name="Real", provider_type=ProviderType.COMPATIBLE),
+        "mock": ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK),
+    }
+    assert provider_reality(profiles, {"real"}) == (True, True)
+    assert provider_reality(profiles, {"real", "mock"}) == (True, False)
+    assert provider_reality(profiles, {"mock"}) == (False, False)
+
+    score = {field: 4 for field in ["accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty"]}
+    result = {
+        "run_id": "partial-review",
+        "benchmark_version": "council-benchmark-v1",
+        "quality_claims_allowed": True,
+        "cases": [
+            {"id": "case-1", "variants": [{"strategy": "direct", "blind_label": "A", "status": "completed"}]},
+            {"id": "case-2", "variants": [{"strategy": "direct", "blind_label": "B", "status": "completed"}]},
+        ],
+    }
+    summary = summarize_human_reviews(result, {"run_id": "partial-review", "reviews": [{"case_id": "case-1", "scores": {"A": score}}]})
+    assert summary["complete_blind_review"] is False
+    assert summary["quality_claims_allowed"] is False
+
+
+def test_cost_estimation_requires_explicit_prices_for_every_model():
+    usage = [
+        {"provider_id": "deepseek", "model": "model-a", "input_tokens": 1_000_000, "output_tokens": 500_000},
+        {"provider_id": "zhipu", "model": "model-b", "input_tokens": 500_000, "output_tokens": 100_000},
+    ]
+    pricing = {
+        "deepseek:model-a": {"input_per_million": 1.0, "output_per_million": 2.0},
+        "zhipu": {"input_per_million": 2.0, "output_per_million": 5.0},
+    }
+    assert estimate_provider_cost(usage, pricing) == (3.5, [])
+    cost, missing = estimate_provider_cost(usage, {"deepseek:model-a": pricing["deepseek:model-a"]})
+    assert cost is None
+    assert missing == ["zhipu:model-b"]

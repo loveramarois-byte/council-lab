@@ -22,6 +22,8 @@ class ContextWindow:
     included_turns: int
     total_turns: int
     compacted: bool
+    source_tokens: int = 0
+    history_tokens: int = 0
 
 
 def context_budget_for_mode(mode: str) -> int:
@@ -65,7 +67,7 @@ def _format_turn(turn: DiscussionTurn, content_limit: int | None = None) -> str:
     return f"{turn.speaker_name}（{turn.role_label or '参与者'}）：{content}"
 
 
-def build_context_window(question: str, turns: list[DiscussionTurn], token_budget: int) -> ContextWindow:
+def _build_dialogue_context(question: str, turns: list[DiscussionTurn], token_budget: int) -> ContextWindow:
     if token_budget < 120:
         raise ValueError("token_budget must be at least 120")
 
@@ -127,7 +129,22 @@ def build_context_window(question: str, turns: list[DiscussionTurn], token_budge
         sections[2] = "最近公开发言：\n（已按上下文预算折叠）"
         prompt = "\n\n".join(sections)
     if estimate_tokens(prompt) > token_budget:
-        prompt = _truncate_tokens(prompt, token_budget)
+        essential_sections = [f"讨论题：{question_text}"]
+        if latest_user_text:
+            essential_sections.append(f"必须优先回应的最新用户插话：\n{latest_user_text}")
+        prompt = "\n\n".join(essential_sections)
+    if estimate_tokens(prompt) > token_budget:
+        latest_budget = max(28, int(token_budget * 0.45)) if latest_user else 0
+        question_budget = max(28, token_budget - latest_budget - 28)
+        question_text = _truncate_tokens_with_tail(question, question_budget)
+        essential_sections = [f"讨论题：{question_text}"]
+        if latest_user is not None:
+            user_content = _truncate_tokens_with_tail(latest_user.content, latest_budget)
+            essential_sections.append(
+                f"必须优先回应的最新用户插话：\n"
+                f"{latest_user.speaker_name}（{latest_user.role_label or '参与者'}）：{user_content}"
+            )
+        prompt = "\n\n".join(essential_sections)
 
     included_ids = summary_ids | recent_ids | ({latest_user.id} if latest_user else set())
     return ContextWindow(
@@ -138,4 +155,67 @@ def build_context_window(question: str, turns: list[DiscussionTurn], token_budge
         included_turns=len(included_ids),
         total_turns=len(turns),
         compacted=True,
+    )
+
+
+def build_context_window(
+    question: str,
+    turns: list[DiscussionTurn],
+    token_budget: int,
+    evidence_context: str = "",
+    project_history: str = "",
+) -> ContextWindow:
+    if not evidence_context and not project_history:
+        return _build_dialogue_context(question, turns, token_budget)
+
+    extras_budget = max(0, token_budget - 120)
+    evidence_limit = min(int(token_budget * 0.38), extras_budget)
+    evidence = _truncate_tokens(evidence_context, evidence_limit) if evidence_context else ""
+    remaining = max(0, extras_budget - estimate_tokens(evidence))
+    history_limit = min(int(token_budget * 0.16), remaining)
+    history = _truncate_tokens(project_history, history_limit) if project_history else ""
+    def extras_prefix(current_history: str, current_evidence: str) -> str:
+        sections: list[str] = []
+        if current_history:
+            sections.append(f"同一资料空间的历史结论（仅作上下文，不替代当前证据）：\n{current_history}")
+        if current_evidence:
+            sections.append(
+                "本次资料证据（引用时只能使用现有 [S编号]，资料本身尚未经过 Council 独立核验）：\n"
+                + current_evidence
+            )
+        return ("\n\n".join(sections) + "\n\n") if sections else ""
+
+    prefix = extras_prefix(history, evidence)
+    while estimate_tokens(prefix) > token_budget - 120:
+        overflow = estimate_tokens(prefix) - (token_budget - 120)
+        if history:
+            next_limit = max(0, estimate_tokens(history) - overflow - 8)
+            history = _truncate_tokens(history, next_limit)
+            if next_limit == 0:
+                history = ""
+        elif evidence:
+            next_limit = max(0, estimate_tokens(evidence) - overflow - 8)
+            evidence = _truncate_tokens(evidence, next_limit)
+            if next_limit == 0:
+                evidence = ""
+        else:
+            break
+        prefix = extras_prefix(history, evidence)
+
+    dialogue_budget = max(120, token_budget - estimate_tokens(prefix))
+    dialogue = _build_dialogue_context(question, turns, dialogue_budget)
+    prompt = prefix + dialogue.prompt
+    source_tokens = estimate_tokens(evidence)
+    history_tokens = estimate_tokens(history)
+
+    return ContextWindow(
+        prompt=prompt,
+        summary=dialogue.summary,
+        token_budget=token_budget,
+        estimated_tokens=estimate_tokens(prompt),
+        included_turns=dialogue.included_turns,
+        total_turns=dialogue.total_turns,
+        compacted=dialogue.compacted or source_tokens < estimate_tokens(evidence_context) or history_tokens < estimate_tokens(project_history),
+        source_tokens=source_tokens,
+        history_tokens=history_tokens,
     )

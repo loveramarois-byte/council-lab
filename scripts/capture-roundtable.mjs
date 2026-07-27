@@ -74,24 +74,24 @@ const run = {
     disagreements: ["全民基本收入是否应成为首要工具", "是否应按自动化设备征税"], risks_and_limitations: ["政策效果会因地区产业和公共服务供给而异"],
     confidence: { level: "medium", score: 0.76, explanation: "方向可检验，但具体税率和福利强度需要通过地区试点校准。" },
     sources: [],
-    provider_summary: { provider: "CC Switch", protocol: "responses", model: "gpt-5.6-sol", used_ccswitch: true, degraded: false },
+    provider_summary: { provider: "Mixed providers", protocol: "openai-compatible", model: "gpt-4.1", used_ccswitch: false, degraded: false },
     usage: { model_calls: 5, tool_calls: 0, input_tokens: 18320, output_tokens: 3710, duration_ms: 78240 },
   },
   usage: { model_calls: 5, tool_calls: 0, input_tokens: 18320, output_tokens: 3710, duration_ms: 78240 },
   degraded: false, error: null, protocol: "responses", discussion_turns: turns, participant_roles: participants,
   current_speaker_index: 4, discussion_round: 1, awaiting_user: false,
   limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 },
-  seat_assignments: assignments,
-  finalizer_assignment: { ...assignments[0], role: "finalizer", provider_id: "ccswitch", provider_name: "CC Switch", model: "gpt-5.6-sol" },
+  seat_assignments: assignments, template_name: "演示会话 · 示例模型配置",
+  finalizer_assignment: { ...assignments[0], role: "finalizer" },
   auto_summarize: false, recoverable: false, limit_reason: null,
 };
 
 const provider = {
-  id: "ccswitch", preset_id: "ccswitch", display_name: "CC Switch", description: "本机模型路由",
-  provider_type: "openai_compatible", protocol_mode: "responses", base_url: "http://127.0.0.1:15721/v1",
-  has_api_key: true, credential_source: "system", supports_api_key: false, requires_api_key: false,
+  id: "ccswitch", preset_id: "ccswitch", display_name: "CC Switch", description: "本机路由",
+  provider_type: "ccswitch", protocol_mode: "auto", base_url: "http://127.0.0.1:15721/v1",
+  has_api_key: false, credential_source: "none", supports_api_key: false, requires_api_key: false,
   enabled: true, is_active: true, default_model: "gpt-5.6-sol", reasoning_effort: "high",
-  available_models: ["gpt-5.6-sol"], local_only: true, last_health_check: now, last_error: null,
+  available_models: assignments.map((item) => item.model), model_source: "provider", local_only: true, last_health_check: now, last_error: null,
 };
 
 const browser = await chromium.launch({ headless: true });

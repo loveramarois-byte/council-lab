@@ -115,6 +115,22 @@ def extract_model_ids(payload: Any) -> list[str]:
     return list(dict.fromkeys(model_ids))
 
 
+def resolve_model_catalog(live_models: list[str], fallback_models: list[str], fallback_source: str) -> tuple[list[str], str, int]:
+    clean_live = list(dict.fromkeys(model.strip() for model in live_models if model.strip()))
+    if clean_live:
+        return clean_live, "provider", len(clean_live)
+    clean_fallback = list(dict.fromkeys(model.strip() for model in fallback_models if model.strip()))
+    return clean_fallback, fallback_source if clean_fallback else "none", 0
+
+
+def replace_model_catalog(profile: ProviderProfile, models: list[str], source: str) -> None:
+    clean_models = list(dict.fromkeys(model.strip() for model in models if model.strip()))
+    profile.available_models = clean_models
+    profile.model_source = source
+    if clean_models and (not profile.default_model or source == "provider" and profile.default_model not in clean_models):
+        profile.default_model = clean_models[0]
+
+
 def discover_ccswitch_models(db_path: Path | None = None, limit: int = 30) -> list[str]:
     """Read only successful model names when CC Switch exposes no catalog."""
     configured_path = os.getenv("CCSWITCH_DB_PATH")

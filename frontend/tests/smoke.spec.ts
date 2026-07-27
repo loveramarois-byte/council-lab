@@ -10,8 +10,8 @@ async function createMockRoundtable(request: import("@playwright/test").APIReque
 
 test("首页明确四席后由用户确认且不展示未实现工具", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /不是四份答案/ })).toBeVisible();
-  await expect(page.getByText("四个席位逐个调用已配置模型并互相回应。第四席结束后会等你确认或补充，再生成最终答案。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
+  await expect(page.getByText("依次发言、公开回应，由你确认后再形成答案。")).toBeVisible();
   await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /引导.*1.8k/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /圆桌.*4k/ })).toBeVisible();
@@ -26,6 +26,46 @@ test("首页明确四席后由用户确认且不展示未实现工具", async ({
     const response = await page.request.get(stylesheet);
     expect(response.ok(), `${stylesheet} 应能正常加载`).toBeTruthy();
   }
+  const viewport = await page.evaluate(() => ({ page: document.documentElement.scrollHeight, viewport: window.innerHeight }));
+  expect(viewport.page).toBeLessThanOrEqual(viewport.viewport);
+});
+
+test("资料空间、模板、引用和报告形成完整新手路径", async ({ page, request }) => {
+  const projectName = `E2E 资料空间 ${Date.now()}`;
+  let projectId = "";
+  let runId = "";
+  try {
+    await page.goto("/projects");
+    await page.getByRole("button", { name: "新建资料空间" }).click();
+    await page.getByLabel("资料空间名称").fill(projectName);
+    await page.getByRole("button", { name: "确认新建" }).click();
+    await expect(page.getByRole("button", { name: new RegExp(projectName) })).toBeVisible();
+    await page.getByLabel("文字资料名称").fill("预算基线");
+    await page.getByLabel("文字资料正文").fill("本季度试点预算上限为十万元。");
+    await page.getByRole("button", { name: "加入文字" }).click();
+    await expect(page.getByText("预算基线", { exact: true })).toBeVisible();
+
+    const projects = await (await request.get("http://127.0.0.1:8001/api/projects")).json() as { id: string; name: string }[];
+    projectId = projects.find((item) => item.name === projectName)?.id || "";
+    expect(projectId).not.toBe("");
+
+    await page.goto("/");
+    await page.getByLabel("资料空间", { exact: true }).selectOption(projectId);
+    await page.getByLabel("审议模板").selectOption("research_synthesis");
+    await expect(page.getByText("预算基线", { exact: true })).toBeVisible();
+    await page.getByPlaceholder(/根据这些资料/).fill("根据预算资料，我们应该怎样设计第一阶段试点？");
+    await page.getByRole("button", { name: "进入圆桌" }).click();
+    await page.waitForURL(/\/runs\//);
+    runId = page.url().split("/").pop() || "";
+    await expect(page.getByText(`${projectName} · 1 份资料`, { exact: true })).toBeVisible();
+    await expect(page.locator(".source-strip")).toContainText("[S1]");
+    await expect(page.locator(".source-strip")).toContainText("预算基线");
+    await expect(page.getByRole("link", { name: "下载 Markdown 报告" })).toHaveAttribute("href", /format=markdown/);
+    await expect(page.getByRole("link", { name: "下载 HTML 报告" })).toHaveAttribute("href", /format=html/);
+  } finally {
+    if (runId) await request.delete(`http://127.0.0.1:8001/api/runs/${runId}`);
+    if (projectId) await request.delete(`http://127.0.0.1:8001/api/projects/${projectId}`);
+  }
 });
 
 test("供应商设置为新手提供预设、凭据和模型获取入口", async ({ page }) => {
@@ -39,7 +79,8 @@ test("供应商设置为新手提供预设、凭据和模型获取入口", async
   await page.getByRole("button", { name: /DeepSeek/ }).click();
   await expect(page.locator('input[type="password"]')).toHaveAttribute("placeholder", "粘贴 API Key");
   await expect(page.getByRole("link", { name: /获取 API Key/ })).toHaveAttribute("href", "https://platform.deepseek.com/api_keys");
-  await expect(page.getByLabel("模型", { exact: true })).toHaveValue("deepseek-v4-flash");
+  await expect(page.getByLabel("模型", { exact: true })).toHaveValue("deepseek-chat");
+  await expect(page.getByText("2 个离线备选，连接后更新")).toBeVisible();
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   await expect(page.getByText("先粘贴 API Key，再获取模型。")).toBeVisible();
 
@@ -81,6 +122,99 @@ test("CC Switch 打开设置后自动识别模型", async ({ page }) => {
   expect(await page.getByLabel("模型", { exact: true }).locator("option").count()).toBe(2);
 });
 
+test("CC Switch 不可达时不会显示为已连接", async ({ page }) => {
+  await page.route("**/api/providers/ccswitch/detect", (route) => route.fulfill({
+    json: {
+      status: "connection_refused",
+      model_source: "none",
+      default_model: "",
+      models: [],
+      error: "无法连接 CC Switch 本地路由。",
+    },
+  }));
+
+  await page.goto("/settings/providers");
+  await expect(page.getByText("无法连接服务地址，请确认程序已启动。")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".provider-state")).toContainText("不可用");
+  await expect(page.locator(".provider-state")).not.toContainText("已连接");
+  await expect(page.locator('select[aria-label="模型"]')).toHaveCount(0);
+});
+
+test("CC Switch 历史模型不会被标成当前可用", async ({ page }) => {
+  await page.route("**/api/providers/ccswitch/detect", (route) => route.fulfill({
+    json: {
+      status: "connection_refused",
+      model_source: "ccswitch_history",
+      default_model: "recent-model",
+      models: ["recent-model"],
+      error: "无法连接 CC Switch 本地路由。",
+    },
+  }));
+
+  await page.goto("/settings/providers");
+  await expect(page.getByText(/读取到 1 个近期成功模型记录/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/这些记录不代表模型现在可用/)).toBeVisible();
+  await expect(page.locator(".provider-state")).toContainText("不可用");
+  await expect(page.getByText(/已自动识别 1 个可用模型/)).toHaveCount(0);
+});
+
+test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商", async ({ page }) => {
+  let savedKey = "";
+  let modelsRequested = 0;
+  let tested = 0;
+  let activated = 0;
+
+  await page.route("**/api/providers", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({ json: [{
+      id: "deepseek", preset_id: "deepseek", display_name: "DeepSeek", description: "官方 API",
+      key_url: "https://platform.deepseek.com/api_keys", docs_url: "https://api-docs.deepseek.com/",
+      provider_type: "compatible", protocol_mode: "chat_completions", base_url: "https://api.deepseek.com",
+      default_model: "deepseek-chat", reasoning_effort: "high",
+      available_models: ["deepseek-chat", "deepseek-reasoner"], model_source: "recommended",
+      local_only: false, has_api_key: false, credential_source: "none", supports_api_key: true,
+      requires_api_key: true, is_active: false, capabilities: { supports_model_listing: true },
+    }] });
+  });
+  await page.route("**/api/providers/deepseek", async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    const payload = route.request().postDataJSON() as { api_key?: string; default_model?: string };
+    if (payload.api_key) savedKey = payload.api_key;
+    return route.fulfill({ json: {
+      id: "deepseek", preset_id: "deepseek", display_name: "DeepSeek", description: "官方 API",
+      provider_type: "compatible", protocol_mode: "chat_completions", base_url: "https://api.deepseek.com",
+      default_model: payload.default_model || "deepseek-chat", reasoning_effort: "high",
+      available_models: ["deepseek-chat", "deepseek-reasoner"], model_source: "provider",
+      local_only: false, has_api_key: true, credential_source: "system", supports_api_key: true,
+      requires_api_key: true, is_active: false, capabilities: { supports_model_listing: true },
+    } });
+  });
+  await page.route("**/api/providers/deepseek/models", (route) => {
+    modelsRequested += 1;
+    return route.fulfill({ json: { models: ["deepseek-chat", "deepseek-reasoner"], source: "provider", fetched: 2, default_model: "deepseek-chat" } });
+  });
+  await page.route("**/api/providers/deepseek/test", (route) => {
+    tested += 1;
+    return route.fulfill({ json: { status: "connected" } });
+  });
+  await page.route("**/api/providers/deepseek/activate", (route) => {
+    activated += 1;
+    return route.fulfill({ json: {} });
+  });
+
+  await page.goto("/settings/providers");
+  await page.getByRole("button", { name: /DeepSeek/ }).click();
+  await page.locator('input[type="password"]').fill("sk-test-for-e2e-only");
+  await page.getByRole("button", { name: "保存并测试" }).click();
+
+  await expect(page.getByText("连接成功，已设为当前供应商。")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("模型", { exact: true })).toHaveValue("deepseek-chat");
+  expect(savedKey).toBe("sk-test-for-e2e-only");
+  expect(modelsRequested).toBe(1);
+  expect(tested).toBe(1);
+  expect(activated).toBe(1);
+});
+
 test("四席依次辩论并在用户确认后给出最终答案", async ({ page, request }) => {
   const run = await createMockRoundtable(request);
   try {
@@ -88,7 +222,7 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await expect(page.locator(".council-seat")).toHaveCount(4);
     await expect(page.getByText("4 席顺序调用", { exact: true })).toBeVisible();
     await expect(page.getByText("各席独立配置", { exact: true })).toBeVisible();
-    await expect(page.getByText("共享公开记录", { exact: true })).toBeVisible();
+    await expect(page.getByText("公开讨论", { exact: true })).toBeVisible();
     await expect(page.getByText("LangGraph", { exact: true })).toBeVisible();
     await expect(page.getByText(/\d+ 个检查点/)).toBeVisible();
     await expect(page.getByText(/上下文 \d+ \/ \d+/)).toBeVisible();
@@ -108,6 +242,14 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await expect(page.locator(".discussion-turn.agent").nth(1)).toContainText("诘问");
     await expect(page.locator(".discussion-turn.agent").nth(2)).toContainText("构策");
     await expect(page.locator(".discussion-turn.agent").nth(3)).toContainText("观澜");
+    await page.getByRole("button", { name: "结果回访" }).click();
+    await page.getByLabel("预期结果").fill("两周内验证回滚方案");
+    await page.getByLabel("结果状态").selectOption("partial");
+    await page.getByLabel("实际发生了什么").fill("回滚方案通过了演练");
+    await page.getByRole("button", { name: "保存回访" }).click();
+    await expect(page.getByRole("button", { name: "编辑回访" })).toBeVisible();
+    const saved = await (await request.get(`http://127.0.0.1:8001/api/runs/${run.id}`)).json() as { decision_review?: { expected_result: string; outcome_status: string } };
+    expect(saved.decision_review).toMatchObject({ expected_result: "两周内验证回滚方案", outcome_status: "partial" });
   } finally {
     await request.delete(`http://127.0.0.1:8001/api/runs/${run.id}`);
   }
@@ -119,7 +261,7 @@ test("Token 限额与上下文分开显示，并可提额续跑", async ({ page 
     question: "为什么第三席之后停止？",
     mode: "standard",
     provider_id: "ccswitch",
-    model: "gpt-5.6-sol",
+    model: "test-reasoning-model",
     reasoning_effort: "high",
     status: "stopped",
     created_at: new Date().toISOString(),
@@ -218,7 +360,7 @@ test("席位失败时明确显示原因并允许从当前席位重试", async ({
     question: "我想睡觉",
     mode: "standard",
     provider_id: "ccswitch",
-    model: "gpt-5.6-sol",
+    model: "test-reasoning-model",
     reasoning_effort: "high",
     status: "failed",
     created_at: new Date(Date.now() - 130_000).toISOString(),
@@ -256,14 +398,14 @@ test("席位失败时明确显示原因并允许从当前席位重试", async ({
   expect(retryRequested).toBeTruthy();
 });
 
-test("CC Switch 长时间等待时显示故障转移状态并允许重试当前席位", async ({ page }) => {
+test("CC Switch 长时间等待时显示路由边界并允许重试当前席位", async ({ page }) => {
   const waitingSince = new Date(Date.now() - 48_000).toISOString();
   const waitingRun = {
     id: "waiting-fixture",
     question: "测试上游等待状态",
     mode: "standard",
     provider_id: "ccswitch",
-    model: "gpt-5.6-sol",
+    model: "test-reasoning-model",
     reasoning_effort: "high",
     status: "running",
     created_at: waitingSince,
@@ -307,7 +449,8 @@ test("CC Switch 长时间等待时显示故障转移状态并允许重试当前�
   await page.getByRole("button", { name: "加入讨论" }).click();
   await expect(page.getByText("这是我的中途观点", { exact: true })).toBeVisible();
   expect(interjectionRequested).toBeTruthy();
-  await expect(page.getByText("CC Switch 正在切换上游")).toBeVisible();
+  await expect(page.getByText("正在等待 CC Switch 返回上游响应")).toBeVisible();
+  await expect(page.getByText(/若已配置故障转移，将由它处理/)).toBeVisible();
   await expect(page.getByText(/已等待 \d+ 秒/)).toBeVisible();
   await expect(page.getByRole("button", { name: "继续等待" })).toBeVisible();
   await page.getByRole("button", { name: "重试本席" }).click();
