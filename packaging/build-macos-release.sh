@@ -22,8 +22,11 @@ NODE_RUNTIME_NAME="node-v${NODE_RUNTIME_VERSION}-darwin-${NODE_RUNTIME_ARCH}"
 NODE_RUNTIME_ARCHIVE="$PROJECT_DIR/build/${NODE_RUNTIME_NAME}.tar.gz"
 NODE_RUNTIME_DIR="$PROJECT_DIR/build/$NODE_RUNTIME_NAME"
 
+if [[ "$PYTHON_BIN" != */* ]]; then
+  PYTHON_BIN="$(command -v "$PYTHON_BIN" || true)"
+fi
 if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "Python build environment not found: $PYTHON_BIN" >&2
+  echo "Python build environment not found. Set PYTHON_BIN to a Python executable." >&2
   exit 1
 fi
 
