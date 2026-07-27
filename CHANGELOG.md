@@ -10,6 +10,7 @@
 
 - 增加 Windows 10 / 11 双击安装、启动和停止入口，并自动创建桌面快捷方式。
 - GitHub Release 同时生成 macOS 与 Windows 下载包，CI 增加 `windows-latest` 脚本校验。
+- 后端依赖锁文件改为跨平台解析，Windows 自动跳过不兼容的 `uvloop` 并安装系统凭据库支持。
 
 ## [0.2.1] - 2026-07-28
 
