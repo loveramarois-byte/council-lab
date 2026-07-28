@@ -219,6 +219,7 @@ jobs:
               -NewRoot $package -TargetRoot $rollbackTarget -Stopper (Join-Path $rollbackTarget "runtime\stop-council.ps1") `
               -LogFile (Join-Path $env:RUNNER_TEMP "rollback.log") -ResultFile (Join-Path $env:RUNNER_TEMP "rollback-result.json")
             $rollbackExit = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
           } finally {
             $locked.Dispose()
           }
