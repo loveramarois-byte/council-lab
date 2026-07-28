@@ -45,37 +45,6 @@ jobs:
         env:
           PYTHON_BIN: python
         run: ./packaging/build-macos-release.sh
-      - name: Smoke-test packaged services
-        run: |
-          package="$GITHUB_WORKSPACE/artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
-          resources="$package/Council.app/Contents/Resources"
-          COUNCIL_DATA_DIR="$RUNNER_TEMP/council-data" "$resources/backend/council-backend/council-backend" >"$RUNNER_TEMP/backend.log" 2>&1 &
-          backend_pid=$!
-          (cd "$resources/web" && HOSTNAME=127.0.0.1 PORT=3000 NODE_ENV=production "$resources/runtime/node" server.js >"$RUNNER_TEMP/frontend.log" 2>&1) &
-          frontend_pid=$!
-          cleanup() {
-            kill "$backend_pid" "$frontend_pid" 2>/dev/null || true
-            wait "$backend_pid" "$frontend_pid" 2>/dev/null || true
-            for attempt in {1..40}; do
-              if ! curl -fsS http://127.0.0.1:8001/api/health >/dev/null 2>&1 && ! curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
-                break
-              fi
-              sleep 0.1
-            done
-          }
-          trap cleanup EXIT
-          healthy=0
-          for attempt in {1..80}; do
-            if curl -fsS http://127.0.0.1:8001/api/health >/dev/null && curl -fsS http://127.0.0.1:3000/ | grep -q Council; then
-              healthy=1
-              break
-            fi
-            sleep 0.25
-          done
-          if [[ "$healthy" != 1 ]]; then
-            cat "$RUNNER_TEMP/backend.log" "$RUNNER_TEMP/frontend.log"
-            exit 1
-          fi
       - name: Smoke-test launcher repeat and partial recovery
         run: |
           package="$GITHUB_WORKSPACE/artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
@@ -85,9 +54,17 @@ jobs:
           export COUNCIL_NO_BROWSER=1
           launcher="$resources/launcher/start-council.sh"
           stopper="$resources/launcher/stop-council.sh"
+          cleanup() {
+            "$stopper" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
           "$launcher"
+          curl -fsS http://127.0.0.1:8001/api/health >/dev/null
+          curl -fsS http://127.0.0.1:3000/ | grep -q Council
           first_backend="$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           first_frontend="$(awk '$1 == "frontend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
+          test -n "$first_backend"
+          test -n "$first_frontend"
           "$launcher"
           test "$first_backend" = "$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           test "$first_frontend" = "$(awk '$1 == "frontend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
@@ -99,10 +76,18 @@ jobs:
           test "$first_backend" = "$second_backend"
           test "$first_frontend" != "$second_frontend"
           "$stopper"
+          services_stopped=0
           for attempt in {1..40}; do
-            if ! kill -0 "$second_backend" 2>/dev/null && ! kill -0 "$second_frontend" 2>/dev/null; then break; fi
+            if ! kill -0 "$second_backend" 2>/dev/null \
+              && ! kill -0 "$second_frontend" 2>/dev/null \
+              && ! curl -fsS http://127.0.0.1:8001/api/health >/dev/null 2>&1 \
+              && ! curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
+              services_stopped=1
+              break
+            fi
             sleep 0.1
           done
+          test "$services_stopped" = 1
           ! kill -0 "$second_backend" 2>/dev/null
           ! kill -0 "$second_frontend" 2>/dev/null
       - uses: actions/upload-artifact@v4
