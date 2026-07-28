@@ -3,6 +3,8 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
@@ -94,11 +96,17 @@ jobs:
         working-directory: frontend
       - run: npm run lint
         working-directory: frontend
+      - run: npm run test:unit
+        working-directory: frontend
       - run: npm run build
         working-directory: frontend
 
   e2e:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: ${{ fromJSON(github.event_name == 'schedule' && '["chromium","firefox","webkit"]' || '["chromium"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -114,12 +122,14 @@ jobs:
       - run: python -m pip install -r backend/requirements.lock
       - run: npm ci
         working-directory: frontend
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+        working-directory: frontend
+      - run: npm run build
         working-directory: frontend
       - run: |
           COUNCIL_DATA_DIR="$RUNNER_TEMP/council-data" python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8001 >"$RUNNER_TEMP/backend.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/backend.pid"
-          (cd frontend && exec node_modules/.bin/next dev --hostname 127.0.0.1) >"$RUNNER_TEMP/frontend.log" 2>&1 &
+          (cd frontend && exec node_modules/.bin/next start --hostname 127.0.0.1) >"$RUNNER_TEMP/frontend.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS http://127.0.0.1:8001/api/health >/dev/null && curl -fsS http://127.0.0.1:3000 >/dev/null && exit 0
@@ -130,7 +140,10 @@ jobs:
         working-directory: .
       - run: npm test
         working-directory: frontend
+        env:
+          COUNCIL_TEST_BROWSER: ${{ matrix.browser }}
       - name: Verify mobile pairing abuse controls and session revocation
+        if: matrix.browser == 'chromium'
         run: |
           kill "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
           wait "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
@@ -139,7 +152,7 @@ jobs:
             sleep 0.25
           done
           ! curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null 2>&1
-          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-mobile-token COUNCIL_DESKTOP_TOKEN=ci-desktop-token COUNCIL_PAIR_FAILURE_LIMIT=3 COUNCIL_PAIR_LOCK_SECONDS=1 exec node_modules/.bin/next dev --hostname 0.0.0.0) >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-mobile-token COUNCIL_DESKTOP_TOKEN=ci-desktop-token COUNCIL_PAIR_FAILURE_LIMIT=3 COUNCIL_PAIR_LOCK_SECONDS=1 exec node_modules/.bin/next start --hostname 0.0.0.0) >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null && break
@@ -176,7 +189,7 @@ jobs:
           test "$(status -b "$cookie_jar" "$base/")" = "403"
           kill "$(cat "$RUNNER_TEMP/frontend.pid")"
           wait "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
-          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-rotated-token COUNCIL_DESKTOP_TOKEN=ci-rotated-desktop-token exec node_modules/.bin/next dev --hostname 0.0.0.0) >>"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-rotated-token COUNCIL_DESKTOP_TOKEN=ci-rotated-desktop-token exec node_modules/.bin/next start --hostname 0.0.0.0) >>"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS "$base/mobile-access/health" >/dev/null && break

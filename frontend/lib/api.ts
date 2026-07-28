@@ -199,6 +199,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json();
 }
 
+function newIdempotencyKey() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `council-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function idempotentRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  headers.set("Idempotency-Key", newIdempotencyKey());
+  const requestInit = { ...init, headers };
+  try {
+    return await request<T>(path, requestInit);
+  } catch (error) {
+    if (error instanceof CouncilApiError) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return request<T>(path, requestInit);
+  }
+}
+
 async function download(path: string, init?: RequestInit): Promise<{ blob: Blob; filename: string }> {
   const response = await fetch(`${API_URL}${path}`, init);
   if (!response.ok) {
@@ -239,16 +257,16 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; limits?: RunLimits }) => request<Run>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
-  cancelRun: (id: string) => request<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
-  advanceRun: (id: string, body: { action: "continue" | "interject" | "question"; message?: string; target_agent?: string }) => request<Run>(`/api/runs/${id}/advance`, { method: "POST", body: JSON.stringify(body) }),
-  interjectRun: (id: string, body: { action: "interject" | "question"; message: string; target_agent?: string }) => request<Run>(`/api/runs/${id}/interject`, { method: "POST", body: JSON.stringify(body) }),
-  retryTurn: (id: string) => request<Run>(`/api/runs/${id}/retry-turn`, { method: "POST" }),
-  resumeRun: (id: string, limits: RunLimits) => request<Run>(`/api/runs/${id}/resume`, { method: "POST", body: JSON.stringify(limits) }),
-  summarizeRun: (id: string) => request<Run>(`/api/runs/${id}/summarize`, { method: "POST" }),
-  rerun: (id: string) => request<Run>(`/api/runs/${id}/rerun`, { method: "POST" }),
+  cancelRun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
+  advanceRun: (id: string, body: { action: "continue" | "interject" | "question"; message?: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/advance`, { method: "POST", body: JSON.stringify(body) }),
+  interjectRun: (id: string, body: { action: "interject" | "question"; message: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/interject`, { method: "POST", body: JSON.stringify(body) }),
+  retryTurn: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/retry-turn`, { method: "POST" }),
+  resumeRun: (id: string, limits: RunLimits) => idempotentRequest<Run>(`/api/runs/${id}/resume`, { method: "POST", body: JSON.stringify(limits) }),
+  summarizeRun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/summarize`, { method: "POST" }),
+  rerun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/rerun`, { method: "POST" }),
   saveDecisionReview: (id: string, body: DecisionReviewInput) => request<Run>(`/api/runs/${id}/decision-review`, { method: "PUT", body: JSON.stringify(body) }),
   deleteRun: (id: string) => request<{ deleted: boolean }>(`/api/runs/${id}`, { method: "DELETE" }),
 };

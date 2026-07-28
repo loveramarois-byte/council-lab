@@ -17,6 +17,8 @@ from .credentials import CredentialStoreError, delete_provider_secret, get_provi
 from .diagnostics import DIAGNOSTICS_SCHEMA_VERSION, build_diagnostic_bundle
 from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_webpage
 from .errors import install_error_handling
+from .idempotency import execute_idempotent_run_action
+from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
 from .models import AgentAssignmentsConfig, AgentModelAssignment, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
@@ -137,7 +139,13 @@ async def install_update(x_council_request: str | None = Header(default=None)):
 
 
 @app.post("/api/runs")
-async def create_run(request: RunCreate):
+async def create_run(
+    request: RunCreate,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    if not legacy_workspace_enabled() and (request.project_id or request.source_ids):
+        raise HTTPException(410, "新建审议已不再接受资料空间字段；历史 Run 和不可变快照仍可读取。")
     if request.use_saved_assignments and request.assignment_config is None:
         request = request.model_copy(update={"assignment_config": assignments})
     elif request.assignment_config is None:
@@ -146,8 +154,18 @@ async def create_run(request: RunCreate):
             raise HTTPException(404, "Provider 不存在")
         if not (request.model or profile.default_model):
             raise HTTPException(400, "请先在 Provider 设置中填写默认模型")
-    try:
+    async def start_run():
         return await orchestrator.start(request)
+
+    try:
+        return await execute_idempotent_run_action(
+            store,
+            "runs:create",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            start_run,
+            response,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -158,19 +176,22 @@ async def deliberation_templates():
 
 
 @app.get("/api/projects")
-async def list_projects():
+async def list_projects(response: Response):
+    mark_legacy_response(response)
     return await store.list_projects()
 
 
 @app.post("/api/projects")
-async def create_project(payload: ProjectCreate):
+async def create_project(payload: ProjectCreate, response: Response):
+    require_legacy_workspace_write(response)
     project = ProjectRecord(id=str(uuid.uuid4()), **payload.model_dump())
     await store.save_project(project)
     return project
 
 
 @app.get("/api/projects/{project_id}")
-async def get_project(project_id: str):
+async def get_project(project_id: str, response: Response):
+    mark_legacy_response(response)
     project = await store.get_project(project_id)
     if not project:
         raise HTTPException(404, "资料空间不存在")
@@ -180,7 +201,8 @@ async def get_project(project_id: str):
 
 
 @app.patch("/api/projects/{project_id}")
-async def patch_project(project_id: str, payload: ProjectPatch):
+async def patch_project(project_id: str, payload: ProjectPatch, response: Response):
+    require_legacy_workspace_write(response)
     project = await store.get_project(project_id)
     if not project:
         raise HTTPException(404, "资料空间不存在")
@@ -192,21 +214,24 @@ async def patch_project(project_id: str, payload: ProjectPatch):
 
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, response: Response):
+    require_legacy_workspace_write(response)
     if not await store.delete_project(project_id):
         raise HTTPException(404, "资料空间不存在")
     return {"deleted": True}
 
 
 @app.get("/api/projects/{project_id}/sources")
-async def list_project_sources(project_id: str):
+async def list_project_sources(project_id: str, response: Response):
+    mark_legacy_response(response)
     if not await store.get_project(project_id):
         raise HTTPException(404, "资料空间不存在")
     return await store.list_sources(project_id)
 
 
 @app.post("/api/projects/{project_id}/sources/text")
-async def add_text_source(project_id: str, payload: SourceTextCreate):
+async def add_text_source(project_id: str, payload: SourceTextCreate, response: Response):
+    require_legacy_workspace_write(response)
     if not await store.get_project(project_id):
         raise HTTPException(404, "资料空间不存在")
     raw = payload.content.encode("utf-8")
@@ -224,7 +249,8 @@ async def add_text_source(project_id: str, payload: SourceTextCreate):
 
 
 @app.post("/api/projects/{project_id}/sources/url")
-async def add_url_source(project_id: str, payload: SourceURLCreate):
+async def add_url_source(project_id: str, payload: SourceURLCreate, response: Response):
+    require_legacy_workspace_write(response)
     if not await store.get_project(project_id):
         raise HTTPException(404, "资料空间不存在")
     try:
@@ -248,7 +274,8 @@ async def add_url_source(project_id: str, payload: SourceURLCreate):
 
 
 @app.post("/api/projects/{project_id}/sources/file")
-async def add_file_source(project_id: str, file: UploadFile = File(...)):
+async def add_file_source(project_id: str, response: Response, file: UploadFile = File(...)):
+    require_legacy_workspace_write(response)
     if not await store.get_project(project_id):
         raise HTTPException(404, "资料空间不存在")
     filename = (file.filename or "资料").split("/")[-1].split("\\")[-1]
@@ -274,7 +301,8 @@ async def add_file_source(project_id: str, file: UploadFile = File(...)):
 
 
 @app.delete("/api/projects/{project_id}/sources/{source_id}")
-async def delete_project_source(project_id: str, source_id: str):
+async def delete_project_source(project_id: str, source_id: str, response: Response):
+    require_legacy_workspace_write(response)
     if not await store.delete_source(project_id, source_id):
         raise HTTPException(404, "资料不存在")
     return {"deleted": True}
@@ -314,58 +342,98 @@ async def export_run(run_id: str, format: str = "markdown"):
 
 
 @app.post("/api/runs/{run_id}/cancel")
-async def cancel_run(run_id: str):
-    run = await orchestrator.cancel(run_id)
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
-    return run
+async def cancel_run(
+    run_id: str,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    return await execute_idempotent_run_action(
+        store, f"runs:{run_id}:cancel", idempotency_key, {}, lambda: orchestrator.cancel(run_id), response
+    )
 
 
 @app.post("/api/runs/{run_id}/advance")
-async def advance_run(run_id: str, request: DiscussionAction):
-    run = await orchestrator.advance(run_id, request)
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
-    return run
+async def advance_run(
+    run_id: str,
+    request: DiscussionAction,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    return await execute_idempotent_run_action(
+        store,
+        f"runs:{run_id}:advance",
+        idempotency_key,
+        request.model_dump(mode="json"),
+        lambda: orchestrator.advance(run_id, request),
+        response,
+    )
 
 
 @app.post("/api/runs/{run_id}/interject")
-async def interject_run(run_id: str, request: DiscussionAction):
-    run = await orchestrator.interject(run_id, request)
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
-    return run
+async def interject_run(
+    run_id: str,
+    request: DiscussionAction,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    return await execute_idempotent_run_action(
+        store,
+        f"runs:{run_id}:interject",
+        idempotency_key,
+        request.model_dump(mode="json"),
+        lambda: orchestrator.interject(run_id, request),
+        response,
+    )
 
 
 @app.post("/api/runs/{run_id}/retry-turn")
-async def retry_run_turn(run_id: str):
-    run = await orchestrator.retry_turn(run_id)
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
-    return run
+async def retry_run_turn(
+    run_id: str,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    return await execute_idempotent_run_action(
+        store, f"runs:{run_id}:retry-turn", idempotency_key, {}, lambda: orchestrator.retry_turn(run_id), response
+    )
 
 
 @app.post("/api/runs/{run_id}/resume")
-async def resume_run(run_id: str, limits: RunLimits):
+async def resume_run(
+    run_id: str,
+    limits: RunLimits,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     try:
-        run = await orchestrator.resume_with_limits(run_id, limits)
+        return await execute_idempotent_run_action(
+            store,
+            f"runs:{run_id}:resume",
+            idempotency_key,
+            limits.model_dump(mode="json"),
+            lambda: orchestrator.resume_with_limits(run_id, limits),
+            response,
+        )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
-    return run
 
 
 @app.post("/api/runs/{run_id}/summarize")
-async def summarize_run(run_id: str):
-    run = await orchestrator.summarize(run_id)
-    if not run:
-        raise HTTPException(404, "运行记录不存在")
-    return run
+async def summarize_run(
+    run_id: str,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    return await execute_idempotent_run_action(
+        store, f"runs:{run_id}:summarize", idempotency_key, {}, lambda: orchestrator.summarize(run_id), response
+    )
 
 
 @app.post("/api/runs/{run_id}/rerun")
-async def rerun(run_id: str):
+async def rerun(
+    run_id: str,
+    response: Response,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
     source = await store.get_run(run_id)
     if not source:
         raise HTTPException(404, "运行记录不存在")
@@ -396,22 +464,32 @@ async def rerun(run_id: str):
                 timeout_seconds=source.finalizer_assignment.timeout_seconds,
             ),
         )
-    return await orchestrator.start(
-        RunCreate(
-            question=source.question,
-            mode=source.mode,
-            provider_id=source.provider_id,
-            model=source.model,
-            assignment_config=assignment_config,
-            limits=source.limits,
-            project_id=source.project_id,
-            source_ids=[item.id for item in source.source_snapshots],
-            include_project_history=True,
-            template_id=source.template_id,
-        ),
-        frozen_sources=source.source_snapshots,
-        frozen_project_name=source.project_name,
-        frozen_project_context=source.project_context,
+    async def start_rerun():
+        return await orchestrator.start(
+            RunCreate(
+                question=source.question,
+                mode=source.mode,
+                provider_id=source.provider_id,
+                model=source.model,
+                assignment_config=assignment_config,
+                limits=source.limits,
+                project_id=source.project_id,
+                source_ids=[item.id for item in source.source_snapshots],
+                include_project_history=True,
+                template_id=source.template_id,
+            ),
+            frozen_sources=source.source_snapshots,
+            frozen_project_name=source.project_name,
+            frozen_project_context=source.project_context,
+        )
+
+    return await execute_idempotent_run_action(
+        store,
+        f"runs:{run_id}:rerun",
+        idempotency_key,
+        {"source_run_id": run_id},
+        start_rerun,
+        response,
     )
 
 

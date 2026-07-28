@@ -22,6 +22,7 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
   let createPayload: Record<string, unknown> | null = null;
   await page.route("**/api/runs", (route) => {
+    expect(route.request().headers()["idempotency-key"]).toBeTruthy();
     createPayload = route.request().postDataJSON();
     return route.fulfill({ json: { id: "demo-fixture" } });
   });
@@ -56,6 +57,30 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   await page.getByRole("button", { name: /进入圆桌/ }).click();
   await page.waitForURL("**/runs/demo-fixture");
   expect(createPayload).toEqual({ question: "这个演示请求不应携带资料空间字段", mode: "standard", use_saved_assignments: true, template_id: "open_discussion" });
+});
+
+test("创建请求断线后使用同一幂等键重试", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  const keys: string[] = [];
+  let attempts = 0;
+  await page.route("**/api/runs", async (route) => {
+    attempts += 1;
+    keys.push(route.request().headers()["idempotency-key"] || "");
+    if (attempts === 1) return route.abort("connectionreset");
+    return route.fulfill({ json: { id: "idempotent-retry-fixture" } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByPlaceholder("写下需要四席共同审议的问题").fill("网络断开后不能重复创建任务");
+  await page.getByRole("button", { name: /进入圆桌/ }).click();
+
+  await page.waitForURL("**/runs/idempotent-retry-fixture");
+  expect(attempts).toBe(2);
+  expect(keys[0]).toBeTruthy();
+  expect(keys[1]).toBe(keys[0]);
 });
 
 test("已有真实 Provider 时引导全 Mock 五席进入席位配置", async ({ page }) => {

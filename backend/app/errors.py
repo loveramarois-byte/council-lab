@@ -19,6 +19,7 @@ STATUS_ERROR_CODES = {
     403: "ACTION_NOT_ALLOWED",
     404: "RESOURCE_NOT_FOUND",
     409: "STATE_CONFLICT",
+    410: "FEATURE_RETIRED",
     413: "PAYLOAD_TOO_LARGE",
     415: "UNSUPPORTED_MEDIA_TYPE",
     422: "VALIDATION_ERROR",
@@ -39,7 +40,13 @@ def _request_id(request: Request) -> str:
     return value if isinstance(value, str) and value else uuid.uuid4().hex
 
 
-def _error_response(request: Request, status_code: int, code: str, message: str) -> JSONResponse:
+def _error_response(
+    request: Request,
+    status_code: int,
+    code: str,
+    message: str,
+    extra_headers: dict[str, str] | None = None,
+) -> JSONResponse:
     request_id = _request_id(request)
     return JSONResponse(
         status_code=status_code,
@@ -51,7 +58,7 @@ def _error_response(request: Request, status_code: int, code: str, message: str)
                 "request_id": request_id,
             },
         },
-        headers={"X-Council-Request-ID": request_id},
+        headers={**(extra_headers or {}), "X-Council-Request-ID": request_id},
     )
 
 
@@ -73,7 +80,7 @@ def install_error_handling(app: FastAPI) -> None:
     async def http_error_handler(request: Request, exc: HTTPException) -> JSONResponse:
         message = exc.detail if isinstance(exc.detail, str) else "请求无法完成。"
         code = STATUS_ERROR_CODES.get(exc.status_code, "REQUEST_FAILED")
-        return _error_response(request, exc.status_code, code, message)
+        return _error_response(request, exc.status_code, code, message, exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, _: RequestValidationError) -> JSONResponse:

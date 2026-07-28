@@ -28,11 +28,15 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 业务记录和 checkpoint 分库，避免两个写入器争用同一个 SQLite 写锁。启动时扫描 `queued` 与 `running` Run：存在有效 checkpoint 且凭据可用时，工作流使用同一 `thread_id` 续跑；业务库已完整保存的席位会被跳过，避免 checkpoint 落后造成重复计费。缺少 checkpoint 或凭据时不回退 Mock，而是进入带原因的可恢复失败状态。`awaiting_final_input` 会保持等待，不会在重启后自行总结。
 
+业务库使用 `PRAGMA user_version` 执行顺序迁移。打开已有且版本较旧的库时，先通过 SQLite backup API 在同一数据目录的 `backups/` 创建一致性副本，再在事务中逐版本升级；失败时关闭连接、移除 WAL/SHM sidecar 并恢复副本。只保留最近 5 份 schema 迁移备份，诊断数据同时报告当前/支持版本和备份数量。该机制用于升级回滚，不替代用户自己的异机备份。
+
 上下文管理将不可变的完整公开日志与每次模型调用使用的工作上下文分离。工作上下文始终优先保留原始问题、最新用户插话和最近发言；超出模式预算时，从较早内容中确定性选取最旧、中段和较新锚点并裁剪。该过程不调用模型，也不是语义摘要。默认单次上下文预算为 Quick 1800、Standard 4000、Rigorous 7000 Token。OpenAI 和 CC Switch 中已知的 OpenAI-compatible 模型使用匹配的 `tiktoken`；未知模型使用预留余量的保守 UTF-8 估算。Run 快照和界面会记录“精确”或“估算”，不会把 fallback 冒充 Provider usage。原始发言不会因裁剪而从 Run 中删除。
 
 模型适配层保持薄接口：`health_check`、`list_models`、`generate` 和 `aclose`。Provider 注册表集中维护官方地址、保守的离线推荐、协议、能力和文档入口；远程 `/models` 成功时使用账号实际目录，失败时可显示明确标注的离线推荐。`model_source` 区分 Provider 实时目录、CC Switch 近期成功记录、内置 Mock、离线推荐和无目录，避免把推荐值冒充实时可用模型。Mock Provider 让自动化测试无需密钥。自动协议策略先尝试 Responses，只有明确的 404/405/501 才回退 Chat Completions；只有声明支持原生 reasoning 的 Responses Provider 才接收 effort，普通 Chat Completions Provider 只应用 Council 的上下文和流程档位。
 
-资料空间已从当前用户界面和新建审议主流程移除。后端暂时保留旧项目、来源和 Run 快照结构，仅用于升级兼容与历史审议展示，避免更新时误删已有数据；新建审议不再读取或提交资料空间字段。
+资料空间已从当前用户界面和新建审议主流程移除。历史项目、来源和 Run 快照仍可读取，但相关创建、修改、上传、URL 抓取和删除 API 默认返回 `410 FEATURE_RETIRED`；新建 Run 携带旧 `project_id/source_ids` 也会被拒绝。仅升级排障可显式设置 `COUNCIL_ENABLE_LEGACY_WORKSPACE=1` 临时恢复写入，生产环境不应长期启用。
+
+会产生模型调用或改变 Run 状态的 POST 接受 8–128 字符 `Idempotency-Key`。服务端持久保存作用域、请求指纹、执行状态和完成后的 Run 响应：同键同载荷返回原结果并标记 `Idempotency-Replayed: true`，同键不同载荷返回 `409`，并发重复或尚未过期的执行返回 `409`。前端只对网络级失败用同一键重试一次，不重试明确的 HTTP 业务错误。
 
 手机入口由 Next.js 对局域网开放，FastAPI 和 CC Switch 继续只监听 loopback。启动器分别生成电脑引导令牌和手机配对令牌，手机令牌不能申请电脑端权限；令牌经 URL fragment 到达对应浏览器，成功后换取不包含原始令牌的 HttpOnly、SameSite=Strict 签名会话。会话有 12 小时上限，绑定当前启动实例，可由电脑端立即撤销。配对接口限制失败频率，只接受当前 Host 的同源 JSON 请求，并在读取流时限制请求体。所有已配对状态修改同样经过 Origin 和 Host 校验。完整边界、普通 HTTP 剩余风险和滥用假设见 `docs/THREAT_MODEL.md`。
 

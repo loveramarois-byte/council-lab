@@ -43,7 +43,7 @@ from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProv
 from app.reports import run_html, run_markdown
 from app.runtime_config import assignment_config_is_valid, restore_provider_profiles
 from app.store import Store, serialize_public_provider
-from evals.scoring import aggregate_execution, blind_labels, load_dataset, summarize_human_reviews
+from evals.scoring import STRATEGIES, aggregate_execution, blind_labels, load_dataset, summarize_human_reviews
 from evals.run_benchmark import estimate_provider_cost, provider_reality
 
 
@@ -1460,9 +1460,10 @@ def test_benchmark_dataset_is_balanced_and_blinding_is_deterministic():
         "risk": 3,
         "planning": 3,
     }
-    labels = blind_labels("run-1", "case-1", ["direct", "same_model_council", "cross_model_council"])
-    assert labels == blind_labels("run-1", "case-1", ["direct", "same_model_council", "cross_model_council"])
-    assert set(labels.values()) == {"A", "B", "C"}
+    variants = [f"{strategy}:r{repeat}" for strategy in STRATEGIES for repeat in range(1, 4)]
+    labels = blind_labels("run-1", "case-1", variants)
+    assert labels == blind_labels("run-1", "case-1", variants)
+    assert len(set(labels.values())) == 15
 
 
 def test_benchmark_execution_and_human_scores_remain_separate():
@@ -1480,6 +1481,7 @@ def test_benchmark_execution_and_human_scores_remain_separate():
     execution = aggregate_execution(result["cases"])
     assert execution["direct"]["model_calls"] == 1
     assert execution["cross_model_council"]["failure_rate"] == 0
+    assert execution["direct"]["tokens_per_run"]["samples"] == 1
 
     score = {field: 4 for field in ["accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty"]}
     reviews = {"run_id": "eval-run", "reviews": [{
@@ -1537,6 +1539,56 @@ def test_quality_claims_require_all_real_providers_and_complete_blind_review():
     summary = summarize_human_reviews(result, {"run_id": "partial-review", "reviews": [{"case_id": "case-1", "scores": {"A": score}}]})
     assert summary["complete_blind_review"] is False
     assert summary["quality_claims_allowed"] is False
+
+
+def test_repeated_five_strategy_review_can_complete():
+    score = {field: 4 for field in ["accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty"]}
+    variants = []
+    scores = {}
+    citation_checks = {}
+    unsupported_claims = {}
+    for strategy_index, strategy in enumerate(STRATEGIES):
+        for repetition in (1, 2):
+            label = chr(65 + strategy_index * 2 + repetition - 1)
+            variants.append({
+                "strategy": strategy,
+                "repetition": repetition,
+                "blind_label": label,
+                "status": "completed",
+                "answer": f"{strategy} answer {repetition}",
+            })
+            scores[label] = score
+            citation_checks[label] = {"supported": 1, "total": 1}
+            unsupported_claims[label] = 0
+    result = {
+        "run_id": "repeated-eval",
+        "benchmark_version": "council-benchmark-v1",
+        "strategies": list(STRATEGIES),
+        "repetitions": 2,
+        "quality_claims_allowed": True,
+        "cases": [{"id": "case-1", "variants": variants}],
+    }
+    reviews = {"run_id": "repeated-eval", "reviews": [{
+        "case_id": "case-1",
+        "scores": scores,
+        "citation_checks": citation_checks,
+        "unsupported_claims": unsupported_claims,
+        "preferred": "A",
+    }]}
+
+    summary = summarize_human_reviews(result, reviews)
+    assert summary["complete_blind_review"] is True
+    assert summary["quality_claims_allowed"] is True
+    assert summary["quality"]["self_refine"]["score_distributions"]["accuracy"]["samples"] == 2
+
+    duplicate_repeat = {
+        **result,
+        "cases": [{
+            "id": "case-1",
+            "variants": [{**variant, "repetition": 1} if variant["strategy"] == "direct" else variant for variant in variants],
+        }],
+    }
+    assert summarize_human_reviews(duplicate_repeat, reviews)["quality_claims_allowed"] is False
 
 
 def test_cost_estimation_requires_explicit_prices_for_every_model():
