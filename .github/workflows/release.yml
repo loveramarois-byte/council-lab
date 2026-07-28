@@ -211,12 +211,15 @@ jobs:
           Copy-Item -Recurse $package $rollbackTarget
           Set-Content -Encoding ASCII -Path (Join-Path $rollbackTarget "VERSION") -Value "0.0.1"
           Set-Content -Encoding ASCII -Path (Join-Path $rollbackTarget "previous-version.txt") -Value "keep me"
-          $locked = [System.IO.File]::Open((Join-Path $package "README-FIRST.txt"), "Open", "Read", "None")
+          $lockedSource = Join-Path $package "force-copy-failure.txt"
+          Set-Content -Encoding ASCII -Path $lockedSource -Value "this source-only file must be copied"
+          $locked = [System.IO.File]::Open($lockedSource, "Open", "Read", "None")
           try {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $package "runtime\update-council.ps1") `
               -NewRoot $package -TargetRoot $rollbackTarget -Stopper (Join-Path $rollbackTarget "runtime\stop-council.ps1") `
               -LogFile (Join-Path $env:RUNNER_TEMP "rollback.log") -ResultFile (Join-Path $env:RUNNER_TEMP "rollback-result.json")
             $rollbackExit = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
           } finally {
             $locked.Dispose()
           }
