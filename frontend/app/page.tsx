@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUp, Check, ChevronRight, FileText, FolderOpen, Library, LoaderCircle, Plus, ShieldCheck, Sparkles, Zap } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowUp, Bot, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Settings2, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AgentAssignmentsConfig, api, DeliberationTemplate, Project, ProjectSource, Provider } from "../lib/api";
+import { AgentAssignmentsConfig, api, DeliberationTemplate, providerIsReady, Provider } from "../lib/api";
 
 const modes = [
   { id: "quick", label: "引导", detail: "4 席 · 1.8k 上下文", icon: Zap },
@@ -16,55 +16,79 @@ export default function HomePage() {
   const router = useRouter();
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState("standard");
-  const [provider, setProvider] = useState<Provider | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [assignments, setAssignments] = useState<AgentAssignmentsConfig | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [sources, setSources] = useState<ProjectSource[]>([]);
-  const [sourceIds, setSourceIds] = useState<string[]>([]);
   const [templates, setTemplates] = useState<DeliberationTemplate[]>([]);
   const [templateId, setTemplateId] = useState("open_discussion");
-  const [includeHistory, setIncludeHistory] = useState(true);
+  const [demoAcknowledged, setDemoAcknowledged] = useState(false);
+  const [configState, setConfigState] = useState<"loading" | "ready" | "error">("loading");
+  const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
-  const [loadingSources, setLoadingSources] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    Promise.all([api.providers(), api.assignments(), api.projects(), api.templates()]).then(([items, config, spaces, templateItems]) => {
+  const loadConfiguration = useCallback(async () => {
+    setConfigState("loading");
+    setLoadError("");
+    try {
+      const [items, config, templateItems] = await Promise.all([api.providers(), api.assignments(), api.templates()]);
+      setProviders(items);
       setAssignments(config);
-      setProjects(spaces);
       setTemplates(templateItems);
-      const primary = items.find((item) => item.id === config.seats[0]?.provider_id);
-      setProvider(primary || items.find((item) => item.id === "mock") || items[0]);
-      if (spaces.length) setProjectId(spaces[0].id);
-    }).catch(() => setProvider({ id: "mock", preset_id: "mock", display_name: "本地演示", description: "不联网", provider_type: "mock", protocol_mode: "auto", base_url: "", default_model: "council-mock", reasoning_effort: "low", available_models: ["council-mock"], model_source: "built_in", local_only: true, has_api_key: false, credential_source: "none", supports_api_key: false, requires_api_key: false, is_active: true }));
+      setDemoAcknowledged(false);
+      setConfigState("ready");
+    } catch (nextError) {
+      setConfigState("error");
+      setLoadError(nextError instanceof Error ? nextError.message : "无法读取本地配置");
+    }
   }, []);
 
-  useEffect(() => {
-    if (!projectId) { setSources([]); setSourceIds([]); return; }
-    setLoadingSources(true);
-    api.projectSources(projectId).then((items) => {
-      setSources(items);
-      setSourceIds(items.map((item) => item.id));
-    }).catch(() => { setSources([]); setSourceIds([]); }).finally(() => setLoadingSources(false));
-  }, [projectId]);
+  useEffect(() => { void loadConfiguration(); }, [loadConfiguration]);
 
   const selectedMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode]);
   const selectedTemplate = templates.find((item) => item.id === templateId);
-  const selectedProject = projects.find((item) => item.id === projectId);
-  const toggleSource = (id: string) => setSourceIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const allAssignments = assignments ? [...assignments.seats, assignments.finalizer] : [];
+  const hasFiveAssignments = allAssignments.length === 5;
+  const mockSeatCount = allAssignments.filter((item) => item.provider_id === "mock").length;
+  const hasDemoSeats = mockSeatCount > 0;
+  const configurationRunnable = configState === "ready" && hasFiveAssignments && allAssignments.every((assignment) => {
+    if (assignment.provider_id === "mock") return true;
+    const provider = providers.find((item) => item.id === assignment.provider_id);
+    return Boolean(provider && providerIsReady(provider));
+  });
+  const configurationReady = configurationRunnable && mockSeatCount === 0;
+  const unreadyRealSeatCount = allAssignments.filter((assignment) => {
+    if (assignment.provider_id === "mock") return false;
+    const provider = providers.find((item) => item.id === assignment.provider_id);
+    return !provider || !providerIsReady(provider);
+  }).length;
+  const realProviderReady = providers.some(providerIsReady);
+  const setupHref = realProviderReady ? "/settings/agents" : "/settings/providers";
+  const setupLabel = realProviderReady ? "配置五个席位" : "连接真实 AI";
+  const activeProviderNames = assignments
+    ? new Set(allAssignments.map((assignment) => providers.find((item) => item.id === assignment.provider_id)?.display_name || assignment.provider_id))
+    : new Set<string>();
+  const demoDisclosure = mockSeatCount === 5
+    ? "回复为预设示例，不调用真实 AI。"
+    : `${mockSeatCount} 个席位使用预设示例，其余席位调用已配置的真实 AI。`;
+  const topStatus = configState === "loading"
+    ? "正在读取席位"
+    : configState === "error"
+      ? "席位配置读取失败"
+      : configurationReady
+        ? "五席真实 AI 已就绪"
+        : configurationRunnable
+          ? `${mockSeatCount} 个本地演示席 · 需确认`
+          : "席位配置未就绪";
 
   const submit = async () => {
-    if (question.trim().length < 3 || sending) return;
-    setSending(true); setError("");
+    if (question.trim().length < 3 || sending || configState !== "ready" || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)) return;
+    setSending(true);
+    setError("");
     try {
       const run = await api.createRun({
         question: question.trim(),
         mode,
         use_saved_assignments: true,
-        project_id: projectId || undefined,
-        source_ids: projectId ? sourceIds : undefined,
-        include_project_history: projectId ? includeHistory : false,
         template_id: templateId,
       });
       router.push(`/runs/${run.id}`);
@@ -75,35 +99,46 @@ export default function HomePage() {
   };
 
   return <div className="page-wrap home-page">
-    <header className="topbar"><div><span className="top-kicker">工作台 / 新建审议</span><span className="top-title">Council 圆桌</span></div><div className="top-meta"><span className="status-dot" />本地优先 <span className="meta-divider" /> <span>{provider?.display_name || "连接中"}</span></div></header>
+    <header className="topbar"><div><span className="top-kicker">工作台 / 新建审议</span><span className="top-title">Council 圆桌</span></div><div className={`top-meta ${hasDemoSeats || configState === "error" ? "demo" : ""}`}><span className="status-dot" />{topStatus}</div></header>
 
     <section className="home-command">
       <div><h1>四种视角，你也在场。</h1><p>依次发言、公开回应，由你确认后再形成答案。</p></div>
       <div className="council-sequence" aria-label="四席顺序"><span>析</span><ChevronRight size={12} /><span>诘</span><ChevronRight size={12} /><span>构</span><ChevronRight size={12} /><span>观</span><ChevronRight size={12} /><strong>答</strong></div>
     </section>
 
-    <section className="home-workbench" aria-label="新建审议">
-      <aside className="context-setup">
-        <div className="setup-title"><Library size={15} /><strong>讨论上下文</strong><Link href="/projects" title="管理资料空间" aria-label="管理资料空间"><Plus size={15} /></Link></div>
-        <label className="compact-field"><span>资料空间</span><select aria-label="资料空间" value={projectId} onChange={(event) => setProjectId(event.target.value)}><option value="">不使用资料空间</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
-        <label className="compact-field"><span>审议模板</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select><small>{selectedTemplate?.description || "开放讨论"}</small></label>
-        <div className="source-picker">
-          <div><span>本次资料</span>{projectId && sources.length > 0 && <button type="button" onClick={() => setSourceIds(sourceIds.length === sources.length ? [] : sources.map((item) => item.id))}>{sourceIds.length === sources.length ? "清空" : "全选"}</button>}</div>
-          <div className="source-picker-list">
-            {loadingSources ? <span className="picker-empty"><LoaderCircle className="spin" size={13} />加载资料</span> : !projectId ? <span className="picker-empty"><FolderOpen size={14} />未选择空间</span> : !sources.length ? <Link className="picker-empty" href="/projects"><Plus size={14} />添加第一份资料</Link> : sources.map((source) => <label key={source.id} className="source-choice"><input type="checkbox" checked={sourceIds.includes(source.id)} onChange={() => toggleSource(source.id)} /><span><FileText size={13} />{source.title}</span><Check size={12} /></label>)}
-          </div>
+    <section className={`home-workbench ${hasDemoSeats ? "demo-workbench" : ""}`} aria-label="新建审议">
+      {configState === "loading" ? <div className="first-run-gate" role="status" aria-label="正在读取席位配置">
+        <div className="first-run-mark"><LoaderCircle className="spin" size={23} /></div>
+        <div className="first-run-copy"><span className="section-label">席位检查</span><h2>正在读取五席配置。</h2><p>配置确认前不会开放提问，避免使用尚未就绪或来源不明的席位。</p></div>
+      </div> : configState === "error" ? <div className="first-run-gate" role="alert" aria-label="席位配置读取失败">
+        <div className="first-run-mark"><CircleAlert size={23} /></div>
+        <div className="first-run-copy"><span className="section-label">读取失败</span><h2>暂时无法确认五席配置。</h2><p>{loadError}。配置恢复前不会开放提问。</p></div>
+        <div className="first-run-actions"><button type="button" className="send-button" onClick={() => void loadConfiguration()}><RefreshCw size={15} />重新读取</button></div>
+      </div> : !configurationRunnable ? <div className="first-run-gate" role="region" aria-label="席位配置未就绪">
+        <div className="first-run-mark"><CircleAlert size={23} /></div>
+        <div className="first-run-copy"><span className="section-label">尚未就绪</span><h2>五席配置还不能运行。</h2><p>{unreadyRealSeatCount > 0 ? `${unreadyRealSeatCount} 个真实 AI 席位的 Provider 尚未通过就绪检查。` : "席位数量或 Provider 引用不完整。"} 请先检查 Provider，再确认五个席位的选择。</p></div>
+        <div className="first-run-actions">
+          <Link className="send-button" href="/settings/providers"><Settings2 size={15} />检查 Provider<ChevronRight size={14} /></Link>
+          <Link className="quiet-button" href="/settings/agents">调整席位</Link>
         </div>
-        <label className={`history-toggle ${!projectId ? "disabled" : ""}`}><input type="checkbox" checked={includeHistory} disabled={!projectId} onChange={(event) => setIncludeHistory(event.target.checked)} /><span className={`toggle ${includeHistory && projectId ? "on" : ""}`} /><span>带入最近 3 次结论</span></label>
-      </aside>
-
-      <div className="composer-section">
-        <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedProject ? selectedProject.name : "独立审议"} · {selectedTemplate?.name || "开放讨论"}</span></div><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
-        <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} rows={5} />
-        <div className="composer-footer"><span className="source-summary">{projectId ? `${sourceIds.length} 份资料 · ${includeHistory ? "包含历史" : "不含历史"}` : "不附加资料"}</span><button type="button" className="send-button" disabled={question.trim().length < 3 || sending} onClick={submit}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
-        {error && <p className="form-error" role="alert">{error}</p>}
-      </div>
+      </div> : hasDemoSeats && !demoAcknowledged ? <div className="first-run-gate" role="region" aria-label="本地演示席确认">
+        <div className="first-run-mark"><Bot size={23} /></div>
+        <div className="first-run-copy"><span className="section-label">开始之前</span><h2>{mockSeatCount === 5 ? "当前五席还是本地演示。" : `当前五席含 ${mockSeatCount} 个本地演示席。`}</h2><p>{demoDisclosure} 正式使用前，请连接模型并为五个席位选择已就绪的 Provider 与模型。</p></div>
+        <div className="first-run-actions">
+          <Link className="send-button" href={setupHref}><Settings2 size={15} />{setupLabel}<ChevronRight size={14} /></Link>
+          <button type="button" className="quiet-button" onClick={() => setDemoAcknowledged(true)}>{mockSeatCount === 5 ? "仅体验本地演示" : "接受混合配置并继续"}</button>
+        </div>
+      </div> : <>
+        {hasDemoSeats && <div className="demo-disclosure"><CircleAlert size={15} /><span><strong>{mockSeatCount === 5 ? "本地演示模式" : `混合配置 · ${mockSeatCount} 个本地演示席`}</strong> · {demoDisclosure}</span><Link href={setupHref}>{setupLabel}<ChevronRight size={13} /></Link></div>}
+        <div className="composer-section">
+          <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
+          <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} rows={5} />
+          <div className="composer-footer"><span className="source-summary">四席依次讨论 · 你可全程参与</span><button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={submit}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
+          {error && <p className="form-error" role="alert">{error}</p>}
+        </div>
+      </>}
     </section>
 
-    <section className="mode-section"><div className="mode-heading"><div><span className="section-label">运行档位</span><span className="section-hint">控制上下文与推理预算</span></div><span className="section-hint">正常 5 次调用 · 失败最多重试 3 次</span></div><div className="mode-grid">{modes.map(({ id, label, detail, icon: Icon }) => <button key={id} type="button" className={`mode-option ${mode === id ? "selected" : ""}`} onClick={() => setMode(id)}><span className="mode-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>{detail}</small></span><span className="radio-dot" /></button>)}</div><div className="estimate-line"><span><span className="estimate-bar" />预计 {selectedMode.detail}</span><span>{assignments ? `${new Set(assignments.seats.map((item) => item.provider_id)).size} 个 Provider 配置` : provider?.display_name || "席位配置加载中"}</span></div></section>
+    <section className="mode-section"><div className="mode-heading"><div><span className="section-label">运行档位</span><span className="section-hint">控制上下文与推理预算</span></div><span className="section-hint">正常 5 次调用 · 失败最多重试 3 次</span></div><div className="mode-grid">{modes.map(({ id, label, detail, icon: Icon }) => <button key={id} type="button" className={`mode-option ${mode === id ? "selected" : ""}`} onClick={() => setMode(id)}><span className="mode-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>{detail}</small></span><span className="radio-dot" /></button>)}</div><div className="estimate-line"><span><span className="estimate-bar" />预计 {selectedMode.detail}</span><span>{configState === "loading" ? "席位配置加载中" : configState === "error" ? "席位配置读取失败" : configurationReady ? `${activeProviderNames.size} 个 Provider · 五席真实 AI` : configurationRunnable ? `${mockSeatCount} 个本地演示席 · 需明确确认` : "席位配置未就绪"}</span></div></section>
   </div>;
 }

@@ -23,6 +23,7 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Provider } from "../../../lib/api";
 
@@ -358,7 +359,9 @@ export default function ProvidersSettingsPage() {
               {current.docs_url && <a className="provider-doc-link" href={current.docs_url} target="_blank" rel="noreferrer">官方文档 <ExternalLink size={12} /></a>}
               {current.id !== "mock" && current.id !== "ccswitch" && <button className="quiet-button" title="保存并获取模型" onClick={fetchModels} disabled={Boolean(busy)}>{busy === "models" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}保存并获取模型</button>}
               {current.id === "ccswitch" && <button className="quiet-button" title="检测本地路由" onClick={detectCCSwitch} disabled={Boolean(busy)}>{busy === "detect" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}检测本地路由</button>}
-              <button className="send-button" onClick={testConnection} disabled={Boolean(busy)}>{busy === "test" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存并测试</button>
+              {["connected", "route_connected_upstream_busy"].includes(connectionStatus)
+                ? <Link className="send-button" href="/settings/agents"><Link2 size={15} />下一步：配置五个席位<ChevronRight size={14} /></Link>
+                : <button className="send-button" onClick={testConnection} disabled={Boolean(busy)}>{busy === "test" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存并测试</button>}
             </footer>
           </section> : <div className="provider-config-loading"><LoaderCircle className="spin" size={22} />正在载入供应商</div>}
         </div>

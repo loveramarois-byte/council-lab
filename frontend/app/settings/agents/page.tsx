@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Check, LoaderCircle, Save, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, Check, ChevronRight, LoaderCircle, Save, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { AgentAssignment, AgentAssignmentsConfig, api, Provider } from "../../../lib/api";
+import { AgentAssignment, AgentAssignmentsConfig, api, providerIsReady, Provider } from "../../../lib/api";
 
 const roles = [
   ["analyst", "析理", "拆解目标、条件和判断标准"],
@@ -18,6 +18,7 @@ export default function AgentsSettingsPage() {
   const [config, setConfig] = useState<AgentAssignmentsConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [setupComplete, setSetupComplete] = useState(false);
 
   useEffect(() => {
     Promise.all([api.providers(), api.assignments()]).then(([nextProviders, nextConfig]) => {
@@ -35,12 +36,25 @@ export default function AgentsSettingsPage() {
     next[index] = { ...next[index], ...patch, ...(provider ? { model: provider.default_model || provider.available_models[0] || "" } : {}) };
     setConfig({ seats: next.slice(0, 4), finalizer: next[4] });
     setMessage("");
+    setSetupComplete(false);
   };
 
   const save = async () => {
     if (!config || saving) return;
     setSaving(true); setMessage("");
-    try { setConfig(await api.saveAssignments(config)); setMessage("五个席位的配置已保存，新建圆桌时会固化为运行快照。"); }
+    try {
+      const saved = await api.saveAssignments(config);
+      const savedAssignments = [...saved.seats, saved.finalizer];
+      const allRealAndReady = savedAssignments.length === 5 && savedAssignments.every((item) => {
+        const provider = providers.find((candidate) => candidate.id === item.provider_id);
+        return item.provider_id !== "mock" && Boolean(provider && providerIsReady(provider));
+      });
+      setConfig(saved);
+      setSetupComplete(allRealAndReady);
+      setMessage(allRealAndReady
+        ? "五个真实 AI 席位已保存，新建圆桌时会固化为运行快照。"
+        : "席位配置已保存，但仍包含本地演示席或未就绪 Provider。完成真实 AI 配置后再开始正式提问。");
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : "席位配置保存失败"); }
     finally { setSaving(false); }
   };
@@ -64,6 +78,6 @@ export default function AgentsSettingsPage() {
         </div>;
       })}
     </div>
-    <div className="settings-note"><SlidersHorizontal size={17} /><span>{message || "Provider 凭据不会进入席位配置或运行数据库；这里只保存引用、模型与公开参数。"}</span><button className="send-button" onClick={save} disabled={!config || saving}>{saving ? <LoaderCircle className="spin" size={15} /> : message.startsWith("五个") ? <Check size={15} /> : <Save size={15} />}{saving ? "保存中" : "保存席位"}</button></div>
+    <div className="settings-note"><SlidersHorizontal size={17} /><span>{message || "Provider 凭据不会进入席位配置或运行数据库；这里只保存引用、模型与公开参数。"}</span>{setupComplete ? <Link className="send-button" href="/"><Check size={15} />完成，开始提问<ChevronRight size={14} /></Link> : <button className="send-button" onClick={save} disabled={!config || saving}>{saving ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}{saving ? "保存中" : "保存席位"}</button>}</div>
   </div>;
 }

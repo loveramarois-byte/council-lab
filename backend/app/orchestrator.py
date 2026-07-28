@@ -40,9 +40,9 @@ MODE_WORKFLOW_EFFORT = {
 }
 
 CCSWITCH_EFFORT_FALLBACKS = {
-    "ultra": [("ultra", 0.375), ("high", 0.375), ("low", 0.25)],
-    "high": [("high", 0.625), ("low", 0.375)],
-    "low": [("low", 1.0)],
+    "ultra": ["ultra", "high", "low"],
+    "high": ["high", "low"],
+    "low": ["low"],
 }
 
 EFFORT_LABELS = {"ultra": "Ultra", "high": "High", "low": "Low"}
@@ -66,7 +66,7 @@ def reasoning_effort_for_mode(mode: str) -> str:
 
 def describe_run_error(exc: Exception, timeout_seconds: int | float = 120) -> str:
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
-        return f"完整审议运行超过 {int(timeout_seconds)} 秒时间上限。已保留完成的发言，可重新开一桌或重试未完成席位。"
+        return f"当前席位等待上游超过 {int(timeout_seconds)} 秒。已保留完成的发言，请重试当前席位。"
     message = str(exc).strip()
     return message or f"{type(exc).__name__}：当前席位调用失败，请重试。"
 
@@ -207,6 +207,14 @@ class Orchestrator:
             raise ValueError("总结席角色必须为 finalizer")
         return [self._resolve_assignment(item) for item in config.seats], self._resolve_assignment(config.finalizer)
 
+    @classmethod
+    def _active_timeout_seconds(cls, run: RunRecord) -> float:
+        if run.current_speaker_index < len(cls.PARTICIPANTS):
+            return min(run.seat_assignments[run.current_speaker_index].timeout_seconds, run.limits.timeout_seconds)
+        if run.finalizer_assignment:
+            return min(run.finalizer_assignment.timeout_seconds, run.limits.timeout_seconds)
+        return run.limits.timeout_seconds
+
     async def start(
         self,
         request: RunCreate,
@@ -342,10 +350,9 @@ class Orchestrator:
             run.recoverable = False
             await self.emit(run, "question_analyzed", "analysis", "问题已放上圆桌，第一位成员正在准备发言", 8)
             run.analysis = analyze_question(run.question, run.mode, run.limits.max_tokens)
-            async with asyncio.timeout(run.limits.timeout_seconds):
-                await self._run_debate_graph(run, cancel, resume=False)
-                if run.status == "awaiting_final_input" and run.auto_summarize:
-                    await self._finalize_once(run)
+            await self._run_debate_graph(run, cancel, resume=False)
+            if run.status == "awaiting_final_input" and run.auto_summarize:
+                await self._finalize_once(run)
         except RunLimitReached as exc:
             await self._stop_for_limit(run, exc)
         except asyncio.CancelledError:
@@ -360,7 +367,7 @@ class Orchestrator:
             run.status = "failed"
             run.degraded = True
             run.recoverable = True
-            run.error = describe_run_error(exc, run.limits.timeout_seconds)
+            run.error = describe_run_error(exc, self._active_timeout_seconds(run))
             await self.emit(
                 run,
                 "run_failed",
@@ -500,12 +507,16 @@ class Orchestrator:
         provider_type = getattr(assignment.provider_snapshot.provider_type, "value", assignment.provider_snapshot.provider_type)
         native_effort = assignment.provider_snapshot.capabilities.supports_reasoning_effort
         plan = (
-            CCSWITCH_EFFORT_FALLBACKS.get(assignment.reasoning_effort, [(assignment.reasoning_effort, 1.0)])
+            CCSWITCH_EFFORT_FALLBACKS.get(assignment.reasoning_effort, [assignment.reasoning_effort])
             if provider_type == "ccswitch_local" and native_effort
-            else [(assignment.reasoning_effort, 1.0)]
+            else [assignment.reasoning_effort]
         )
+        deadline = time.perf_counter() + min(assignment.timeout_seconds, run.limits.timeout_seconds)
 
-        for index, (effort, timeout_fraction) in enumerate(plan):
+        for index, effort in enumerate(plan):
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
             self._check_call_limits(run)
             attempt_profile = assignment.provider_snapshot.model_copy(update={"reasoning_effort": effort})
             backend_key = f"{assignment.role}:{assignment.provider_id}:{assignment.model}:{effort}"
@@ -521,7 +532,7 @@ class Orchestrator:
                         assignment.model,
                         temperature=assignment.temperature,
                     ),
-                    timeout=max(1.0, min(assignment.timeout_seconds, run.limits.timeout_seconds) * timeout_fraction),
+                    timeout=remaining,
                 )
                 run.usage.input_tokens += generation.input_tokens
                 run.usage.output_tokens += generation.output_tokens
@@ -529,7 +540,7 @@ class Orchestrator:
             except Exception as exc:
                 if index >= len(plan) - 1 or not self._is_retryable_generation_error(exc):
                     raise
-                next_effort = plan[index + 1][0]
+                next_effort = plan[index + 1]
                 run.degraded = True
                 run.reasoning_effort = next_effort
                 for pending in run.seat_assignments[run.current_speaker_index:]:
@@ -865,10 +876,9 @@ class Orchestrator:
         async with lock:
             started = time.perf_counter()
             try:
-                async with asyncio.timeout(run.limits.timeout_seconds):
-                    await self._run_debate_graph(run, cancel, resume=True)
-                    if run.status == "awaiting_final_input" and run.auto_summarize:
-                        await self._finalize_once(run)
+                await self._run_debate_graph(run, cancel, resume=True)
+                if run.status == "awaiting_final_input" and run.auto_summarize:
+                    await self._finalize_once(run)
             except RunLimitReached as exc:
                 await self._stop_for_limit(run, exc)
             except asyncio.CancelledError:
@@ -881,7 +891,7 @@ class Orchestrator:
                 run.degraded = True
                 run.status = "failed"
                 run.recoverable = True
-                run.error = describe_run_error(exc, run.limits.timeout_seconds)
+                run.error = describe_run_error(exc, self._active_timeout_seconds(run))
                 await self.emit(
                     run,
                     "run_failed",
@@ -912,15 +922,14 @@ class Orchestrator:
     async def _summarize_task(self, run: RunRecord) -> None:
         started = time.perf_counter()
         try:
-            async with asyncio.timeout(run.limits.timeout_seconds):
-                await self._finalize_once(run)
+            await self._finalize_once(run)
         except RunLimitReached as exc:
             await self._stop_for_limit(run, exc)
         except Exception as exc:
             run.status = "awaiting_final_input"
             run.awaiting_user = True
             run.recoverable = True
-            run.error = describe_run_error(exc, run.limits.timeout_seconds)
+            run.error = describe_run_error(exc, self._active_timeout_seconds(run))
             await self.emit(
                 run,
                 "agent_turn_failed",
