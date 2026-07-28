@@ -216,13 +216,60 @@ export const api = {
 
 export const runExportUrl = (id: string, format: "markdown" | "html") => `${API_URL}/api/runs/${id}/export?format=${format}`;
 
-export function subscribeToRun(id: string, onEvent: (event: any) => void, onEnd?: () => void) {
-  const source = new EventSource(`${API_URL}/api/runs/${id}/events`);
-  source.onerror = () => { source.close(); onEnd?.(); };
+export function subscribeToRun(
+  id: string,
+  onEvent: (event: unknown) => void,
+  onEnd?: () => void,
+  beforeReconnect?: () => Promise<void> | void,
+) {
+  let source: EventSource | null = null;
+  let reconnectTimer: number | null = null;
+  let reconnectDelay = 1000;
+  let reconnecting = false;
+  let lastEventId = 0;
+  let stopped = false;
   const names = ["run_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
-  names.forEach((name) => source.addEventListener(name, (message) => {
-    onEvent(JSON.parse((message as MessageEvent).data));
-    if (["final_completed", "run_failed", "run_limit_reached", "run_cancelled"].includes(name)) { source.close(); onEnd?.(); }
-  }));
-  return () => source.close();
+  const terminalEvents = new Set(["final_completed", "run_failed", "run_limit_reached", "run_cancelled"]);
+
+  const connect = async () => {
+    if (stopped) return;
+    if (reconnecting) await beforeReconnect?.();
+    if (stopped) return;
+    const replay = lastEventId > 0 ? `?last_event_id=${lastEventId}` : "";
+    const nextSource = new EventSource(`${API_URL}/api/runs/${id}/events${replay}`);
+    source = nextSource;
+    nextSource.onopen = () => {
+      reconnectDelay = 1000;
+      reconnecting = false;
+    };
+    nextSource.onerror = () => {
+      nextSource.close();
+      if (stopped || reconnectTimer !== null) return;
+      reconnecting = true;
+      const delay = reconnectDelay;
+      reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        void connect();
+      }, delay);
+    };
+    names.forEach((name) => nextSource.addEventListener(name, (message) => {
+      const event = message as MessageEvent;
+      const sequence = Number.parseInt(event.lastEventId, 10);
+      if (Number.isFinite(sequence)) lastEventId = Math.max(lastEventId, sequence);
+      onEvent(JSON.parse(event.data));
+      if (terminalEvents.has(name)) {
+        stopped = true;
+        nextSource.close();
+        onEnd?.();
+      }
+    }));
+  };
+
+  void connect();
+  return () => {
+    stopped = true;
+    source?.close();
+    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+  };
 }

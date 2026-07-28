@@ -417,24 +417,49 @@ async def delete_run(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/events")
-async def run_events(run_id: str, request: Request):
+async def run_events(
+    run_id: str,
+    request: Request,
+    last_event_id: int = 0,
+    replay_header: str | None = Header(default=None, alias="Last-Event-ID"),
+):
     if not await store.get_run(run_id):
         raise HTTPException(404, "运行记录不存在")
-    queue = store.queue(run_id)
+    try:
+        cursor = max(0, last_event_id, int(replay_header or 0))
+    except ValueError as exc:
+        raise HTTPException(400, "Last-Event-ID 必须是非负整数") from exc
+    if not await store.try_open_event_stream(run_id):
+        raise HTTPException(429, "当前审议的实时连接过多，请关闭多余页面后重试")
 
     async def stream():
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=15)
-                yield f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
-                if event.type in {"final_completed", "run_failed", "run_cancelled", "run_limit_reached"}:
+        nonlocal cursor
+        try:
+            yield "retry: 1000\n\n"
+            while True:
+                if await request.is_disconnected():
                     break
-            except asyncio.TimeoutError:
-                yield ": keep-alive\n\n"
+                events = await store.wait_for_events(run_id, cursor, timeout=15)
+                if not events:
+                    yield ": keep-alive\n\n"
+                    continue
+                for event in events:
+                    cursor = event.sequence
+                    yield f"id: {event.sequence}\nevent: {event.type}\ndata: {event.model_dump_json()}\n\n"
+                    if event.type in {"final_completed", "run_failed", "run_cancelled", "run_limit_reached"}:
+                        return
+        finally:
+            await store.close_event_stream(run_id)
 
-    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/providers")

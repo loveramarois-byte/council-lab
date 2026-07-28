@@ -17,7 +17,9 @@ class Store:
         self.checkpoint_path = str(source_path.with_name(f"{source_path.stem}.checkpoints{source_path.suffix}"))
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
-        self._queues: dict[str, asyncio.Queue[RunEvent]] = {}
+        self._event_conditions: dict[str, asyncio.Condition] = {}
+        self._event_stream_counts: dict[str, int] = {}
+        self._event_stream_lock = asyncio.Lock()
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
@@ -27,6 +29,10 @@ class Store:
         self.conn.execute("CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
         self.conn.execute("CREATE TABLE IF NOT EXISTS project_sources (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id, created_at)")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS run_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_run_events_run_sequence ON run_events(run_id, sequence)")
         self.conn.commit()
 
     async def save_project(self, project: ProjectRecord) -> None:
@@ -158,6 +164,7 @@ class Store:
     async def delete_run(self, run_id: str) -> bool:
         async with self._lock:
             cursor = self.conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
+            self.conn.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
             self.conn.commit()
             checkpoint_path = Path(self.checkpoint_path)
             if checkpoint_path.exists():
@@ -176,12 +183,72 @@ class Store:
                     checkpoint_conn.close()
             return cursor.rowcount > 0
 
-    async def publish(self, event: RunEvent) -> None:
-        queue = self._queues.setdefault(event.run_id, asyncio.Queue())
-        await queue.put(event)
+    async def publish(self, event: RunEvent) -> RunEvent:
+        async with self._lock:
+            cursor = self.conn.execute(
+                "INSERT INTO run_events(run_id,payload,created_at) VALUES(?,?,?)",
+                (event.run_id, "{}", event.created_at.isoformat()),
+            )
+            event.sequence = int(cursor.lastrowid)
+            self.conn.execute(
+                "UPDATE run_events SET payload=? WHERE sequence=?",
+                (event.model_dump_json(), event.sequence),
+            )
+            self.conn.commit()
+        condition = self._event_conditions.setdefault(event.run_id, asyncio.Condition())
+        async with condition:
+            condition.notify_all()
+        return event
 
-    def queue(self, run_id: str) -> asyncio.Queue[RunEvent]:
-        return self._queues.setdefault(run_id, asyncio.Queue())
+    async def list_events(
+        self,
+        run_id: str,
+        after_sequence: int = 0,
+        limit: int = 500,
+    ) -> list[RunEvent]:
+        rows = self.conn.execute(
+            "SELECT sequence,payload FROM run_events WHERE run_id=? AND sequence>? ORDER BY sequence ASC LIMIT ?",
+            (run_id, max(0, after_sequence), max(1, min(limit, 1000))),
+        ).fetchall()
+        events: list[RunEvent] = []
+        for sequence, payload in rows:
+            event = RunEvent.model_validate_json(payload)
+            event.sequence = int(sequence)
+            events.append(event)
+        return events
+
+    async def wait_for_events(
+        self,
+        run_id: str,
+        after_sequence: int,
+        timeout: float = 15,
+    ) -> list[RunEvent]:
+        condition = self._event_conditions.setdefault(run_id, asyncio.Condition())
+        async with condition:
+            events = await self.list_events(run_id, after_sequence)
+            if events:
+                return events
+            try:
+                await asyncio.wait_for(condition.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                return []
+        return await self.list_events(run_id, after_sequence)
+
+    async def try_open_event_stream(self, run_id: str, limit: int = 8) -> bool:
+        async with self._event_stream_lock:
+            current = self._event_stream_counts.get(run_id, 0)
+            if current >= limit:
+                return False
+            self._event_stream_counts[run_id] = current + 1
+            return True
+
+    async def close_event_stream(self, run_id: str) -> None:
+        async with self._event_stream_lock:
+            current = self._event_stream_counts.get(run_id, 0)
+            if current <= 1:
+                self._event_stream_counts.pop(run_id, None)
+            else:
+                self._event_stream_counts[run_id] = current - 1
 
     async def seed_events(self, run_id: str) -> None:
         await self.publish(RunEvent(event_id=f"seed-{run_id}", run_id=run_id, type="run_created", stage="setup", message="审议任务已建立", progress=2))

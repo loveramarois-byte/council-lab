@@ -25,11 +25,18 @@ export default function RunDetailPage() {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState("");
 
-  const refresh = () => params.id && api.run(params.id).then(setRun).catch(() => router.push("/runs"));
+  const refresh = async (): Promise<void> => {
+    if (!params.id) return;
+    try {
+      setRun(await api.run(params.id));
+    } catch {
+      router.push("/runs");
+    }
+  };
   useEffect(() => { refresh(); }, [params.id]);
   useEffect(() => {
     if (!run || run.status !== "running") return;
-    const unsubscribe = subscribeToRun(run.id, () => refresh());
+    const unsubscribe = subscribeToRun(run.id, () => refresh(), undefined, refresh);
     const timer = window.setInterval(refresh, 2500);
     return () => { unsubscribe(); window.clearInterval(timer); };
   }, [run?.id, run?.status]);
