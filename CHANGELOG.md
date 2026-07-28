@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-28
+
+### Added
+
+- 增加“设置 → 手机连接”：电脑启动 Council 后显示局域网地址和配对二维码，手机在同一 Wi-Fi 下扫码即可使用完整审议界面。
+- 增加 Web App Manifest、主屏幕图标和安全上下文下的 Service Worker，可将 Council 添加到手机主屏幕。
+- macOS、Windows、源码和自包含启动器统一开放局域网前端，并自动生成每次启动专属的 192-bit 配对令牌。
+
+### Changed
+
+- 前端 API、事件流和报告导出统一使用同源地址，由 Next.js 在电脑本机代理到只监听 loopback 的后端。
+
+### Security
+
+- 局域网入口默认拒绝未配对设备；扫码令牌通过 URL fragment 传给浏览器，再以 POST 换取 HttpOnly、SameSite Cookie，不进入请求 URL 或服务访问日志。
+- 手机配对令牌只保存在当前用户的日志目录，停止或重启 Council 后轮换；后端与 CC Switch 始终不直接暴露到局域网。
+
 ## [0.5.1] - 2026-07-28
 
 ### Fixed

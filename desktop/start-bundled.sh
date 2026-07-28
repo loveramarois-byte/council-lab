@@ -13,6 +13,7 @@ LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council-bundled.pids"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
+TOKEN_FILE="$LOG_DIR/mobile-access.token"
 
 mkdir -p "$LOG_DIR"
 /usr/bin/touch "$PID_FILE"
@@ -71,23 +72,35 @@ if ! is_up "http://127.0.0.1:8001/api/health"; then
   fi
 fi
 
-if ! is_up "http://127.0.0.1:3000/"; then
+REMOTE_TOKEN=""
+if is_up "http://127.0.0.1:3000/mobile-access/health" && [[ -f "$TOKEN_FILE" ]]; then
+  REMOTE_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$TOKEN_FILE")"
+fi
+
+if ! is_up "http://127.0.0.1:3000/mobile-access/health"; then
   if port_is_used 3000; then
     show_error "端口 3000 已被其他程序占用，请先关闭该程序。"
     exit 1
   fi
+  REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  umask 077
+  printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
   pushd "$WEB_DIR" >/dev/null
-  HOSTNAME=127.0.0.1 PORT=3000 NODE_ENV=production NEXT_PUBLIC_API_URL=http://127.0.0.1:8001 \
+  HOSTNAME=0.0.0.0 PORT=3000 NODE_ENV=production COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" \
     /usr/bin/nohup "$NODE_EXE" "$WEB_DIR/server.js" >>"$FRONTEND_LOG" 2>&1 &
   frontend_pid=$!
   popd >/dev/null
   record_pid frontend "$frontend_pid"
-  if ! wait_for "http://127.0.0.1:3000/"; then
+  if ! wait_for "http://127.0.0.1:3000/mobile-access/health"; then
     show_error "网页启动失败，请查看 ~/Library/Logs/Council/frontend.log。"
     exit 1
   fi
 fi
 
 if [[ "${COUNCIL_NO_BROWSER:-0}" != "1" ]]; then
-  /usr/bin/open "http://localhost:3000"
+  if [[ -n "$REMOTE_TOKEN" ]]; then
+    /usr/bin/open "http://localhost:3000/pair#desktop:$REMOTE_TOKEN"
+  else
+    /usr/bin/open "http://localhost:3000"
+  fi
 fi

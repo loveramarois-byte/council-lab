@@ -3,6 +3,8 @@ Council Lab for macOS
 1. Double-click Council.app.
 2. Your browser opens http://localhost:3000.
 3. Start with Local Demo, or open Settings > Model Providers to add an API Key.
+4. For phone access, open Settings > Mobile Access and scan the pairing code while
+   both devices are on the same trusted Wi-Fi network.
 
 No Python or Node.js installation is required.
 

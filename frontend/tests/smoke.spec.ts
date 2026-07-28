@@ -649,3 +649,29 @@ test("CC Switch 长时间等待时显示路由边界并允许重试当前席位"
   await page.getByRole("button", { name: "重试本席" }).click();
   expect(retryRequested).toBeTruthy();
 });
+
+test("手机连接页生成配对码并适配窄屏", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/mobile-access/info", (route) => route.fulfill({
+    json: {
+      enabled: true,
+      lanAddress: "192.168.1.20",
+      origin: "http://192.168.1.20:3000",
+      pairUrl: "http://192.168.1.20:3000/pair#mobile:mobile-test-token",
+    },
+  }));
+
+  await page.goto("/settings/mobile");
+  await expect(page.getByRole("heading", { name: "把这一席带到手机上。" })).toBeVisible();
+  await expect(page.getByText("192.168.1.20", { exact: true })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Council 手机配对二维码" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /复制配对链接/ })).toBeEnabled();
+
+  const metrics = await page.evaluate(() => ({
+    width: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    qrWidth: document.querySelector<HTMLImageElement>(".qr-stage img")?.getBoundingClientRect().width || 0,
+  }));
+  expect(metrics.width).toBeLessThanOrEqual(metrics.viewportWidth);
+  expect(metrics.qrWidth).toBeGreaterThanOrEqual(200);
+});

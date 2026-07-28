@@ -45,7 +45,7 @@ fi
 
 pushd "$PROJECT_DIR/frontend" >/dev/null
 npm ci --no-audit --no-fund
-COUNCIL_STANDALONE=1 NEXT_PUBLIC_API_URL=http://127.0.0.1:8001 npm run build
+COUNCIL_STANDALONE=1 npm run build
 popd >/dev/null
 
 "$PYTHON_BIN" -m PyInstaller \

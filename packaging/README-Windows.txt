@@ -4,6 +4,9 @@ Council Lab for Windows 10 / 11
 2. Double-click "Start Council.cmd".
 3. Your browser opens http://localhost:3000.
 4. Start with Local Demo, or open Settings > Model Providers to add an API Key.
+5. For phone access, open Settings > Mobile Access and scan the pairing code while
+   both devices are on the same trusted Wi-Fi network. Allow local-network access
+   on port 3000 if Windows Firewall asks.
 
 No Python or Node.js installation is required. Do not run the app inside the ZIP
 preview window. This open-source build is not code-signed. If SmartScreen appears,

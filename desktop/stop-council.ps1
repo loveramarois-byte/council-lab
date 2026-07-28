@@ -6,9 +6,11 @@ $ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $LocalRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME "AppData\Local" }
 $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $LocalRoot "Council\logs" }
 $PidFile = Join-Path $LogDir "council-pids.json"
+$TokenFile = Join-Path $LogDir "mobile-access.token"
 
 try {
     if (-not (Test-Path $PidFile)) {
+        Remove-Item -Force $TokenFile -ErrorAction SilentlyContinue
         Write-Host "No Council process record was found."
         exit 0
     }
@@ -26,6 +28,7 @@ try {
         }
     }
     Set-Content -Encoding UTF8 -Path $PidFile -Value "{}"
+    Remove-Item -Force $TokenFile -ErrorAction SilentlyContinue
     Write-Host "Council local services have stopped." -ForegroundColor Green
 }
 catch {

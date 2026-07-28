@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council-bundled.pids"
+TOKEN_FILE="$LOG_DIR/mobile-access.token"
 
 stop_process() {
   local service="$1"
@@ -37,5 +38,7 @@ if [[ -f "$PID_FILE" ]]; then
   done < "$PID_FILE"
   : > "$PID_FILE"
 fi
+
+/bin/rm -f "$TOKEN_FILE"
 
 /usr/bin/osascript -e 'display notification "Council 的本地服务已停止" with title "Council"' >/dev/null 2>&1 || true

@@ -19,18 +19,15 @@ foreach ($Target in @($StageDir, $ZipPath, $PyInstallerWork, $PyInstallerDist)) 
 
 Push-Location (Join-Path $ProjectDir "frontend")
 $PreviousStandalone = $env:COUNCIL_STANDALONE
-$PreviousApiUrl = $env:NEXT_PUBLIC_API_URL
 try {
     & npm.cmd ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
     $env:COUNCIL_STANDALONE = "1"
-    $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:8001"
     & npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw "Next.js build failed" }
 }
 finally {
     if ($null -eq $PreviousStandalone) { Remove-Item Env:COUNCIL_STANDALONE -ErrorAction SilentlyContinue } else { $env:COUNCIL_STANDALONE = $PreviousStandalone }
-    if ($null -eq $PreviousApiUrl) { Remove-Item Env:NEXT_PUBLIC_API_URL -ErrorAction SilentlyContinue } else { $env:NEXT_PUBLIC_API_URL = $PreviousApiUrl }
     Pop-Location
 }
 

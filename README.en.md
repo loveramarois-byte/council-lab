@@ -18,6 +18,7 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **Portable reports.** Export a completed deliberation as Markdown or a self-contained HTML report.
 - **Local-first credentials.** API keys are stored in the operating-system credential store, not Council's database or browser storage.
 - **Verified in-app updates.** Council checks official releases, verifies the downloaded package against `SHA256SUMS.txt`, replaces the installed copy, and restarts without moving local data or credentials.
+- **Paired mobile access.** Keep Council running on the computer, scan the code under **Settings -> Mobile Access**, and use the full deliberation interface from a phone on the same trusted Wi-Fi network.
 - **Reproducible evaluation.** A 12-case benchmark tracks failures, tokens, latency, optional cost estimates, citation support, and unsupported claims without publishing scores from Mock or incomplete blind reviews.
 
 Council never displays or saves hidden chain-of-thought. It stores only public model responses and run metadata. It does not currently run web searches or a code sandbox, and model agreement is **not** external fact verification.
@@ -41,6 +42,17 @@ The release includes its own runtime. Python and Node.js are not required. This 
 The release includes its own runtime and needs neither administrator access nor a separate Python/Node.js installation. This open-source build is not commercially code-signed. If SmartScreen appears, verify that the file came from this repository's Release page, then choose **More info -> Run anyway**. `Create Desktop Shortcut.cmd` adds an optional shortcut.
 
 Every release also includes `SHA256SUMS.txt` for verifying the downloaded ZIP.
+
+### Mobile access
+
+1. Start Council on the computer and leave it running.
+2. Open **Settings -> Mobile Access**.
+3. Put the phone and computer on the same trusted Wi-Fi network, then scan the pairing code.
+4. On iPhone, use Safari's **Add to Home Screen** action. On Android, use Chrome's **Add to Home screen** or **Install app** action when available.
+
+The phone is a remote interface for the Council running on the computer. Model requests still originate from the computer, and API keys, CC Switch, and deliberation data are not moved to the phone. Restarting Council rotates the pairing token and invalidates old pairings. Mobile access stops when the computer sleeps, shuts down, or exits Council.
+
+LAN access uses plain HTTP and should only be enabled on a trusted private network, never on open public Wi-Fi. If the pairing address is unreachable, allow Council or Node.js to receive local-network connections on port `3000` in the operating-system firewall.
 
 ### Updating an installed copy
 
@@ -108,6 +120,6 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report.
 
-Version `0.5.1` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
+Version `0.6.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
