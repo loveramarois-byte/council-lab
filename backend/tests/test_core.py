@@ -1,6 +1,7 @@
 import asyncio
 import io
 import sqlite3
+import time
 
 import pytest
 
@@ -219,7 +220,7 @@ def test_extract_responses_text_skips_reasoning_items():
 
 def test_timeout_error_has_actionable_message():
     assert "超过 120 秒" in describe_run_error(asyncio.TimeoutError(), 120)
-    assert "重试未完成席位" in describe_run_error(asyncio.TimeoutError(), 120)
+    assert "重试当前席位" in describe_run_error(asyncio.TimeoutError(), 120)
 
 
 def test_context_window_compacts_long_discussion_and_preserves_latest_user_input():
@@ -409,7 +410,7 @@ async def test_failed_run_can_resume_from_current_speaker(tmp_path, monkeypatch)
     assert current is not None
     assert current.status == "failed"
     assert current.current_speaker_index == 1
-    assert "超过 120 秒" in (current.error or "")
+    assert "当前席位等待上游超过 30 秒" in (current.error or "")
 
     backend.fail_second = False
     restarted_orchestrator = Orchestrator(store, {"mock": profile})
@@ -543,6 +544,47 @@ async def test_ccswitch_timeout_downgrades_reasoning_and_completes(tmp_path, mon
         "Ultra 原生推理档上游超时，已自动降为 High 档重试当前席位。",
         "High 原生推理档上游超时，已自动降为 Low 档重试当前席位。",
     ]
+
+
+async def test_ccswitch_fallbacks_share_one_seat_timeout(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    class SlowTimeoutBackend:
+        def __init__(self, effort: str):
+            self.effort = effort
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            calls.append(self.effort)
+            await asyncio.sleep(0.55)
+            raise asyncio.TimeoutError
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: SlowTimeoutBackend(profile.reasoning_effort))
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(
+        id="ccswitch",
+        display_name="CC Switch",
+        provider_type=ProviderType.CCSWITCH,
+        capabilities=ProviderCapabilities(supports_reasoning_effort=True),
+    )
+    orchestrator = Orchestrator(store, {"ccswitch": profile})
+
+    started = time.perf_counter()
+    run = await orchestrator.start(
+        RunCreate(
+            question="验证降档共享单席时限",
+            mode="rigorous",
+            provider_id="ccswitch",
+            limits=RunLimits(timeout_seconds=1),
+        )
+    )
+    await orchestrator.tasks[run.id]
+    elapsed = time.perf_counter() - started
+    current = await store.get_run(run.id)
+
+    assert elapsed < 1.35
+    assert calls == ["ultra", "high"]
+    assert current is not None and current.status == "failed"
+    assert "超过 1 秒" in (current.error or "")
 
 
 async def test_ccswitch_wrapped_upstream_400_downgrades_reasoning(tmp_path, monkeypatch):
@@ -775,7 +817,7 @@ async def test_limit_resume_keeps_recovery_state_when_credentials_are_missing(tm
     assert current.limits.max_tokens == 12000
 
 
-async def test_global_run_timeout_covers_the_whole_active_run(tmp_path, monkeypatch):
+async def test_run_timeout_applies_to_each_active_model_call(tmp_path, monkeypatch):
     class BlockingBackend:
         async def generate(self, prompt, system, model, temperature=0.2):
             await asyncio.sleep(2)
@@ -793,6 +835,32 @@ async def test_global_run_timeout_covers_the_whole_active_run(tmp_path, monkeypa
     assert current.status == "failed"
     assert current.recoverable is True
     assert "超过 1 秒" in (current.error or "")
+
+
+async def test_total_debate_duration_may_exceed_per_seat_timeout(tmp_path, monkeypatch):
+    class SlowButHealthyBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            await asyncio.sleep(0.3)
+            return Generation(text="表态：认同。席位在单次时限内完成")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: SlowButHealthyBackend())
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)
+    orchestrator = Orchestrator(store, {"mock": profile})
+
+    started = time.perf_counter()
+    run = await orchestrator.start(
+        RunCreate(question="验证整桌没有总倒计时", provider_id="mock", limits=RunLimits(timeout_seconds=1))
+    )
+    await orchestrator.tasks[run.id]
+    elapsed = time.perf_counter() - started
+    current = await store.get_run(run.id)
+
+    assert elapsed > 1
+    assert current is not None
+    assert current.status == "awaiting_final_input"
+    assert current.error is None
+    assert len([turn for turn in current.discussion_turns if turn.speaker_type == "agent"]) == 4
 
 
 async def test_backends_close_after_completed_failed_and_cancelled_paths(tmp_path, monkeypatch):
