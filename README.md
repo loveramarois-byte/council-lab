@@ -52,6 +52,7 @@ Council 是一个本地优先、允许用户参与的 AI 审议工具。你提�
 - **可移交报告**：审议完成后导出 Markdown 或单文件 HTML，保留问题、逐席发言、模型记录、用量和结果回访。
 - **本地优先与密钥保护**：数据默认留在本机，API Key 交给系统凭据库保存。
 - **软件内安全更新**：启动时自动检查正式 Release，可在设置中下载、核对 SHA-256、替换并重启；历史和密钥不随应用目录覆盖。
+- **脱敏诊断包**：遇到故障时可从“设置 → 诊断与支持”手工导出运行、存储与 Provider 就绪摘要；不自动上传，也不包含对话、日志正文、凭据或本机路径。
 - **手机远程审议**：电脑保持运行时，在“设置 → 手机连接”扫码配对；短期签名会话不保存原始令牌，电脑端可查看并立即撤销所有手机会话。
 - **可重复评测**：内置 12 个决策、事实核查、风险和规划案例，记录失败率、Token、耗时、可选成本估算、引用支持率和未经支持主张；Mock 或不完整盲评不能形成效果结论。
 - **单页工作台**：桌面与移动端均固定一屏，讨论区内部滚动。
@@ -76,7 +77,7 @@ Release 包已经内置运行环境，不需要安装 Python 或 Node.js。当�
 
 Release 包已经内置运行环境，不需要管理员权限，也不需要安装 Python 或 Node.js。当前开源构建没有商业代码签名；如果 Windows 弹出 SmartScreen，请确认文件来自本仓库 Release，再点“更多信息”→“仍要运行”。`Create Desktop Shortcut.cmd` 可选创建桌面快捷方式。
 
-每个正式 Release 同时提供 `SHA256SUMS.txt`，需要校验下载时可将 ZIP 的 SHA-256 与其中对应条目比较。
+每个正式 Release 同时提供 `SHA256SUMS.txt` 和 GitHub build provenance attestation。前者用于核对下载内容，后者用于关联构建 workflow 与 commit；两者都不等于 Apple notarization 或 Windows 商业代码签名。
 
 ### 手机端
 
@@ -153,7 +154,7 @@ flowchart LR
 
 Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于上游模型的 Low / High / Ultra。设置页会明确显示“原生推理档位”或“仅工作流档位”；只有前者会发送 reasoning effort。
 
-圆桌页分开显示两种 Token：`上下文`是本席发送的公开讨论窗口，`上游累计`是 Provider 返回的全程真实 usage。CC Switch 的 Codex 路径可能为每次请求附加约 4k-5k 基础 instructions，因此后者通常明显更高。累计值达到边界后，Council 不再发起下一次请求；由于发出请求前无法预知其最终 usage，最后一次已允许的请求可能让累计值略微超过边界。
+圆桌页分开显示两种 Token：`上下文`是本席发送的公开讨论窗口，已知 OpenAI-compatible 模型使用匹配 tokenizer 并标记“精确”，未知模型使用带安全余量的保守估算并标记“估算”；`上游累计`是 Provider 返回的全程真实 usage。CC Switch 的 Codex 路径可能为每次请求附加约 4k-5k 基础 instructions，因此后者通常明显更高。累计值达到边界后，Council 不再发起下一次请求；由于发出请求前无法预知其最终 usage，最后一次已允许的请求可能让累计值略微超过边界。
 
 ## 数据与安全
 
@@ -164,6 +165,8 @@ Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于�
 - 后端默认只监听 loopback。不要把本地凭据接口直接暴露到不可信网络。
 
 完整说明见 [Security Policy](SECURITY.md) 与 [CC Switch 集成边界](docs/CCSWITCH_INTEGRATION.md)。
+
+故障排查时优先使用 [脱敏诊断包](docs/DIAGNOSTICS.md)，发送前仍应自行检查归档内容。
 
 ## 技术栈
 

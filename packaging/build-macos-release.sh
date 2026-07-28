@@ -55,6 +55,8 @@ popd >/dev/null
   --name council-backend \
   --paths "$PROJECT_DIR/backend" \
   --collect-all keyring \
+  --collect-all tiktoken \
+  --hidden-import tiktoken_ext.openai_public \
   --hidden-import uvicorn.logging \
   --hidden-import uvicorn.loops.auto \
   --hidden-import uvicorn.protocols.http.auto \

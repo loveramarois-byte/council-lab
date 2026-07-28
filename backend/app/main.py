@@ -14,7 +14,9 @@ from fastapi.responses import Response, StreamingResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .credentials import CredentialStoreError, delete_provider_secret, get_provider_secret, save_provider_secret
+from .diagnostics import DIAGNOSTICS_SCHEMA_VERSION, build_diagnostic_bundle
 from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_webpage
+from .errors import install_error_handling
 from .models import AgentAssignmentsConfig, AgentModelAssignment, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
@@ -53,6 +55,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Council Lab", version=current_version(), lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
+install_error_handling(app)
 
 
 def provider_error_message(exc: Exception) -> str:
@@ -108,6 +111,22 @@ async def check_for_update(refresh: bool = False, x_council_request: str | None 
 @app.get("/api/update/status")
 async def update_status():
     return update_manager.status()
+
+
+@app.get("/api/diagnostics/export")
+async def export_diagnostics(x_council_request: str | None = Header(default=None)):
+    if not install_request_is_allowed(x_council_request):
+        raise HTTPException(403, "只能从 Council 软件内生成诊断包。")
+    bundle = await build_diagnostic_bundle(store, providers, assignments)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return Response(
+        bundle,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="council-diagnostics-{stamp}.zip"',
+            "X-Council-Diagnostics-Schema": str(DIAGNOSTICS_SCHEMA_VERSION),
+        },
+    )
 
 
 @app.post("/api/update/install")

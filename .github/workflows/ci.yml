@@ -76,7 +76,8 @@ jobs:
           cache-dependency-path: backend/requirements.lock
       - run: python scripts/check_release_consistency.py
       - run: python -m pip install -r backend/requirements.lock
-      - run: PYTHONPATH=backend:. pytest -q backend/tests
+      - name: Backend tests, privacy regression, and coverage gate
+        run: PYTHONPATH=backend:. pytest -q backend/tests --cov=backend/app --cov-report=term-missing --cov-fail-under=72
 
   frontend:
     runs-on: ubuntu-latest

@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- 增加“设置 → 诊断与支持”，可手工导出仅含运行环境、存储完整性和 Provider 就绪摘要的脱敏 ZIP；不包含对话、资料、日志正文、凭据、配对令牌、模型名或本机路径。
+- API 错误增加稳定错误码和请求排错编号，响应头与错误正文可关联同一次失败。
+- 已知 OpenAI-compatible 模型使用匹配的 `tiktoken` 计数；未知 Provider 使用明确标记的保守 UTF-8 估算，并用 100 条混合语料回归预算和最新用户输入保留。
+- Release 产物增加 GitHub build provenance attestation，关联发布包、workflow 与 commit。
+
+### Changed
+
+- CI 与 Release 统一执行后端隐私回归和 72% 总覆盖率底线；圆桌页明确区分精确 tokenizer 与保守估算。
+
+### Security
+
+- 诊断包默认只输出白名单字段，并由测试验证问题、日志密钥、手机令牌、模型名和主机路径不会进入归档。
+
 ## [0.7.0] - 2026-07-29
 
 ### Added

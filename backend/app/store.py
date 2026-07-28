@@ -253,6 +253,24 @@ class Store:
     async def seed_events(self, run_id: str) -> None:
         await self.publish(RunEvent(event_id=f"seed-{run_id}", run_id=run_id, type="run_created", stage="setup", message="审议任务已建立", progress=2))
 
+    async def diagnostic_snapshot(self) -> dict[str, Any]:
+        async with self._lock:
+            counts = {
+                table: int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in ("runs", "projects", "project_sources", "run_events", "provider_profiles")
+            }
+            integrity = str(self.conn.execute("PRAGMA quick_check").fetchone()[0])
+            journal_mode = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0])
+        database_file = Path(self.path)
+        checkpoint_file = Path(self.checkpoint_path)
+        return {
+            "integrity": integrity,
+            "journal_mode": journal_mode,
+            "database_bytes": database_file.stat().st_size if database_file.exists() else 0,
+            "checkpoint_bytes": checkpoint_file.stat().st_size if checkpoint_file.exists() else 0,
+            "counts": counts,
+        }
+
     def close(self) -> None:
         self.conn.close()
 

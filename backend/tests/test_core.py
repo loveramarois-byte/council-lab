@@ -5,7 +5,14 @@ import time
 
 import pytest
 
-from app.context import build_context_window, context_budget_for_mode, estimate_tokens
+from app.context import (
+    _truncate_tokens,
+    _truncate_tokens_with_tail,
+    build_context_window,
+    context_budget_for_mode,
+    estimate_tokens,
+    token_estimator_for,
+)
 from app.credentials import delete_provider_secret, get_provider_secret, save_provider_secret
 from app.evidence import content_hash, extract_file_text, validate_public_url
 from app.models import (
@@ -294,6 +301,134 @@ def test_context_with_long_evidence_never_truncates_latest_user_input_from_tail(
     assert "原始问题也必须保留" in window.prompt
     assert marker in window.prompt
     assert estimate_tokens(window.prompt) <= window.token_budget
+
+
+def test_token_estimator_selection_reports_accuracy_truthfully():
+    exact = token_estimator_for("openai", "gpt-4o")
+    compatible = token_estimator_for("openai", "future-openai-model")
+    conservative = token_estimator_for("deepseek", "deepseek-chat")
+
+    assert exact.name == "tiktoken:o200k_base"
+    assert exact.exact is True
+    assert compatible.name == "tiktoken:o200k_base_compatible"
+    assert compatible.exact is False
+    assert compatible.count("mixed 中文 JSON 🚀" * 10) > exact.count("mixed 中文 JSON 🚀" * 10)
+    assert conservative.name == "conservative_utf8"
+    assert conservative.exact is False
+
+
+def test_token_estimator_degrades_when_tiktoken_registry_is_unavailable(monkeypatch):
+    monkeypatch.setattr("app.context.tiktoken.encoding_for_model", lambda _: (_ for _ in ()).throw(ValueError("no plugin")))
+    estimator = token_estimator_for("openai", "gpt-4o")
+
+    assert estimator.name == "conservative_utf8"
+    assert estimator.exact is False
+
+
+def test_token_truncation_obeys_even_tiny_budgets():
+    text = "mixed 中文 JSON 🚀 LATEST"
+    for estimator in (
+        token_estimator_for("openai", "gpt-4o"),
+        token_estimator_for("deepseek", "deepseek-chat"),
+    ):
+        for limit in range(16):
+            assert estimator.count(_truncate_tokens(text, limit, estimator)) <= limit
+            assert estimator.count(_truncate_tokens_with_tail(text, limit, estimator)) <= limit
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "中英文 mixed context 需要稳定裁剪。" * 80,
+        "def solve(value: int) -> dict:\n    return {'result': value * 2}\n" * 60,
+        '{"event":"council.run","ok":true,"items":[1,2,3,4]}\n' * 70,
+        "https://example.com/api/v1/runs?include=turns%2Csources&limit=100\n" * 60,
+        "状态 ✅ 🚀 👨‍💻 🧪 ⚠️" * 100,
+    ],
+)
+@pytest.mark.parametrize(
+    "estimator",
+    [
+        pytest.param(token_estimator_for("openai", "gpt-4o"), id="openai-exact"),
+        pytest.param(token_estimator_for("deepseek", "deepseek-chat"), id="provider-conservative"),
+    ],
+)
+def test_context_never_exceeds_selected_estimator_budget(content, estimator):
+    marker = "LATEST_USER_TAIL_MARKER"
+    turns = [
+        DiscussionTurn(
+            id="agent-1",
+            speaker_type="agent",
+            speaker_id="analyst",
+            speaker_name="分析者",
+            content=content,
+        ),
+        DiscussionTurn(
+            id="user-1",
+            speaker_type="user",
+            speaker_id="user",
+            speaker_name="你",
+            content=content + marker,
+        ),
+    ]
+
+    window = build_context_window(
+        content,
+        turns,
+        token_budget=420,
+        evidence_context="[S1] " + content,
+        project_history=content,
+        estimator=estimator,
+    )
+
+    assert marker in window.prompt
+    assert window.estimated_tokens == estimator.count(window.prompt)
+    assert window.estimated_tokens <= window.token_budget
+    assert window.token_estimator == estimator.name
+    assert window.token_estimator_exact is estimator.exact
+
+
+def test_context_budget_regression_corpus_covers_100_mixed_samples():
+    components = [
+        "Council 需要保留最新问题和关键结论。",
+        "```python\nresult = {'ok': True, 'value': 42}\n```",
+        '{"type":"run.updated","sequence":17,"active":true}',
+        "https://example.com/docs?q=context%20window&lang=zh-CN",
+        "✅ 🚀 👨‍💻 🧪 ⚠️",
+    ]
+    estimators = [
+        token_estimator_for("openai", "gpt-4o"),
+        token_estimator_for("deepseek", "deepseek-chat"),
+    ]
+
+    for index in range(100):
+        rotated = components[index % len(components) :] + components[: index % len(components)]
+        sample = f"case-{index:03d}\n" + "\n".join(
+            value * (2 + ((index + offset) % 5)) for offset, value in enumerate(rotated)
+        )
+        estimator = estimators[index % len(estimators)]
+        marker = f"LATEST-{index:03d}"
+        turns = [
+            DiscussionTurn(
+                id=f"agent-{index}",
+                speaker_type="agent",
+                speaker_id="analyst",
+                speaker_name="分析者",
+                content=sample * 3,
+            ),
+            DiscussionTurn(
+                id=f"user-{index}",
+                speaker_type="user",
+                speaker_id="user",
+                speaker_name="你",
+                content=sample * 3 + marker,
+            ),
+        ]
+
+        window = build_context_window(sample, turns, token_budget=520, estimator=estimator)
+
+        assert marker in window.prompt
+        assert estimator.count(window.prompt) <= window.token_budget
 
 
 def test_context_budget_scales_with_mode():

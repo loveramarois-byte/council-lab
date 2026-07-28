@@ -17,10 +17,15 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
         hostile_host = await client.get("/api/health", headers={"Host": "attacker.example"})
         assert hostile_host.status_code == 400
+        assert hostile_host.json()["error"]["code"] == "INVALID_HOST"
+        assert hostile_host.headers["X-Council-Request-ID"] == hostile_host.json()["error"]["request_id"]
 
         blocked = await client.post("/api/update/install")
         assert blocked.status_code == 403
         assert "Council 软件内" in blocked.json()["detail"]
+        assert blocked.json()["error"]["code"] == "ACTION_NOT_ALLOWED"
+        assert len(blocked.json()["error"]["request_id"]) == 32
+        assert blocked.headers["X-Council-Request-ID"] == blocked.json()["error"]["request_id"]
         start.assert_not_awaited()
 
         accepted = await client.post("/api/update/install", headers={"X-Council-Request": "app"})
@@ -55,3 +60,9 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
         status = await client.get("/api/update/status")
         assert status.status_code == 200
         assert status.json() == {"phase": "idle", "current_version": "0.4.0"}
+        assert len(status.headers["X-Council-Request-ID"]) == 32
+
+        invalid = await client.post("/api/runs", json={})
+        assert invalid.status_code == 422
+        assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert invalid.json()["detail"] == "请求参数不完整或格式不正确。"

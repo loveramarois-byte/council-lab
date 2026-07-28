@@ -482,7 +482,7 @@ test("Token 限额与上下文分开显示，并可提额续跑", async ({ page 
   });
 
   await page.goto("/runs/token-limit-fixture");
-  await expect(page.getByText("上下文 630 / 4000", { exact: true })).toBeVisible();
+  await expect(page.getByText("上下文 630 / 4000 · 估算", { exact: true })).toBeVisible();
   await expect(page.getByText("上游累计 15,391 / 12,000", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "提高到 40,000 Token 并继续" }).click();
   expect(resumePayload).toEqual({ max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 });
@@ -675,4 +675,22 @@ test("手机连接页生成配对码并适配窄屏", async ({ page }) => {
   }));
   expect(metrics.width).toBeLessThanOrEqual(metrics.viewportWidth);
   expect(metrics.qrWidth).toBeGreaterThanOrEqual(200);
+});
+
+test("诊断页只在用户操作后导出脱敏支持包", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/update/check", (route) => route.fulfill({ json: { current_version: "0.7.0", latest_version: "0.7.0", update_available: false } }));
+  await page.route("**/api/diagnostics/export", (route) => route.fulfill({
+    body: "diagnostic-zip-fixture",
+    contentType: "application/zip",
+    headers: { "Content-Disposition": 'attachment; filename="council-diagnostics-test.zip"' },
+  }));
+
+  await page.goto("/settings/diagnostics");
+  await expect(page.getByRole("heading", { name: "把问题说清楚，不把隐私带出去。" })).toBeVisible();
+  await expect(page.getByText(/不包含问题、回答、资料正文、日志内容/)).toBeVisible();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出诊断包" }).click();
+  expect((await download).suggestedFilename()).toBe("council-diagnostics-test.zip");
+  await expect(page.getByText(/诊断包已生成/)).toBeVisible();
 });

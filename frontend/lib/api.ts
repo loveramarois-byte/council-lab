@@ -118,6 +118,8 @@ export type Run = {
     summary: string;
     source_tokens?: number;
     history_tokens?: number;
+    token_estimator?: string;
+    token_estimator_exact?: boolean;
   };
   status: "queued" | "running" | "awaiting_final_input" | "completed" | "failed" | "stopped" | "cancelled";
   created_at: string;
@@ -164,15 +166,52 @@ export type Score = { candidate_id: string; evidence_score: number; reasoning_sc
 export type Usage = { model_calls: number; tool_calls: number; input_tokens: number; output_tokens: number; estimated_cost?: number | null; duration_ms: number };
 export type FinalDecision = { final_answer: string; key_reasons: string[]; verified_claims: string[]; partially_verified_claims: string[]; contradicted_claims: string[]; unverified_claims: string[]; disagreements: string[]; risks_and_limitations: string[]; confidence: { level: string; score?: number; explanation: string }; sources: string[]; provider_summary: { provider: string; protocol: string; model: string; used_ccswitch: boolean; degraded: boolean; seat_providers?: { role: string; provider: string; model: string }[] }; usage: Usage };
 
+type ErrorEnvelope = {
+  detail?: string;
+  error?: { code?: string; message?: string; request_id?: string };
+};
+
+export class CouncilApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly requestId: string;
+
+  constructor(status: number, body: ErrorEnvelope | null, responseRequestId: string | null) {
+    const code = body?.error?.code || "REQUEST_FAILED";
+    const requestId = body?.error?.request_id || responseRequestId || "";
+    const detail = body?.error?.message || body?.detail || `请求失败 (${status})`;
+    super(requestId ? `${detail}（排错编号 ${requestId}）` : detail);
+    this.name = "CouncilApiError";
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const response = await fetch(`${API_URL}${path}`, { ...init, headers });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || `请求失败 (${response.status})`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as ErrorEnvelope | null;
+    throw new CouncilApiError(response.status, body, response.headers.get("X-Council-Request-ID"));
+  }
   return response.json();
 }
 
+async function download(path: string, init?: RequestInit): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${API_URL}${path}`, init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as ErrorEnvelope | null;
+    throw new CouncilApiError(response.status, body, response.headers.get("X-Council-Request-ID"));
+  }
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "council-diagnostics.zip";
+  return { blob: await response.blob(), filename };
+}
+
 export const api = {
+  downloadDiagnostics: () => download("/api/diagnostics/export", { headers: { "X-Council-Request": "app" } }),
   checkUpdate: (refresh = false) => request<UpdateInfo>(`/api/update/check${refresh ? "?refresh=true" : ""}`, refresh ? { headers: { "X-Council-Request": "app" } } : undefined),
   updateStatus: () => request<UpdateStatus>("/api/update/status"),
   installUpdate: () => request<UpdateStatus>("/api/update/install", { method: "POST", headers: { "X-Council-Request": "app" } }),

@@ -591,6 +591,7 @@ body:has(.council-page) .sidebar-footnote { border-color: var(--border); }
 .pair-progress .eyebrow { margin-top: 22px; }
 .pair-progress h1 { margin: 10px 0 7px; font: 400 31px/1.1 var(--serif); letter-spacing: 0; }
 .pair-progress > p:last-child { margin: 0; color: var(--muted); }
+.error-text { color: var(--danger); }
 
 @media (max-width: 680px) {
   .mobile-access-heading { align-items: flex-start; padding: 48px 0 22px; }
