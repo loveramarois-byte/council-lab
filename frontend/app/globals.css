@@ -570,12 +570,19 @@ body:has(.council-page) .sidebar-footnote { border-color: var(--border); }
 .pairing-security strong, .pairing-security small { display: block; }
 .pairing-security strong { font-size: 10px; }
 .pairing-security small { margin-top: 2px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.mobile-session-control { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.mobile-session-control strong, .mobile-session-control small { display: block; }
+.mobile-session-control strong { font-size: 10px; }
+.mobile-session-control small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.mobile-session-control button { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; min-height: 32px; border: 1px solid var(--border); border-radius: 5px; padding: 0 9px; background: transparent; color: var(--danger); font-size: 9px; font-weight: 700; }
+.mobile-session-control button:disabled { color: var(--muted); opacity: .45; cursor: not-allowed; }
 .qr-stage { display: flex; flex-direction: column; align-items: center; justify-content: center; border-left: 1px dashed var(--border-strong); background: #f5f1e9; padding: 24px 27px; text-align: center; }
 .qr-stage img, .qr-placeholder { width: 220px; height: 220px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted); }
 .qr-stage img { object-fit: contain; padding: 8px; }
 .qr-stage > strong { margin-top: 14px; font-family: var(--serif); font-size: 16px; font-weight: 600; }
 .qr-stage > small { margin-top: 3px; color: var(--muted); font-size: 9px; }
 .mobile-access-error { margin: 15px 6% 0; color: var(--danger); font-size: 11px; }
+.mobile-access-notice { margin: 15px 6% 0; color: var(--success); font-size: 11px; }
 .mobile-access-foot { display: flex; align-items: center; gap: 8px; margin: 19px 6% 0; color: var(--muted); font-size: 10px; }
 .mobile-access-foot svg { color: var(--accent); }
 .pair-page { min-height: 100dvh; display: grid; place-items: center; padding: 30px; }
@@ -594,5 +601,6 @@ body:has(.council-page) .sidebar-footnote { border-color: var(--border); }
   .qr-stage img, .qr-placeholder { width: min(220px, 72vw); height: min(220px, 72vw); }
   .mobile-origin { grid-template-columns: 1fr; }
   .mobile-origin button { grid-column: 1; grid-row: auto; justify-content: center; margin-top: 8px; }
-  .mobile-access-foot, .mobile-access-error { margin-left: 0; margin-right: 0; }
+  .mobile-session-control { align-items: flex-start; flex-direction: column; }
+  .mobile-access-foot, .mobile-access-error, .mobile-access-notice { margin-left: 0; margin-right: 0; }
 }

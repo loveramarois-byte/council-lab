@@ -1,5 +1,6 @@
 import { networkInterfaces } from "node:os";
 import { cookies } from "next/headers";
+import { DESKTOP_COOKIE, mobileSessionSummary, validateDesktopCookie } from "../../../lib/mobileAccess";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ function findLanAddress() {
 export async function GET(request: Request) {
   const token = process.env.COUNCIL_REMOTE_TOKEN || "";
   const cookieStore = await cookies();
-  if (!token || cookieStore.get("council_desktop_pairing")?.value !== token) {
+  if (!validateDesktopCookie(cookieStore.get(DESKTOP_COOKIE)?.value, token)) {
     return Response.json({ detail: "手机连接信息只在电脑端显示" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
   const port = process.env.PORT || "3000";
@@ -30,6 +31,7 @@ export async function GET(request: Request) {
       origin,
       pairUrl,
       secureContext: new URL(request.url).protocol === "https:",
+      ...mobileSessionSummary(),
     },
     { headers: { "Cache-Control": "no-store" } },
   );

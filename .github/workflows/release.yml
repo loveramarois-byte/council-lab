@@ -65,7 +65,7 @@ jobs:
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
           token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/mobile-access.token")"
           cookie_jar="$RUNNER_TEMP/launcher-cookie.txt"
-          curl -fsS -c "$cookie_jar" -H 'Content-Type: application/json' --data "{\"token\":\"$token\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
+          curl -fsS -c "$cookie_jar" -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$token\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
           curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/ | grep -q Council
           curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/api/health | grep -q council-lab
           first_backend="$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"

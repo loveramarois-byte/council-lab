@@ -1,13 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const PAIRING_COOKIE = "council_mobile_pairing";
+import { PAIRING_COOKIE, validatePairingSession } from "./lib/mobileAccess";
+import { validateRequestHost, validateSameOrigin } from "./lib/mobileRequestGuard";
 
 export function proxy(request: NextRequest) {
   const expectedToken = process.env.COUNCIL_REMOTE_TOKEN;
   if (!expectedToken) return NextResponse.next();
 
-  if (request.cookies.get(PAIRING_COOKIE)?.value === expectedToken) {
-    return NextResponse.next();
+  const hostGuard = validateRequestHost(request);
+  if (!hostGuard.allowed) {
+    return NextResponse.json({ error: hostGuard.message }, { status: hostGuard.status, headers: { "Cache-Control": "no-store" } });
+  }
+
+  if (validatePairingSession(request.cookies.get(PAIRING_COOKIE)?.value, expectedToken)) {
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      const originGuard = validateSameOrigin(request);
+      if (!originGuard.allowed) {
+        return NextResponse.json({ error: originGuard.message }, { status: originGuard.status, headers: { "Cache-Control": "no-store" } });
+      }
+    }
+    const response = NextResponse.next();
+    response.headers.set("Referrer-Policy", "no-referrer");
+    response.headers.set("X-Content-Type-Options", "nosniff");
+    return response;
   }
 
   return new NextResponse(
