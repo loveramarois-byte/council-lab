@@ -446,7 +446,7 @@ async def run_events(
                 for event in events:
                     cursor = event.sequence
                     yield f"id: {event.sequence}\nevent: {event.type}\ndata: {event.model_dump_json()}\n\n"
-                    if event.type in {"final_completed", "run_failed", "run_cancelled", "run_limit_reached"}:
+                    if event.type in {"final_completed", "run_cancelled"}:
                         return
         finally:
             await store.close_event_stream(run_id)

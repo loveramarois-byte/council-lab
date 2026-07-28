@@ -19,7 +19,7 @@
 
 ### Security
 
-- 配对接口增加失败限速与临时锁定，并严格校验 Host、Origin、`Sec-Fetch-Site`、JSON Content-Type 和 2 KiB 请求体上限。
+- 电脑引导令牌与手机配对令牌相互独立，手机令牌不能申请电脑端权限；配对接口增加失败限速与临时锁定，并严格校验 Host、Origin、`Sec-Fetch-Site`、JSON Content-Type 和流式 2 KiB 请求体上限。
 - 已配对客户端的状态修改请求执行同源校验；每个 Run 最多接受 8 个并发 SSE 连接，撤销或重启后旧手机会话立即失效。
 
 ### Fixed

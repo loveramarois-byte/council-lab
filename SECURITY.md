@@ -20,7 +20,7 @@ Council 的本地设置 API 会接收一次明文 Provider 密钥，并立即交
 
 本地部署仍需由操作者保护主机账户、数据目录和 CC Switch 配置。不要把后端直接暴露到不可信网络；默认启动命令只监听 loopback，后端拒绝非本机 `Host`，CORS 只允许 Council 前端来源。软件安装和强制刷新更新信息还要求 Council 前端专用请求头，以降低普通网页跨站触发本机操作或消耗 GitHub API 额度的风险。
 
-手机连接只适用于可信家庭或办公室局域网。配对使用启动实例专属令牌、失败限速、同源 Host/Origin 校验、短期签名 Cookie 和电脑端会话撤销；FastAPI、凭据库和 CC Switch 不直接向局域网监听。普通 HTTP 无法防御同网段被动监听，公共 Wi-Fi、访客网络和互联网端口映射均不在支持范围内。完整资产、攻击者、控制和剩余风险见 [Mobile Access Threat Model](docs/THREAT_MODEL.md)。
+手机连接只适用于可信家庭或办公室局域网。配对使用相互独立的电脑引导令牌和手机令牌、失败限速、同源 Host/Origin 校验、短期签名 Cookie 和电脑端会话撤销；FastAPI、凭据库和 CC Switch 不直接向局域网监听。普通 HTTP 无法防御同网段被动监听，公共 Wi-Fi、访客网络和互联网端口映射均不在支持范围内。完整资产、攻击者、控制和剩余风险见 [Mobile Access Threat Model](docs/THREAT_MODEL.md)。
 
 ## Provider URL validation
 

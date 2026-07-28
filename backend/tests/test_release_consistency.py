@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_release_consistency.py"
@@ -33,19 +35,34 @@ def test_release_metadata_is_consistent():
     assert result.returncode == 0, result.stderr
 
 
-def test_release_check_reports_the_mismatched_file(tmp_path):
+def copy_release_files(tmp_path: Path) -> None:
     for relative_path in REQUIRED_FILES:
         source = ROOT / relative_path
         target = tmp_path / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
-    package = tmp_path / "frontend/package.json"
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "field"),
+    (
+        ("frontend/package.json", "version"),
+        ("frontend/package-lock.json", "version"),
+        ("frontend/package-lock.json", "packages-root-version"),
+    ),
+)
+def test_release_check_reports_mismatched_package_versions(tmp_path, relative_path, field):
+    copy_release_files(tmp_path)
+    package = tmp_path / relative_path
     package_data = json.loads(package.read_text(encoding="utf-8"))
-    package_data["version"] = "9.9.9"
+    if field == "packages-root-version":
+        package_data["packages"][""]["version"] = "9.9.9"
+    else:
+        package_data["version"] = "9.9.9"
     package.write_text(json.dumps(package_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     result = run_check(tmp_path)
 
     assert result.returncode == 1
-    assert "frontend/package.json" in result.stderr
+    assert relative_path in result.stderr
     assert "does not match VERSION" in result.stderr

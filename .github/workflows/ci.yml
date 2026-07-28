@@ -91,6 +91,8 @@ jobs:
         working-directory: frontend
       - run: npm audit --omit=dev --audit-level=high
         working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
       - run: npm run build
         working-directory: frontend
 
@@ -136,7 +138,7 @@ jobs:
             sleep 0.25
           done
           ! curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null 2>&1
-          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-mobile-token COUNCIL_PAIR_FAILURE_LIMIT=3 COUNCIL_PAIR_LOCK_SECONDS=1 exec node_modules/.bin/next dev --hostname 0.0.0.0) >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-mobile-token COUNCIL_DESKTOP_TOKEN=ci-desktop-token COUNCIL_PAIR_FAILURE_LIMIT=3 COUNCIL_PAIR_LOCK_SECONDS=1 exec node_modules/.bin/next dev --hostname 0.0.0.0) >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null && break
@@ -153,6 +155,7 @@ jobs:
           test "$(status -H "Origin: $origin" -H 'Content-Type: application/jsonp' --data '{\"token\":\"wrong\"}' "$base/mobile-access/pair")" = "415"
           oversized="$(python -c 'print("x" * 2200)')"
           test "$(status -H "Origin: $origin" -H 'Content-Type: application/json' --data "{\"token\":\"$oversized\"}" "$base/mobile-access/pair")" = "413"
+          test "$(python -c 'print("x" * 2200)' | curl -sS -o /dev/null -w '%{http_code}' -H "Origin: $origin" -H 'Content-Type: application/json' -H 'Transfer-Encoding: chunked' --data-binary @- "$base/mobile-access/pair")" = "413"
           for expected in 403 403 429; do
             test "$(status -H "Origin: $origin" -H 'Content-Type: application/json' --data '{\"token\":\"wrong\"}' "$base/mobile-access/pair")" = "$expected"
           done
@@ -165,13 +168,14 @@ jobs:
           test "$(status -b "$cookie_jar" -H 'Origin: http://evil.example' -H 'Content-Type: application/json' --data '{}' "$base/api/runs")" = "403"
           test "$(status -b "$cookie_jar" "$base/mobile-access/info")" = "403"
           desktop_cookie="$(mktemp "$RUNNER_TEMP/council-desktop-cookie.XXXXXX")"
-          curl -fsS -c "$desktop_cookie" -H "Origin: $origin" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token","device":"desktop"}' "$base/mobile-access/pair" | grep -q '"paired":true'
+          test "$(status -H "Origin: $origin" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token","device":"desktop"}' "$base/mobile-access/pair")" = "403"
+          curl -fsS -c "$desktop_cookie" -H "Origin: $origin" -H 'Content-Type: application/json' --data '{"token":"ci-desktop-token","device":"desktop"}' "$base/mobile-access/pair" | grep -q '"paired":true'
           curl -fsS -b "$desktop_cookie" "$base/mobile-access/info" | grep -q '"activeSessions":1'
           curl -fsS -b "$desktop_cookie" -H "Origin: $origin" -X POST "$base/mobile-access/revoke" | grep -q '"revoked":1'
           test "$(status -b "$cookie_jar" "$base/")" = "403"
           kill "$(cat "$RUNNER_TEMP/frontend.pid")"
           wait "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
-          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-rotated-token exec node_modules/.bin/next dev --hostname 0.0.0.0) >>"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-rotated-token COUNCIL_DESKTOP_TOKEN=ci-rotated-desktop-token exec node_modules/.bin/next dev --hostname 0.0.0.0) >>"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS "$base/mobile-access/health" >/dev/null && break

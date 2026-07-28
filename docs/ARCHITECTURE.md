@@ -33,7 +33,7 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 资料空间已从当前用户界面和新建审议主流程移除。后端暂时保留旧项目、来源和 Run 快照结构，仅用于升级兼容与历史审议展示，避免更新时误删已有数据；新建审议不再读取或提交资料空间字段。
 
-手机入口由 Next.js 对局域网开放，FastAPI 和 CC Switch 继续只监听 loopback。配对令牌经 URL fragment 到达浏览器，成功后换取不包含原始令牌的 HttpOnly、SameSite=Strict 签名会话；会话有 12 小时上限，绑定当前启动实例，可由电脑端立即撤销。配对接口限制失败频率，只接受当前 Host 的同源 JSON 请求并限制请求体。所有已配对状态修改同样经过 Origin 和 Host 校验。完整边界、普通 HTTP 剩余风险和滥用假设见 `docs/THREAT_MODEL.md`。
+手机入口由 Next.js 对局域网开放，FastAPI 和 CC Switch 继续只监听 loopback。启动器分别生成电脑引导令牌和手机配对令牌，手机令牌不能申请电脑端权限；令牌经 URL fragment 到达对应浏览器，成功后换取不包含原始令牌的 HttpOnly、SameSite=Strict 签名会话。会话有 12 小时上限，绑定当前启动实例，可由电脑端立即撤销。配对接口限制失败频率，只接受当前 Host 的同源 JSON 请求，并在读取流时限制请求体。所有已配对状态修改同样经过 Origin 和 Host 校验。完整边界、普通 HTTP 剩余风险和滥用假设见 `docs/THREAT_MODEL.md`。
 
 完成 Run 后可写入一份决策回访：最终采用的决定、预期结果、复盘日期、实际结果和四席观点验证状态。它属于同一 Run 的可编辑本地记录，不会触发额外模型调用，也不会反向改写当时的讨论和答案。
 

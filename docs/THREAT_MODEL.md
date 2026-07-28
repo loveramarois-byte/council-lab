@@ -31,10 +31,10 @@ The operating system, browser, router, DNS configuration, and selected Provider 
 
 ## Trust boundaries and data flow
 
-1. The launcher generates a random 192-bit token for the current application start and stores it in the user's Council log directory with user-only file permissions.
-2. The desktop-only settings page creates a LAN URL whose fragment contains the token. URL fragments are not sent in HTTP requests or ordinary access logs.
-3. The pair page removes the fragment from browser history before sending a same-origin JSON POST.
-4. A successful POST creates a random, signed, HttpOnly, SameSite=Strict browser session. The raw pairing token is not stored in the Cookie.
+1. The launcher generates separate random 192-bit mobile and desktop-bootstrap tokens for the current application start and stores them in the user's Council log directory with user-only file permissions.
+2. The local browser receives only the desktop-bootstrap token. After that succeeds, the desktop-only settings page creates a LAN URL whose fragment contains only the mobile token. URL fragments are not sent in HTTP requests or ordinary access logs.
+3. The pair page removes either fragment from browser history before sending a same-origin JSON POST. A client cannot select desktop authority with the mobile token.
+4. A successful POST creates a random, signed, HttpOnly, SameSite=Strict browser session. Neither raw token is stored in a Cookie.
 5. Next.js validates the signed session before proxying requests. FastAPI and CC Switch remain bound to loopback.
 6. Council restart rotates the token and clears in-memory sessions. The desktop operator can revoke every mobile session without restarting.
 
@@ -43,8 +43,9 @@ The operating system, browser, router, DNS configuration, and selected Provider 
 ### Pairing abuse
 
 - Constant-time token comparison.
+- Separate desktop-bootstrap and mobile tokens prevent a paired or unpaired phone from requesting desktop-only session-management authority.
 - Global failure window and temporary lockout. Repeated failures return `429` with `Retry-After`.
-- JSON-only pairing requests with a 2 KiB body limit.
+- JSON-only pairing requests with a streaming 2 KiB body limit, including requests without `Content-Length`.
 - Allowed Host validation against loopback, current interfaces, and the configured mobile address.
 - Exact same-origin validation for pairing and every authenticated state-changing request.
 - Rejection of cross-site `Sec-Fetch-Site` values when supplied by the browser.

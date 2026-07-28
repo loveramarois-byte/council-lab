@@ -14,19 +14,20 @@ function findLanAddress() {
 }
 
 export async function GET(request: Request) {
-  const token = process.env.COUNCIL_REMOTE_TOKEN || "";
+  const mobileToken = process.env.COUNCIL_REMOTE_TOKEN || "";
+  const desktopToken = process.env.COUNCIL_DESKTOP_TOKEN || "";
   const cookieStore = await cookies();
-  if (!validateDesktopCookie(cookieStore.get(DESKTOP_COOKIE)?.value, token)) {
+  if (!validateDesktopCookie(cookieStore.get(DESKTOP_COOKIE)?.value, desktopToken)) {
     return Response.json({ detail: "手机连接信息只在电脑端显示" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
   const port = process.env.PORT || "3000";
   const lanAddress = process.env.COUNCIL_MOBILE_HOST || findLanAddress();
   const origin = lanAddress ? `http://${lanAddress}:${port}` : "";
-  const pairUrl = origin ? `${origin}/pair#mobile:${encodeURIComponent(token)}` : "";
+  const pairUrl = origin ? `${origin}/pair#mobile:${encodeURIComponent(mobileToken)}` : "";
 
   return Response.json(
     {
-      enabled: Boolean(token),
+      enabled: Boolean(mobileToken),
       lanAddress,
       origin,
       pairUrl,

@@ -801,6 +801,9 @@ async def test_token_limited_run_can_raise_limit_and_resume_without_repeating_tu
     assert current.limit_reason is None
     assert [turn.speaker_name for turn in current.discussion_turns] == ["析理", "诘问", "构策", "观澜"]
     assert calls == 4
+    event_types = [event.type for event in await store.list_events(run.id)]
+    assert event_types.index("run_limit_reached") < len(event_types) - 1
+    assert event_types[-1] == "awaiting_final_input"
 
 
 async def test_limit_resume_keeps_recovery_state_when_credentials_are_missing(tmp_path):

@@ -14,6 +14,29 @@ import { validateSameOrigin } from "../../../lib/mobileRequestGuard";
 
 const MAX_PAIRING_BODY_BYTES = 2048;
 
+async function readLimitedBody(request: Request) {
+  const reader = request.body?.getReader();
+  if (!reader) return { tooLarge: false, text: "" };
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_PAIRING_BODY_BYTES) {
+        await reader.cancel();
+        return { tooLarge: true, text: "" };
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return { tooLarge: false, text: text + decoder.decode() };
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function tokensMatch(supplied: string, expected: string) {
   const suppliedBytes = Buffer.from(supplied);
   const expectedBytes = Buffer.from(expected);
@@ -40,18 +63,21 @@ export async function POST(request: Request) {
       { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": String(rateLimit.retryAfter) } },
     );
   }
-  const expectedToken = process.env.COUNCIL_REMOTE_TOKEN || "";
-  const rawBody = await request.text();
-  if (Buffer.byteLength(rawBody, "utf8") > MAX_PAIRING_BODY_BYTES) {
+  const limitedBody = await readLimitedBody(request);
+  if (limitedBody.tooLarge) {
     return Response.json({ paired: false, error: "配对请求体过大" }, { status: 413, headers: { "Cache-Control": "no-store" } });
   }
   const body = (() => {
-    try { return JSON.parse(rawBody) as { token?: unknown; device?: unknown }; }
+    try { return JSON.parse(limitedBody.text) as { token?: unknown; device?: unknown }; }
     catch { return {}; }
   })();
   const suppliedToken = typeof body.token === "string" ? body.token : "";
+  const device = body.device === "desktop" ? "desktop" : "mobile";
+  const mobileToken = process.env.COUNCIL_REMOTE_TOKEN || "";
+  const desktopToken = process.env.COUNCIL_DESKTOP_TOKEN || "";
+  const expectedToken = device === "desktop" ? desktopToken : mobileToken;
 
-  if (!expectedToken || !tokensMatch(suppliedToken, expectedToken)) {
+  if (!mobileToken || !expectedToken || !tokensMatch(suppliedToken, expectedToken)) {
     const failed = recordPairingFailure();
     if (failed.limited) {
       return Response.json(
@@ -63,9 +89,8 @@ export async function POST(request: Request) {
   }
 
   clearPairingFailures();
-  const device = body.device === "desktop" ? "desktop" : "mobile";
   const response = NextResponse.json({ paired: true });
-  response.cookies.set(PAIRING_COOKIE, issuePairingSession(expectedToken, device), {
+  response.cookies.set(PAIRING_COOKIE, issuePairingSession(mobileToken, device), {
     httpOnly: true,
     sameSite: "strict",
     secure: new URL(request.url).protocol === "https:",
@@ -73,7 +98,7 @@ export async function POST(request: Request) {
     maxAge: SESSION_TTL_SECONDS,
   });
   if (device === "desktop") {
-    response.cookies.set(DESKTOP_COOKIE, issueDesktopCookie(expectedToken), {
+    response.cookies.set(DESKTOP_COOKIE, issueDesktopCookie(desktopToken), {
       httpOnly: true,
       sameSite: "strict",
       secure: new URL(request.url).protocol === "https:",

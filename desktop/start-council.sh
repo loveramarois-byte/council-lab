@@ -12,6 +12,7 @@ PID_FILE="$LOG_DIR/council.pids"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 TOKEN_FILE="$LOG_DIR/mobile-access.token"
+DESKTOP_TOKEN_FILE="$LOG_DIR/desktop-access.token"
 
 mkdir -p "$LOG_DIR"
 : > "$PID_FILE"
@@ -58,8 +59,10 @@ if ! is_up "http://127.0.0.1:8001/api/health"; then
 fi
 
 REMOTE_TOKEN=""
-if frontend_is_up && [[ -f "$TOKEN_FILE" ]]; then
+DESKTOP_TOKEN=""
+if frontend_is_up && [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
   REMOTE_TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+  DESKTOP_TOKEN="$(tr -d '[:space:]' < "$DESKTOP_TOKEN_FILE")"
 fi
 
 if ! frontend_is_up; then
@@ -75,10 +78,12 @@ if ! frontend_is_up; then
     fi
   fi
   REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  DESKTOP_TOKEN="$(/usr/bin/openssl rand -hex 24)"
   umask 077
   printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
+  printf '%s\n' "$DESKTOP_TOKEN" > "$DESKTOP_TOKEN_FILE"
   pushd "$FRONTEND_DIR" >/dev/null
-  COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -H 0.0.0.0 -p 3000 >>"$FRONTEND_LOG" 2>&1 &
+  COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -H 0.0.0.0 -p 3000 >>"$FRONTEND_LOG" 2>&1 &
   FRONTEND_PID=$!
   popd >/dev/null
   echo "frontend $FRONTEND_PID" >>"$PID_FILE"
@@ -93,8 +98,8 @@ if ! frontend_is_up; then
   fi
 fi
 
-if [[ -n "$REMOTE_TOKEN" ]]; then
-  open "http://localhost:3000/pair#desktop:$REMOTE_TOKEN"
+if [[ -n "$DESKTOP_TOKEN" ]]; then
+  open "http://localhost:3000/pair#desktop:$DESKTOP_TOKEN"
 else
   open "http://localhost:3000"
 fi

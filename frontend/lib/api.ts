@@ -229,7 +229,7 @@ export function subscribeToRun(
   let lastEventId = 0;
   let stopped = false;
   const names = ["run_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
-  const terminalEvents = new Set(["final_completed", "run_failed", "run_limit_reached", "run_cancelled"]);
+  const terminalEvents = new Set(["final_completed", "run_cancelled"]);
 
   const connect = async () => {
     if (stopped) return;

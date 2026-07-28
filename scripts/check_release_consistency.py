@@ -37,6 +37,12 @@ def check(root: Path) -> list[str]:
             continue
         if package_version != version:
             errors.append(f"{relative_path}: version {package_version!r} does not match VERSION {version!r}")
+        if relative_path == "frontend/package-lock.json":
+            root_package_version = json.loads(raw).get("packages", {}).get("", {}).get("version")
+            if root_package_version != version:
+                errors.append(
+                    f"{relative_path}: packages[''].version {root_package_version!r} does not match VERSION {version!r}"
+                )
 
     documents = {
         "README.md": rf"当前版本为 `{re.escape(version)}`",

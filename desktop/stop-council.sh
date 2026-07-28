@@ -5,6 +5,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council.pids"
 TOKEN_FILE="$LOG_DIR/mobile-access.token"
+DESKTOP_TOKEN_FILE="$LOG_DIR/desktop-access.token"
 
 if [[ -f "$PID_FILE" ]]; then
   while read -r service pid; do
@@ -27,6 +28,6 @@ for port in 8001 3000; do
   done
 done
 
-rm -f "$TOKEN_FILE"
+rm -f "$TOKEN_FILE" "$DESKTOP_TOKEN_FILE"
 
 osascript -e 'display notification "Council 的本地服务已停止" with title "Council"' >/dev/null 2>&1 || true
