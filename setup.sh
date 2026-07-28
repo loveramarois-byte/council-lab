@@ -33,7 +33,7 @@ printf '2/3 安装并构建网页...\n'
 (
   cd "$FRONTEND_DIR"
   npm ci --no-audit --no-fund
-  NEXT_PUBLIC_API_URL=http://127.0.0.1:8001 npm run build
+  npm run build
 )
 
 printf '3/3 创建启动入口...\n'

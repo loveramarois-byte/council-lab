@@ -61,7 +61,13 @@ jobs:
           "$launcher"
           curl -fsS http://127.0.0.1:8001/api/health >/dev/null
           test "$(curl -fsS http://127.0.0.1:8001/api/update/status | python -c 'import json,sys; print(json.load(sys.stdin)["current_version"])')" = "$(tr -d '[:space:]' < VERSION)"
-          curl -fsS http://127.0.0.1:3000/ | grep -q Council
+          curl -fsS http://127.0.0.1:3000/mobile-access/health | grep -q council-mobile-access
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
+          token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/mobile-access.token")"
+          cookie_jar="$RUNNER_TEMP/launcher-cookie.txt"
+          curl -fsS -c "$cookie_jar" -H 'Content-Type: application/json' --data "{\"token\":\"$token\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
+          curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/ | grep -q Council
+          curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/api/health | grep -q council-lab
           first_backend="$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           first_frontend="$(awk '$1 == "frontend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           test -n "$first_backend"
@@ -70,7 +76,7 @@ jobs:
           test "$first_backend" = "$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           test "$first_frontend" = "$(awk '$1 == "frontend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           kill "$first_frontend"
-          for attempt in {1..40}; do curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1 || break; sleep 0.1; done
+          for attempt in {1..40}; do curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null 2>&1 || break; sleep 0.1; done
           "$launcher"
           second_backend="$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           second_frontend="$(awk '$1 == "frontend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
@@ -82,7 +88,7 @@ jobs:
             if ! kill -0 "$second_backend" 2>/dev/null \
               && ! kill -0 "$second_frontend" 2>/dev/null \
               && ! curl -fsS http://127.0.0.1:8001/api/health >/dev/null 2>&1 \
-              && ! curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
+              && ! curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null 2>&1; then
               services_stopped=1
               break
             fi
@@ -177,7 +183,7 @@ jobs:
           if ($first.backend -ne $repeat.backend -or $first.frontend -ne $repeat.frontend) { throw "Repeated launch replaced healthy processes" }
           Stop-Process -Id $first.frontend -Force
           for ($attempt = 0; $attempt -lt 40; $attempt++) {
-            try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/ -TimeoutSec 1 | Out-Null } catch { break }
+            try { Invoke-RestMethod http://127.0.0.1:3000/mobile-access/health -TimeoutSec 1 | Out-Null } catch { break }
             Start-Sleep -Milliseconds 100
           }
           & $launcher -NoBrowser
@@ -251,7 +257,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="macOS：下载 macOS ZIP，解压后双击 Council.app。Windows：下载 Windows ZIP，完整解压后双击 Start Council.cmd。两个包均内置运行环境，不需要安装 Python 或 Node.js。当前开源构建未做 Apple notarization 或 Windows 商业代码签名，请仅从本仓库 Release 下载。"
+          notes="macOS：下载 macOS ZIP，解压后双击 Council.app。Windows：下载 Windows ZIP，完整解压后双击 Start Council.cmd。手机端：电脑启动后打开“设置 → 手机连接”，在同一可信 Wi-Fi 下扫码配对。两个包均内置运行环境，不需要安装 Python 或 Node.js。当前开源构建未做 Apple notarization 或 Windows 商业代码签名，请仅从本仓库 Release 下载。"
           if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" artifacts/*.zip artifacts/SHA256SUMS.txt --clobber --repo "${GITHUB_REPOSITORY}"
             gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "Council ${GITHUB_REF_NAME}" --notes "$notes"

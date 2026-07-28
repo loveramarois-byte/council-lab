@@ -11,6 +11,7 @@ LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council.pids"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
+TOKEN_FILE="$LOG_DIR/mobile-access.token"
 
 mkdir -p "$LOG_DIR"
 : > "$PID_FILE"
@@ -20,11 +21,7 @@ is_up() {
 }
 
 frontend_is_up() {
-  local html css_path
-  html="$(curl -fsS --max-time 2 "http://127.0.0.1:3000/" 2>/dev/null)" || return 1
-  css_path="$(printf '%s' "$html" | sed -n 's/.*href="\([^\"]*\.css[^\"]*\)".*/\1/p' | head -n 1)"
-  [[ -n "$css_path" ]] || return 1
-  curl -fsS --max-time 2 "http://127.0.0.1:3000$css_path" >/dev/null 2>&1
+  curl -fsS --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null | grep -q 'council-mobile-access'
 }
 
 wait_for() {
@@ -60,6 +57,11 @@ if ! is_up "http://127.0.0.1:8001/api/health"; then
   fi
 fi
 
+REMOTE_TOKEN=""
+if frontend_is_up && [[ -f "$TOKEN_FILE" ]]; then
+  REMOTE_TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+fi
+
 if ! frontend_is_up; then
   EXISTING_FRONTEND_PID="$(lsof -tiTCP:3000 -sTCP:LISTEN 2>/dev/null | head -n 1)"
   if [[ -n "$EXISTING_FRONTEND_PID" ]]; then
@@ -72,8 +74,11 @@ if ! frontend_is_up; then
       exit 1
     fi
   fi
+  REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  umask 077
+  printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
   pushd "$FRONTEND_DIR" >/dev/null
-  NEXT_PUBLIC_API_URL=http://127.0.0.1:8001 nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -p 3000 >>"$FRONTEND_LOG" 2>&1 &
+  COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -H 0.0.0.0 -p 3000 >>"$FRONTEND_LOG" 2>&1 &
   FRONTEND_PID=$!
   popd >/dev/null
   echo "frontend $FRONTEND_PID" >>"$PID_FILE"
@@ -88,4 +93,8 @@ if ! frontend_is_up; then
   fi
 fi
 
-open "http://localhost:3000"
+if [[ -n "$REMOTE_TOKEN" ]]; then
+  open "http://localhost:3000/pair#desktop:$REMOTE_TOKEN"
+else
+  open "http://localhost:3000"
+fi

@@ -20,6 +20,7 @@ import {
   Save,
   Server,
   ShieldCheck,
+  Smartphone,
   Trash2,
   UploadCloud,
 } from "lucide-react";
@@ -283,7 +284,7 @@ export default function ProvidersSettingsPage() {
       <span className="top-meta"><ShieldCheck size={15} />API Key 由系统凭据库保护</span>
     </header>
     <div className="settings-layout provider-settings-layout">
-      <aside className="settings-nav"><p className="eyebrow">设置</p>{[["providers", "模型供应商", Server], ["agents", "角色分配", Link2], ["budget", "预算与限制", FlaskConical], ["privacy", "数据与隐私", KeyRound], ["appearance", "外观", Globe2], ["update", "软件更新", UploadCloud]].map(([id, label, Icon]) => <a key={id as string} className={`settings-nav-link ${id === "providers" ? "active" : ""}`} href={id === "providers" ? "/settings/providers" : `/settings/${id}`}><Icon size={15} />{label as string}<ChevronRight size={14} /></a>)}</aside>
+      <aside className="settings-nav"><p className="eyebrow">设置</p>{[["providers", "模型供应商", Server], ["agents", "角色分配", Link2], ["mobile", "手机连接", Smartphone], ["budget", "预算与限制", FlaskConical], ["privacy", "数据与隐私", KeyRound], ["appearance", "外观", Globe2], ["update", "软件更新", UploadCloud]].map(([id, label, Icon]) => <a key={id as string} className={`settings-nav-link ${id === "providers" ? "active" : ""}`} href={id === "providers" ? "/settings/providers" : `/settings/${id}`}><Icon size={15} />{label as string}<ChevronRight size={14} /></a>)}</aside>
       <section className="settings-content provider-settings-content">
         <div className="provider-heading">
           <div><p className="eyebrow terracotta">连接中心</p><h1>选择服务，模型自动识别。</h1></div>

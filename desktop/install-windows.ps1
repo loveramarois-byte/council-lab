@@ -72,21 +72,13 @@ try {
 
     Write-Host "2/3 Installing and building the web interface..."
     Push-Location $FrontendDir
-    $PreviousApiUrl = $env:NEXT_PUBLIC_API_URL
     try {
         & $Npm.Source ci --no-audit --no-fund
         if ($LASTEXITCODE -ne 0) { Stop-Install "Frontend dependency installation failed." }
-        $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:8001"
         & $Npm.Source run build
         if ($LASTEXITCODE -ne 0) { Stop-Install "Frontend build failed." }
     }
     finally {
-        if ($null -eq $PreviousApiUrl) {
-            Remove-Item Env:NEXT_PUBLIC_API_URL -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:NEXT_PUBLIC_API_URL = $PreviousApiUrl
-        }
         Pop-Location
     }
 

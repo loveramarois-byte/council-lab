@@ -11,6 +11,7 @@ $BuildId = Join-Path $ProjectDir "frontend\.next\BUILD_ID"
 $LocalRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME "AppData\Local" }
 $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $LocalRoot "Council\logs" }
 $PidFile = Join-Path $LogDir "council-pids.json"
+$TokenFile = Join-Path $LogDir "mobile-access.token"
 $BackendProcess = $null
 $FrontendProcess = $null
 
@@ -24,10 +25,18 @@ function Test-Backend {
 
 function Test-Frontend {
     try {
-        $Response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:3000/" -TimeoutSec 2
-        return $Response.StatusCode -eq 200 -and $Response.Content -match "Council"
+        $Response = Invoke-RestMethod -Uri "http://127.0.0.1:3000/mobile-access/health" -TimeoutSec 2
+        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access"
     }
     catch { return $false }
+}
+
+function New-PairingToken {
+    $Bytes = New-Object byte[] 24
+    $Generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $Generator.GetBytes($Bytes) }
+    finally { $Generator.Dispose() }
+    return [BitConverter]::ToString($Bytes).Replace("-", "").ToLowerInvariant()
 }
 
 function Test-Port([int]$Port) {
@@ -70,22 +79,29 @@ try {
         }
     }
 
+    $RemoteToken = ""
+    if ((Test-Frontend) -and (Test-Path $TokenFile)) {
+        $RemoteToken = (Get-Content -Raw $TokenFile).Trim()
+    }
+
     if (-not (Test-Frontend)) {
         if (Test-Port 3000) { throw "Port 3000 is used by another program. Close it, then start Council again." }
-        $PreviousApiUrl = $env:NEXT_PUBLIC_API_URL
-        $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:8001"
+        $RemoteToken = New-PairingToken
+        Set-Content -Encoding ASCII -Path $TokenFile -Value $RemoteToken
+        $PreviousRemoteToken = $env:COUNCIL_REMOTE_TOKEN
+        $env:COUNCIL_REMOTE_TOKEN = $RemoteToken
         try {
             $Node = (Get-Command "node.exe" -ErrorAction Stop).Source
             $FrontendProcess = Start-Process -FilePath $Node `
-                -ArgumentList @("`"$NextScript`"", "start", "-H", "127.0.0.1", "-p", "3000") `
+                -ArgumentList @("`"$NextScript`"", "start", "-H", "0.0.0.0", "-p", "3000") `
                 -WorkingDirectory (Join-Path $ProjectDir "frontend") -WindowStyle Hidden -PassThru `
                 -RedirectStandardOutput (Join-Path $LogDir "frontend.stdout.log") `
                 -RedirectStandardError (Join-Path $LogDir "frontend.stderr.log")
             $Started.frontend = $FrontendProcess.Id
         }
         finally {
-            if ($null -eq $PreviousApiUrl) { Remove-Item Env:NEXT_PUBLIC_API_URL -ErrorAction SilentlyContinue }
-            else { $env:NEXT_PUBLIC_API_URL = $PreviousApiUrl }
+            if ($null -eq $PreviousRemoteToken) { Remove-Item Env:COUNCIL_REMOTE_TOKEN -ErrorAction SilentlyContinue }
+            else { $env:COUNCIL_REMOTE_TOKEN = $PreviousRemoteToken }
         }
         if (-not (Wait-Until { Test-Frontend })) {
             throw "The web interface did not start. See $LogDir\frontend.stderr.log"
@@ -96,7 +112,8 @@ try {
         $Started | ConvertTo-Json | Set-Content -Encoding UTF8 -Path $PidFile
     }
     if (-not $NoBrowser) {
-        Start-Process "http://localhost:3000"
+        $LaunchUrl = if ($RemoteToken) { "http://localhost:3000/pair#desktop:$RemoteToken" } else { "http://localhost:3000" }
+        Start-Process $LaunchUrl
     }
     Write-Host "Council is running at http://localhost:3000" -ForegroundColor Green
 }

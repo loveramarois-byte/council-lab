@@ -56,8 +56,8 @@ jobs:
           ./desktop/start-council.ps1 -NoBrowser
           $health = Invoke-RestMethod -Uri http://127.0.0.1:8001/api/health
           if ($health.status -ne "ok" -or $health.service -ne "council-lab") { throw "Backend health check failed" }
-          $page = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:3000/
-          if ($page.StatusCode -ne 200 -or $page.Content -notmatch "Council") { throw "Frontend smoke test failed" }
+          $frontendHealth = Invoke-RestMethod -Uri http://127.0.0.1:3000/mobile-access/health
+          if ($frontendHealth.status -ne "ok" -or $frontendHealth.service -ne "council-mobile-access") { throw "Frontend smoke test failed" }
           $pidFile = Join-Path $env:LOCALAPPDATA "Council\logs\council-pids.json"
           $first = Get-Content -Raw $pidFile | ConvertFrom-Json
           ./desktop/start-council.ps1 -NoBrowser
@@ -115,7 +115,7 @@ jobs:
       - run: |
           COUNCIL_DATA_DIR="$RUNNER_TEMP/council-data" python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8001 >"$RUNNER_TEMP/backend.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/backend.pid"
-          NEXT_PUBLIC_API_URL=http://127.0.0.1:8001 npm --prefix frontend run dev -- --hostname 127.0.0.1 >"$RUNNER_TEMP/frontend.log" 2>&1 &
+          npm --prefix frontend run dev -- --hostname 127.0.0.1 >"$RUNNER_TEMP/frontend.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS http://127.0.0.1:8001/api/health >/dev/null && curl -fsS http://127.0.0.1:3000 >/dev/null && exit 0
@@ -126,7 +126,27 @@ jobs:
         working-directory: .
       - run: npm test
         working-directory: frontend
+      - name: Verify mobile pairing guard and same-origin API
+        run: |
+          kill "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
+          wait "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
+          COUNCIL_REMOTE_TOKEN=ci-mobile-token npm --prefix frontend run dev -- --hostname 0.0.0.0 >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/frontend.pid"
+          for attempt in {1..60}; do
+            curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null && break
+            sleep 1
+          done
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
+          cookie_jar="$(mktemp "$RUNNER_TEMP/council-cookie.XXXXXX")"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{\"token\":\"wrong\"}' http://127.0.0.1:3000/mobile-access/pair)" = "403"
+          curl -fsS -c "$cookie_jar" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token"}' http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
+          curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/ | grep -q Council
+          curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/api/health | grep -q council-lab
+          test "$(curl -sS -b "$cookie_jar" -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/mobile-access/info)" = "403"
+          desktop_cookie="$(mktemp "$RUNNER_TEMP/council-desktop-cookie.XXXXXX")"
+          curl -fsS -c "$desktop_cookie" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token","device":"desktop"}' http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
+          curl -fsS -b "$desktop_cookie" http://127.0.0.1:3000/mobile-access/info | grep -q '"pairUrl"'
       - if: always()
         run: |
           kill "$(cat "$RUNNER_TEMP/backend.pid")" "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
-          cat "$RUNNER_TEMP/backend.log" "$RUNNER_TEMP/frontend.log" 2>/dev/null || true
+          cat "$RUNNER_TEMP/backend.log" "$RUNNER_TEMP/frontend.log" "$RUNNER_TEMP/frontend-mobile.log" 2>/dev/null || true
