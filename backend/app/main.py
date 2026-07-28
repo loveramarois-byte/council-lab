@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 
 import httpx
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .credentials import CredentialStoreError, delete_provider_secret, get_provider_secret, save_provider_secret
 from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_webpage
@@ -23,6 +24,7 @@ from .reports import run_html, run_markdown
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
 from .templates import list_templates
+from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, update_manager
 
 store = Store(database_path())
 providers = restore_provider_profiles(store.load_providers())
@@ -48,8 +50,9 @@ async def lifespan(_: FastAPI):
         await orchestrator.shutdown()
 
 
-app = FastAPI(title="Council Lab", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Council Lab", version=current_version(), lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
 
 
 def provider_error_message(exc: Exception) -> str:
@@ -90,6 +93,28 @@ def offline_model_catalog(profile: ProviderProfile) -> tuple[list[str], str]:
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "council-lab"}
+
+
+@app.get("/api/update/check")
+async def check_for_update(refresh: bool = False, x_council_request: str | None = Header(default=None)):
+    if refresh and not install_request_is_allowed(x_council_request):
+        raise HTTPException(403, "只能从 Council 软件内强制刷新版本信息。")
+    try:
+        return public_update_info(await fetch_release(refresh=refresh))
+    except UpdateError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.get("/api/update/status")
+async def update_status():
+    return update_manager.status()
+
+
+@app.post("/api/update/install")
+async def install_update(x_council_request: str | None = Header(default=None)):
+    if not install_request_is_allowed(x_council_request):
+        raise HTTPException(403, "只能从 Council 软件内启动更新。")
+    return await update_manager.start()
 
 
 @app.post("/api/runs")

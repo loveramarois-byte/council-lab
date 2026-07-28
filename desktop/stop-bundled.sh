@@ -1,8 +1,8 @@
 #!/bin/zsh
 
 set -u
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council-bundled.pids"
 

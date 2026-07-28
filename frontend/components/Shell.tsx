@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, ChevronRight, CircleHelp, FileText, FolderKanban, History, LayoutGrid, Menu, Settings2, X } from "lucide-react";
+import { BookOpen, ChevronRight, CircleHelp, FileText, FolderKanban, History, LayoutGrid, Menu, Settings2, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, Provider } from "../lib/api";
 
@@ -17,12 +17,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [provider, setProvider] = useState<Provider | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
 
   useEffect(() => {
     const loadProvider = () => api.providers().then((items) => setProvider(items.find((item) => item.is_active) || items[0])).catch(() => undefined);
     loadProvider();
     const timer = window.setInterval(loadProvider, 5000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    api.checkUpdate().then((result) => setUpdateAvailable(result.update_available)).catch(() => undefined);
   }, []);
 
   const upstreamBusy = Boolean(provider?.last_error && /429|502|503|504|too many requests|上游/i.test(provider.last_error));
@@ -37,14 +42,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
     <button className="mobile-menu" aria-label="打开导航" onClick={() => setOpen(true)}><Menu size={18} /></button>
     {open && <button className="scrim" aria-label="关闭导航" onClick={() => setOpen(false)} />}
     <aside className={`sidebar ${open ? "sidebar-open" : ""}`}>
-      <div className="brand-lockup"><span className="brand-mark">C</span><div><strong>Council</strong><small>审议台</small></div><button className="mobile-close" onClick={() => setOpen(false)} aria-label="关闭导航"><X size={17} /></button></div>
+      <div className="brand-lockup"><span className="brand-mark" aria-hidden="true"><Sparkles size={16} strokeWidth={1.8} /></span><div><strong>Council</strong><small>四席审议工作台</small></div><button className="mobile-close" onClick={() => setOpen(false)} aria-label="关闭导航"><X size={17} /></button></div>
       <div className="sidebar-rule" />
       <nav className="primary-nav" aria-label="主导航">
         {nav.map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={() => setOpen(false)} className={pathname === href || (href !== "/" && pathname.startsWith(href)) ? "nav-link active" : "nav-link"}><Icon size={17} strokeWidth={1.7} /><span>{label}</span>{pathname === href && <ChevronRight className="nav-caret" size={15} />}</Link>)}
       </nav>
       <div className="sidebar-bottom">
         <p className="eyebrow">工作区</p>
-        <Link href="/settings/providers" className={`nav-link ${pathname.startsWith("/settings") ? "active" : ""}`}><Settings2 size={17} strokeWidth={1.7} /><span>设置</span></Link>
+        <Link href={updateAvailable ? "/settings/update" : "/settings/providers"} className={`nav-link ${pathname.startsWith("/settings") ? "active" : ""}`}><Settings2 size={17} strokeWidth={1.7} /><span>设置</span>{updateAvailable && <span className="update-badge">有更新</span>}</Link>
         <div className="provider-presence"><span className={`presence-dot ${providerReady ? "" : "presence-muted"}`} /><div><span>{provider?.display_name || "供应商"}</span><small>{providerDetail}</small></div><CircleHelp size={15} className="muted-icon" /></div>
       </div>
       <div className="sidebar-footnote"><BookOpen size={14} /><span>答案先于日志，证据先于共识。</span></div>

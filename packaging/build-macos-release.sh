@@ -77,6 +77,8 @@ mkdir -p "$RESOURCES_DIR/web/.next"
 cp "$NODE_RUNTIME_DIR/bin/node" "$RESOURCES_DIR/runtime/node"
 cp "$PROJECT_DIR/desktop/start-bundled.sh" "$RESOURCES_DIR/launcher/start-council.sh"
 cp "$PROJECT_DIR/desktop/stop-bundled.sh" "$RESOURCES_DIR/launcher/stop-council.sh"
+cp "$PROJECT_DIR/desktop/update-macos.sh" "$RESOURCES_DIR/launcher/update-council.sh"
+cp "$PROJECT_DIR/VERSION" "$RESOURCES_DIR/VERSION"
 cp "$PROJECT_DIR/desktop/Council.icns" "$RESOURCES_DIR/Council.icns"
 chmod +x "$RESOURCES_DIR/runtime/node" "$RESOURCES_DIR/launcher/"*.sh "$RESOURCES_DIR/backend/council-backend/council-backend"
 

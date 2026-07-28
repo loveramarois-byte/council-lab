@@ -57,12 +57,14 @@ $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 Copy-Item $NodeExe (Join-Path $StageDir "runtime\node.exe")
 Copy-Item (Join-Path $ProjectDir "desktop\start-bundled.ps1") (Join-Path $StageDir "runtime\start-council.ps1")
 Copy-Item (Join-Path $ProjectDir "desktop\stop-bundled.ps1") (Join-Path $StageDir "runtime\stop-council.ps1")
+Copy-Item (Join-Path $ProjectDir "desktop\update-windows.ps1") (Join-Path $StageDir "runtime\update-council.ps1")
 Copy-Item (Join-Path $ProjectDir "desktop\create-bundled-shortcut.ps1") (Join-Path $StageDir "runtime\create-shortcut.ps1")
 Copy-Item (Join-Path $ProjectDir "desktop\Start Bundled.cmd") (Join-Path $StageDir "Start Council.cmd")
 Copy-Item (Join-Path $ProjectDir "desktop\Stop Bundled.cmd") (Join-Path $StageDir "Stop Council.cmd")
 Copy-Item (Join-Path $ProjectDir "desktop\Create Desktop Shortcut.cmd") (Join-Path $StageDir "Create Desktop Shortcut.cmd")
 Copy-Item (Join-Path $ProjectDir "packaging\README-Windows.txt") (Join-Path $StageDir "README-FIRST.txt")
 Copy-Item (Join-Path $ProjectDir "LICENSE"), (Join-Path $ProjectDir "NOTICE") $StageDir
+Copy-Item (Join-Path $ProjectDir "VERSION") $StageDir
 
 Compress-Archive -Path $StageDir -DestinationPath $ZipPath -CompressionLevel Optimal
 Write-Output $ZipPath

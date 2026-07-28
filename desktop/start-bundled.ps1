@@ -15,6 +15,10 @@ $PidFile = Join-Path $LogDir "council-bundled-pids.json"
 $BackendProcess = $null
 $FrontendProcess = $null
 
+$env:COUNCIL_PACKAGED = "1"
+$env:COUNCIL_INSTALL_ROOT = $PackageRoot
+$env:COUNCIL_VERSION = (Get-Content -Raw (Join-Path $PackageRoot "VERSION")).Trim()
+
 function Test-Backend {
     try {
         $Health = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 2

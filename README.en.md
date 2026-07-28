@@ -17,6 +17,7 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
 - **Portable reports.** Export a completed deliberation as Markdown or a self-contained HTML report.
 - **Local-first credentials.** API keys are stored in the operating-system credential store, not Council's database or browser storage.
+- **Verified in-app updates.** Council checks official releases, verifies the downloaded package against `SHA256SUMS.txt`, replaces the installed copy, and restarts without moving local data or credentials.
 - **Reproducible evaluation.** A 12-case benchmark tracks failures, tokens, latency, optional cost estimates, citation support, and unsupported claims without publishing scores from Mock or incomplete blind reviews.
 
 Council never displays or saves hidden chain-of-thought. It stores only public model responses and run metadata. It does not currently run web searches or a code sandbox, and model agreement is **not** external fact verification.
@@ -40,6 +41,12 @@ The release includes its own runtime. Python and Node.js are not required. This 
 The release includes its own runtime and needs neither administrator access nor a separate Python/Node.js installation. This open-source build is not commercially code-signed. If SmartScreen appears, verify that the file came from this repository's Release page, then choose **More info -> Run anyway**. `Create Desktop Shortcut.cmd` adds an optional shortcut.
 
 Every release also includes `SHA256SUMS.txt` for verifying the downloaded ZIP.
+
+### Updating an installed copy
+
+Starting with `v0.4.0`, Council checks the official GitHub Release on launch. Open **Settings -> Software Update** to download, verify, replace, and restart the app. macOS may request system authorization when `Council.app` is in a protected folder. Windows updates the current extracted directory in place, so an existing desktop shortcut remains valid.
+
+Versions `v0.3.0` and earlier do not contain the updater. Install `v0.4.0` manually once; later releases can be installed from inside Council.
 
 ## First connection
 
@@ -101,6 +108,6 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and imported source text may contain sensitive material; protect the local account and review content before sharing an exported report.
 
-Version `0.3.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
+Version `0.4.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
