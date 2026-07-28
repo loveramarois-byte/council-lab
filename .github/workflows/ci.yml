@@ -115,7 +115,7 @@ jobs:
       - run: |
           COUNCIL_DATA_DIR="$RUNNER_TEMP/council-data" python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8001 >"$RUNNER_TEMP/backend.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/backend.pid"
-          npm --prefix frontend run dev -- --hostname 127.0.0.1 >"$RUNNER_TEMP/frontend.log" 2>&1 &
+          (cd frontend && exec node_modules/.bin/next dev --hostname 127.0.0.1) >"$RUNNER_TEMP/frontend.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS http://127.0.0.1:8001/api/health >/dev/null && curl -fsS http://127.0.0.1:3000 >/dev/null && exit 0
@@ -130,7 +130,12 @@ jobs:
         run: |
           kill "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
           wait "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
-          COUNCIL_REMOTE_TOKEN=ci-mobile-token npm --prefix frontend run dev -- --hostname 0.0.0.0 >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          for attempt in {1..40}; do
+            curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null 2>&1 || break
+            sleep 0.25
+          done
+          ! curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null 2>&1
+          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-mobile-token exec node_modules/.bin/next dev --hostname 0.0.0.0) >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null && break
