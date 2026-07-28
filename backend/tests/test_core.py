@@ -179,6 +179,33 @@ def test_runtime_restore_rejects_legacy_unverified_models_for_app_and_evals():
     assert assignment_config_is_valid(invalid, profiles) is False
 
 
+def test_runtime_restore_preserves_ccswitch_models_verified_by_success_history():
+    saved = ProviderProfile(
+        id="ccswitch",
+        preset_id="ccswitch",
+        display_name="CC Switch",
+        provider_type=ProviderType.CCSWITCH,
+        default_model="gpt-5.6-sol",
+        available_models=["gpt-5.6-sol", "deepseek-v4-pro"],
+        model_source="ccswitch_history",
+    )
+
+    profiles = restore_provider_profiles([saved])
+
+    assert profiles["ccswitch"].default_model == "gpt-5.6-sol"
+    assert profiles["ccswitch"].available_models == ["gpt-5.6-sol", "deepseek-v4-pro"]
+    assert profiles["ccswitch"].model_source == "ccswitch_history"
+
+    valid = AgentAssignmentsConfig(
+        seats=[AgentModelAssignment(role=role, provider_id="ccswitch", model="gpt-5.6-sol") for role in ["analyst", "challenger", "builder", "observer"]],
+        finalizer=AgentModelAssignment(role="finalizer", provider_id="ccswitch", model="deepseek-v4-pro"),
+    )
+    assert assignment_config_is_valid(valid, profiles) is True
+
+    valid.seats[0].model = "deepseek-v4-flash"
+    assert assignment_config_is_valid(valid, profiles) is False
+
+
 def test_ccswitch_model_discovery_uses_recent_successful_requests(tmp_path):
     db_path = tmp_path / "cc-switch.db"
     connection = sqlite3.connect(db_path)
