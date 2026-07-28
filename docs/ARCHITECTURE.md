@@ -4,11 +4,23 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 核心流程是可恢复的有限状态图：`dispatch -> turn x 4 -> awaiting_final_input -> finalize`。四个席位按固定顺序调用各自配置的 Provider/model，每席读取公开记录并明确认同、部分认同或反驳。第四席完成后默认停在用户确认点；用户可以补充一次或多次，或直接触发总结席的第五次调用。中途和最终补充都写入公开记录。
 
+## Feature status
+
+| Area | Status | Boundary |
+| --- | --- | --- |
+| Deliberation workflow | Current | 四席顺序讨论、用户确认、第五席总结、恢复与导出均为默认产品路径。 |
+| Run event replay | Current | 事件写入业务库并使用单调序号；SSE 支持 `Last-Event-ID` 重放和独立多订阅者。 |
+| Mobile access | Current, local network only | 使用短期签名会话、失败限速、同源校验和手工撤销；普通 HTTP 仍只适用于可信私有网络。 |
+| Legacy workspace | Compatibility only | 旧项目、来源和快照保留用于历史读取；当前 UI 和新建审议不再使用该能力。 |
+| Evaluation framework | Experimental | 数据集和评分脚本不构成多席优于单模型的产品声明。 |
+| Network search and code sandbox | Not implemented | 模型共识不等于外部事实核验，也不会自动执行代码。 |
+
 五席配置持久化在应用设置中。创建 Run 时，Provider 公共配置、协议、模型、reasoning effort、超时和输出上限被复制为 Run 快照；后续修改或删除 Provider 不会改写历史 Run。单席调用失败不会静默切换到 Mock 或其他 Provider。
 
 运行数据分成两个 SQLite 文件：
 
 - `council.sqlite3` 保存应用设置、完整公开 Run、五席快照、发言、最终答案、结果回访、用量和上下文快照。
+- `council.sqlite3` 的 `run_events` 表保存实时事件及单调序号；刷新、断线或多标签订阅不会竞争消费同一个内存队列。
 - `council.checkpoints.sqlite3` 由 LangGraph SQLite saver 保存节点状态。
 
 数据库不存放在源码树。默认使用平台用户数据目录，macOS 为 `~/Library/Application Support/Council/data/`，Linux 为 `${XDG_DATA_HOME:-~/.local/share}/council/data/`，Windows 为 `%LOCALAPPDATA%\\Council\\data\\`；测试和部署可用 `COUNCIL_DATA_DIR` 覆盖。
@@ -20,6 +32,8 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 模型适配层保持薄接口：`health_check`、`list_models`、`generate` 和 `aclose`。Provider 注册表集中维护官方地址、保守的离线推荐、协议、能力和文档入口；远程 `/models` 成功时使用账号实际目录，失败时可显示明确标注的离线推荐。`model_source` 区分 Provider 实时目录、CC Switch 近期成功记录、内置 Mock、离线推荐和无目录，避免把推荐值冒充实时可用模型。Mock Provider 让自动化测试无需密钥。自动协议策略先尝试 Responses，只有明确的 404/405/501 才回退 Chat Completions；只有声明支持原生 reasoning 的 Responses Provider 才接收 effort，普通 Chat Completions Provider 只应用 Council 的上下文和流程档位。
 
 资料空间已从当前用户界面和新建审议主流程移除。后端暂时保留旧项目、来源和 Run 快照结构，仅用于升级兼容与历史审议展示，避免更新时误删已有数据；新建审议不再读取或提交资料空间字段。
+
+手机入口由 Next.js 对局域网开放，FastAPI 和 CC Switch 继续只监听 loopback。配对令牌经 URL fragment 到达浏览器，成功后换取不包含原始令牌的 HttpOnly、SameSite=Strict 签名会话；会话有 12 小时上限，绑定当前启动实例，可由电脑端立即撤销。配对接口限制失败频率，只接受当前 Host 的同源 JSON 请求并限制请求体。所有已配对状态修改同样经过 Origin 和 Host 校验。完整边界、普通 HTTP 剩余风险和滥用假设见 `docs/THREAT_MODEL.md`。
 
 完成 Run 后可写入一份决策回访：最终采用的决定、预期结果、复盘日期、实际结果和四席观点验证状态。它属于同一 Run 的可编辑本地记录，不会触发额外模型调用，也不会反向改写当时的讨论和答案。
 
