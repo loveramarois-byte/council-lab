@@ -11,6 +11,7 @@ $StageDir = Join-Path $OutputRoot $PackageName
 $ZipPath = Join-Path $OutputRoot "$PackageName.zip"
 $PyInstallerWork = Join-Path $ProjectDir "build\pyinstaller-windows"
 $PyInstallerDist = Join-Path $ProjectDir "dist\pyinstaller-windows"
+$ReleaseDistDir = ".next-release"
 
 New-Item -ItemType Directory -Force -Path $OutputRoot, (Join-Path $ProjectDir "build"), (Join-Path $ProjectDir "dist") | Out-Null
 foreach ($Target in @($StageDir, $ZipPath, $PyInstallerWork, $PyInstallerDist)) {
@@ -19,15 +20,18 @@ foreach ($Target in @($StageDir, $ZipPath, $PyInstallerWork, $PyInstallerDist)) 
 
 Push-Location (Join-Path $ProjectDir "frontend")
 $PreviousStandalone = $env:COUNCIL_STANDALONE
+$PreviousNextDistDir = $env:COUNCIL_NEXT_DIST_DIR
 try {
     & npm.cmd ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
     $env:COUNCIL_STANDALONE = "1"
+    $env:COUNCIL_NEXT_DIST_DIR = $ReleaseDistDir
     & npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw "Next.js build failed" }
 }
 finally {
     if ($null -eq $PreviousStandalone) { Remove-Item Env:COUNCIL_STANDALONE -ErrorAction SilentlyContinue } else { $env:COUNCIL_STANDALONE = $PreviousStandalone }
+    if ($null -eq $PreviousNextDistDir) { Remove-Item Env:COUNCIL_NEXT_DIST_DIR -ErrorAction SilentlyContinue } else { $env:COUNCIL_NEXT_DIST_DIR = $PreviousNextDistDir }
     Pop-Location
 }
 
@@ -49,9 +53,9 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 
 New-Item -ItemType Directory -Force -Path $StageDir, (Join-Path $StageDir "backend"), (Join-Path $StageDir "runtime") | Out-Null
 Copy-Item -Recurse (Join-Path $PyInstallerDist "council-backend") (Join-Path $StageDir "backend\council-backend")
-Copy-Item -Recurse (Join-Path $ProjectDir "frontend\.next\standalone") (Join-Path $StageDir "web")
+Copy-Item -Recurse (Join-Path $ProjectDir "frontend\$ReleaseDistDir\standalone") (Join-Path $StageDir "web")
 New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "web\.next") | Out-Null
-Copy-Item -Recurse (Join-Path $ProjectDir "frontend\.next\static") (Join-Path $StageDir "web\.next\static")
+Copy-Item -Recurse (Join-Path $ProjectDir "frontend\$ReleaseDistDir\static") (Join-Path $StageDir "web\.next\static")
 $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 Copy-Item $NodeExe (Join-Path $StageDir "runtime\node.exe")
 Copy-Item (Join-Path $ProjectDir "desktop\start-bundled.ps1") (Join-Path $StageDir "runtime\start-council.ps1")

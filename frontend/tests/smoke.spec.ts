@@ -576,7 +576,7 @@ test("移动端圆桌固定一屏，内部消息区滚动", async ({ page, reque
 test("席位失败时明确显示原因并允许从当前席位重试", async ({ page }) => {
   const failedRun = {
     id: "failed-fixture",
-    question: "我想睡觉",
+    question: "首席还没有发言就超时",
     mode: "standard",
     provider_id: "ccswitch",
     model: "test-reasoning-model",
@@ -591,14 +591,14 @@ test("席位失败时明确显示原因并允许从当前席位重试", async ({
     error: "当前席位等待上游超过 120 秒，CC Switch 未能在时限内返回结果。请重试当前席位。",
     degraded: true,
     protocol: "auto",
-    discussion_turns: [{ id: "analyst-turn", speaker_type: "agent", speaker_id: "analyst", speaker_name: "析理", role_label: "拆解者", content: "第一席已经完成。", round: 1, created_at: new Date().toISOString() }],
+    discussion_turns: [],
     participant_roles: [
       { id: "analyst", name: "析理", role: "拆解者", brief: "拆解问题" },
       { id: "challenger", name: "诘问", role: "挑战者", brief: "寻找反例" },
       { id: "builder", name: "构策", role: "方案师", brief: "提出方案" },
       { id: "observer", name: "观澜", role: "观察者", brief: "观察分歧" },
     ],
-    current_speaker_index: 1,
+    current_speaker_index: 0,
     discussion_round: 1,
     awaiting_user: false,
   };
@@ -612,8 +612,9 @@ test("席位失败时明确显示原因并允许从当前席位重试", async ({
   await page.goto("/runs/failed-fixture");
   await expect(page.getByText("调用失败", { exact: true }).first()).toBeVisible();
   await expect(page.getByText(/等待上游超过 120 秒/)).toBeVisible();
-  await expect(page.locator(".council-seat.failed")).toContainText("诘问");
-  await page.getByRole("button", { name: "重试诘问" }).click();
+  await expect(page.getByText("0 次 AI 发言 · 0 次你的参与", { exact: true })).toBeVisible();
+  await expect(page.locator(".council-seat.failed")).toContainText("析理");
+  await page.getByRole("button", { name: "重试析理" }).click();
   expect(retryRequested).toBeTruthy();
 });
 

@@ -35,6 +35,24 @@ def test_release_metadata_is_consistent():
     assert result.returncode == 0, result.stderr
 
 
+def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_builds():
+    next_config = (ROOT / "frontend/next.config.ts").read_text(encoding="utf-8")
+    mac_launcher = (ROOT / "desktop/start-council.sh").read_text(encoding="utf-8")
+    windows_launcher = (ROOT / "desktop/start-council.ps1").read_text(encoding="utf-8")
+    installer = (ROOT / "setup.sh").read_text(encoding="utf-8")
+    windows_installer = (ROOT / "desktop/install-windows.ps1").read_text(encoding="utf-8")
+    mac_release = (ROOT / "packaging/build-macos-release.sh").read_text(encoding="utf-8")
+    windows_release = (ROOT / "packaging/build-windows-release.ps1").read_text(encoding="utf-8")
+
+    assert "COUNCIL_NEXT_DIST_DIR" in next_config
+    for script in (mac_launcher, windows_launcher, installer, windows_installer):
+        assert ".next-runtime" in script
+        assert "COUNCIL_NEXT_DIST_DIR" in script
+    for script in (mac_release, windows_release):
+        assert ".next-release" in script
+        assert "COUNCIL_NEXT_DIST_DIR" in script
+
+
 def copy_release_files(tmp_path: Path) -> None:
     for relative_path in REQUIRED_FILES:
         source = ROOT / relative_path

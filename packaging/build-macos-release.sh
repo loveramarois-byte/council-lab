@@ -21,6 +21,7 @@ esac
 NODE_RUNTIME_NAME="node-v${NODE_RUNTIME_VERSION}-darwin-${NODE_RUNTIME_ARCH}"
 NODE_RUNTIME_ARCHIVE="$PROJECT_DIR/build/${NODE_RUNTIME_NAME}.tar.gz"
 NODE_RUNTIME_DIR="$PROJECT_DIR/build/$NODE_RUNTIME_NAME"
+RELEASE_DIST_DIR=".next-release"
 
 if [[ "$PYTHON_BIN" != */* ]]; then
   PYTHON_BIN="$(command -v "$PYTHON_BIN" || true)"
@@ -45,7 +46,7 @@ fi
 
 pushd "$PROJECT_DIR/frontend" >/dev/null
 npm ci --no-audit --no-fund
-COUNCIL_STANDALONE=1 npm run build
+COUNCIL_NEXT_DIST_DIR="$RELEASE_DIST_DIR" COUNCIL_STANDALONE=1 npm run build
 popd >/dev/null
 
 "$PYTHON_BIN" -m PyInstaller \
@@ -73,9 +74,9 @@ RESOURCES_DIR="$STAGE_DIR/Council.app/Contents/Resources"
 mkdir -p "$RESOURCES_DIR/backend" "$RESOURCES_DIR/runtime" "$RESOURCES_DIR/launcher"
 
 /usr/bin/ditto "$PYINSTALLER_DIST/council-backend" "$RESOURCES_DIR/backend/council-backend"
-/usr/bin/ditto "$PROJECT_DIR/frontend/.next/standalone" "$RESOURCES_DIR/web"
+/usr/bin/ditto "$PROJECT_DIR/frontend/$RELEASE_DIST_DIR/standalone" "$RESOURCES_DIR/web"
 mkdir -p "$RESOURCES_DIR/web/.next"
-/usr/bin/ditto "$PROJECT_DIR/frontend/.next/static" "$RESOURCES_DIR/web/.next/static"
+/usr/bin/ditto "$PROJECT_DIR/frontend/$RELEASE_DIST_DIR/static" "$RESOURCES_DIR/web/.next/static"
 cp "$NODE_RUNTIME_DIR/bin/node" "$RESOURCES_DIR/runtime/node"
 cp "$PROJECT_DIR/desktop/start-bundled.sh" "$RESOURCES_DIR/launcher/start-council.sh"
 cp "$PROJECT_DIR/desktop/stop-bundled.sh" "$RESOURCES_DIR/launcher/stop-council.sh"

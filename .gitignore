@@ -22,6 +22,8 @@ backend/data/
 # Frontend
 frontend/node_modules/
 frontend/.next/
+frontend/.next-runtime/
+frontend/.next-release/
 frontend/test-results/
 frontend/playwright-report/
 *.tsbuildinfo
