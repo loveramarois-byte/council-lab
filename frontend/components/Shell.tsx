@@ -2,13 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, ChevronRight, CircleHelp, FileText, FolderKanban, History, LayoutGrid, Menu, Settings2, Sparkles, X } from "lucide-react";
+import { BookOpen, ChevronRight, CircleHelp, FileText, History, LayoutGrid, Menu, Settings2, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, Provider } from "../lib/api";
 
 const nav = [
   { href: "/", label: "新建审议", icon: FileText },
-  { href: "/projects", label: "资料空间", icon: FolderKanban },
   { href: "/runs", label: "历史记录", icon: History },
   { href: "/evaluations", label: "评测", icon: LayoutGrid },
 ];

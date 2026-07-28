@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+const mockProvider = { id: "mock", preset_id: "mock", display_name: "本地演示", description: "不联网", provider_type: "mock", protocol_mode: "auto", base_url: "", has_api_key: false, credential_source: "none", supports_api_key: false, requires_api_key: false, enabled: true, is_active: true, default_model: "council-mock", reasoning_effort: "low", available_models: ["council-mock"], model_source: "built_in", local_only: true, last_health_check: null, last_error: null, capabilities: {} };
+const readyProvider = { ...mockProvider, id: "deepseek", preset_id: "deepseek", display_name: "DeepSeek", provider_type: "compatible", has_api_key: true, credential_source: "system", supports_api_key: true, requires_api_key: true, default_model: "deepseek-chat", available_models: ["deepseek-chat"], model_source: "provider", local_only: false, last_health_check: "2026-07-28T00:00:00Z" };
+const unreadyProvider = { ...readyProvider, has_api_key: false, credential_source: "none", last_health_check: null };
+const assignment = (role: string, providerId = "mock") => ({ role, provider_id: providerId, model: providerId === "mock" ? "council-mock" : "deepseek-chat", protocol: "auto", reasoning_effort: "low", max_output_tokens: 1200, temperature: 0.2, timeout_seconds: 30 });
+const assignments = (providerId = "mock") => ({ seats: [assignment("analyst", providerId), assignment("challenger", providerId), assignment("builder", providerId), assignment("observer", providerId)], finalizer: assignment("finalizer", providerId) });
+const templates = [{ id: "open_discussion", name: "开放讨论", description: "依次讨论", prompt_hint: "写下需要四席共同审议的问题", system_guidance: "" }];
+
 async function createMockRoundtable(request: import("@playwright/test").APIRequestContext) {
   const response = await request.post("http://127.0.0.1:8001/api/runs", {
     data: { question: "数据库迁移应该先讨论哪些风险？", mode: "standard", provider_id: "mock", model: "council-mock" },
@@ -8,10 +15,26 @@ async function createMockRoundtable(request: import("@playwright/test").APIReque
   return response.json() as Promise<{ id: string }>;
 }
 
-test("首页明确四席后由用户确认且不展示未实现工具", async ({ page }) => {
+test("首次打开明确区分本地演示并引导配置五席", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  let createPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/runs", (route) => {
+    createPayload = route.request().postDataJSON();
+    return route.fulfill({ json: { id: "demo-fixture" } });
+  });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
   await expect(page.getByText("依次发言、公开回应，由你确认后再形成答案。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "当前五席还是本地演示。" })).toBeVisible();
+  await expect(page.getByText(/预设示例，不调用真实 AI/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /连接真实 AI/ })).toHaveAttribute("href", "/settings/providers");
+  await expect(page.getByRole("link", { name: "资料空间" })).toHaveCount(0);
+  await expect(page.getByText("资料空间", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /进入圆桌/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await expect(page.getByText("本地演示模式")).toBeVisible();
   await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /引导.*1.8k/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /圆桌.*4k/ })).toBeVisible();
@@ -28,6 +51,87 @@ test("首页明确四席后由用户确认且不展示未实现工具", async ({
   }
   const viewport = await page.evaluate(() => ({ page: document.documentElement.scrollHeight, viewport: window.innerHeight }));
   expect(viewport.page).toBeLessThanOrEqual(viewport.viewport);
+  await page.getByPlaceholder("写下需要四席共同审议的问题").fill("这个演示请求不应携带资料空间字段");
+  await page.getByRole("button", { name: /进入圆桌/ }).click();
+  await page.waitForURL("**/runs/demo-fixture");
+  expect(createPayload).toEqual({ question: "这个演示请求不应携带资料空间字段", mode: "standard", use_saved_assignments: true, template_id: "open_discussion" });
+});
+
+test("已有真实 Provider 时引导全 Mock 五席进入席位配置", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider, readyProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  await page.goto("/");
+  await expect(page.getByRole("link", { name: /配置五个席位/ })).toHaveAttribute("href", "/settings/agents");
+  const viewport = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewportWidth: window.innerWidth, height: document.documentElement.scrollHeight, viewportHeight: window.innerHeight }));
+  expect(viewport.width).toBeLessThanOrEqual(viewport.viewportWidth);
+  expect(viewport.height).toBeLessThanOrEqual(viewport.viewportHeight);
+});
+
+test("混合席位保留本地演示披露并要求明确确认", async ({ page }) => {
+  const mixedAssignments = assignments();
+  mixedAssignments.seats[0] = assignment("analyst", "deepseek");
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider, readyProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: mixedAssignments }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "当前五席含 4 个本地演示席。" })).toBeVisible();
+  await expect(page.getByText(/4 个席位使用预设示例/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /进入圆桌/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "接受混合配置并继续" }).click();
+  await expect(page.getByText(/混合配置 · 4 个本地演示席/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
+});
+
+test("未就绪真实席位阻止提问并指向配置", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider, unreadyProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments("deepseek") }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "五席配置还不能运行。" })).toBeVisible();
+  await expect(page.getByText(/5 个真实 AI 席位的 Provider 尚未通过就绪检查/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /检查 Provider/ })).toHaveAttribute("href", "/settings/providers");
+  await expect(page.getByRole("link", { name: "调整席位" })).toHaveAttribute("href", "/settings/agents");
+  await expect(page.getByRole("button", { name: /进入圆桌/ })).toHaveCount(0);
+});
+
+test("席位配置读取失败时保持阻断并可重试", async ({ page }) => {
+  let providerRequests = 0;
+  await page.route("**/api/providers", (route) => {
+    providerRequests += 1;
+    return providerRequests === 1
+      ? route.fulfill({ status: 503, json: { detail: "本地服务暂时不可用" } })
+      : route.fulfill({ json: [mockProvider, readyProvider] });
+  });
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments("deepseek") }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "暂时无法确认五席配置。" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /进入圆桌/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "重新读取" }).click();
+  await expect(page.getByText("五席真实 AI 已就绪")).toBeVisible();
+  await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
+});
+
+test("五席真实 Provider 就绪时直接开放提问", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider, readyProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments("deepseek") }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  await page.goto("/");
+
+  await expect(page.getByText("五席真实 AI 已就绪")).toBeVisible();
+  await expect(page.getByText(/本地演示模式|混合配置/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
+});
+
+test("旧资料空间地址兼容重定向到新建审议", async ({ page }) => {
+  await page.goto("/projects");
+  await page.waitForURL("/");
+  await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
 });
 
 test("软件能自动发现、校验并启动安装正式版本", async ({ page }) => {
@@ -143,44 +247,6 @@ test("最新版和后台安装错误都能形成明确终态", async ({ page }) 
   await expect(page.locator(".update-message.error")).toBeVisible();
 });
 
-test("资料空间、模板、引用和报告形成完整新手路径", async ({ page, request }) => {
-  const projectName = `E2E 资料空间 ${Date.now()}`;
-  let projectId = "";
-  let runId = "";
-  try {
-    await page.goto("/projects");
-    await page.getByRole("button", { name: "新建资料空间" }).click();
-    await page.getByLabel("资料空间名称").fill(projectName);
-    await page.getByRole("button", { name: "确认新建" }).click();
-    await expect(page.getByRole("button", { name: new RegExp(projectName) })).toBeVisible();
-    await page.getByLabel("文字资料名称").fill("预算基线");
-    await page.getByLabel("文字资料正文").fill("本季度试点预算上限为十万元。");
-    await page.getByRole("button", { name: "加入文字" }).click();
-    await expect(page.getByText("预算基线", { exact: true })).toBeVisible();
-
-    const projects = await (await request.get("http://127.0.0.1:8001/api/projects")).json() as { id: string; name: string }[];
-    projectId = projects.find((item) => item.name === projectName)?.id || "";
-    expect(projectId).not.toBe("");
-
-    await page.goto("/");
-    await page.getByLabel("资料空间", { exact: true }).selectOption(projectId);
-    await page.getByLabel("审议模板").selectOption("research_synthesis");
-    await expect(page.getByText("预算基线", { exact: true })).toBeVisible();
-    await page.getByPlaceholder(/根据这些资料/).fill("根据预算资料，我们应该怎样设计第一阶段试点？");
-    await page.getByRole("button", { name: "进入圆桌" }).click();
-    await page.waitForURL(/\/runs\//);
-    runId = page.url().split("/").pop() || "";
-    await expect(page.getByText(`${projectName} · 1 份资料`, { exact: true })).toBeVisible();
-    await expect(page.locator(".source-strip")).toContainText("[S1]");
-    await expect(page.locator(".source-strip")).toContainText("预算基线");
-    await expect(page.getByRole("link", { name: "下载 Markdown 报告" })).toHaveAttribute("href", /format=markdown/);
-    await expect(page.getByRole("link", { name: "下载 HTML 报告" })).toHaveAttribute("href", /format=html/);
-  } finally {
-    if (runId) await request.delete(`http://127.0.0.1:8001/api/runs/${runId}`);
-    if (projectId) await request.delete(`http://127.0.0.1:8001/api/projects/${projectId}`);
-  }
-});
-
 test("供应商设置为新手提供预设、凭据和模型获取入口", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
   await page.goto("/settings/providers");
@@ -217,7 +283,7 @@ test("供应商设置为新手提供预设、凭据和模型获取入口", async
   expect(mobile.width).toBeLessThanOrEqual(mobile.viewportWidth);
   expect(mobile.height).toBeLessThanOrEqual(mobile.viewportHeight);
   await expect(page.locator('input[type="password"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存并测试" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存并测试" }).or(page.getByRole("link", { name: /下一步：配置五个席位/ }))).toBeVisible();
 });
 
 test("CC Switch 打开设置后自动识别模型", async ({ page }) => {
@@ -322,6 +388,7 @@ test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商",
 
   await expect(page.getByText("连接成功，已设为当前供应商。")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByLabel("模型", { exact: true })).toHaveValue("deepseek-chat");
+  await expect(page.getByRole("link", { name: /下一步：配置五个席位/ })).toHaveAttribute("href", "/settings/agents");
   expect(savedKey).toBe("sk-test-for-e2e-only");
   expect(modelsRequested).toBe(1);
   expect(tested).toBe(1);
@@ -429,13 +496,26 @@ test("五个席位配置可保存且明确 Provider 能力", async ({ page, requ
     await expect(page.getByLabel("总结席 模型")).toBeVisible();
     await page.getByLabel("析理 Provider").selectOption("mock");
     await page.getByRole("button", { name: "保存席位" }).click();
-    await expect(page.getByText(/五个席位的配置已保存/)).toBeVisible();
+    await expect(page.getByText(/席位配置已保存，但仍包含本地演示席或未就绪 Provider/)).toBeVisible();
+    await expect(page.getByRole("link", { name: /完成，开始提问/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "保存席位" })).toBeVisible();
     await page.reload();
     await expect(page.getByLabel("析理 Provider")).toHaveValue("mock");
     await expect(page.getByText(/仅工作流档位/).first()).toBeVisible();
   } finally {
     await request.put("http://127.0.0.1:8001/api/agent-assignments", { data: original });
   }
+});
+
+test("五个真实 AI 席位就绪后才显示完成入口", async ({ page }) => {
+  const readyAssignments = assignments("deepseek");
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider, readyProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: readyAssignments }));
+  await page.goto("/settings/agents");
+
+  await page.getByRole("button", { name: "保存席位" }).click();
+  await expect(page.getByText(/五个真实 AI 席位已保存/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /完成，开始提问/ })).toHaveAttribute("href", "/");
 });
 
 test("评测页没有硬编码模型调用成绩", async ({ page }) => {

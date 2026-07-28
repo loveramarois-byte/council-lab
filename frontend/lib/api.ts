@@ -27,6 +27,15 @@ export type Provider = {
   capabilities?: Record<string, boolean>;
 };
 
+export function providerIsReady(provider: Provider) {
+  if (provider.id === "mock" || provider.enabled === false) return false;
+  if (provider.id === "ccswitch") {
+    const upstreamBusy = Boolean(provider.last_error && /429|502|503|504|too many requests|上游/i.test(provider.last_error));
+    return Boolean(provider.last_health_check) && (!provider.last_error || upstreamBusy);
+  }
+  return Boolean(provider.has_api_key && provider.default_model && !provider.last_error);
+}
+
 export type AgentAssignment = {
   role: "analyst" | "challenger" | "builder" | "observer" | "finalizer";
   provider_id: string;

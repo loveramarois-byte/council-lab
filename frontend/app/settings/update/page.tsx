@@ -82,6 +82,6 @@ export default function UpdateSettingsPage() {
       </footer>
     </section>
 
-    <div className="settings-note update-note"><ShieldCheck size={17} /><span>本地历史、资料空间和 API Key 位于应用目录之外，更新不会删除它们。</span></div>
+    <div className="settings-note update-note"><ShieldCheck size={17} /><span>本地讨论历史和 API Key 位于应用目录之外，更新不会删除它们。</span></div>
   </div>;
 }
