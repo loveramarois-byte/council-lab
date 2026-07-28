@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from .models import AgentAssignmentsConfig, ProviderProfile
+from .models import AgentAssignmentsConfig, ProviderProfile, ProviderType
 from .provider_catalog import CATALOG_FIELDS, builtin_providers
 
 
@@ -18,6 +18,16 @@ LEGACY_UNVERIFIED_MODELS = frozenset(
         "kimi-k2.6",
     }
 )
+
+
+def model_is_verified(profile: ProviderProfile, model: str) -> bool:
+    if model not in LEGACY_UNVERIFIED_MODELS:
+        return True
+    if model not in profile.available_models:
+        return False
+    return profile.model_source == "provider" or (
+        profile.provider_type == ProviderType.CCSWITCH and profile.model_source == "ccswitch_history"
+    )
 
 
 def restore_provider_profiles(saved_profiles: Iterable[ProviderProfile]) -> dict[str, ProviderProfile]:
@@ -36,7 +46,7 @@ def restore_provider_profiles(saved_profiles: Iterable[ProviderProfile]) -> dict
                 saved.model_source = catalog.model_source
             elif saved.model_source == "none":
                 saved.model_source = "saved"
-            if saved.default_model in LEGACY_UNVERIFIED_MODELS and saved.model_source != "provider":
+            if not model_is_verified(saved, saved.default_model):
                 saved.default_model = catalog.default_model
                 saved.available_models = catalog.available_models
                 saved.model_source = catalog.model_source
@@ -45,9 +55,11 @@ def restore_provider_profiles(saved_profiles: Iterable[ProviderProfile]) -> dict
 
 
 def assignment_config_is_valid(config: AgentAssignmentsConfig | None, profiles: dict[str, ProviderProfile]) -> bool:
-    return config is not None and all(
-        assignment.provider_id in profiles
-        and assignment.model.strip()
-        and assignment.model not in LEGACY_UNVERIFIED_MODELS
+    if config is None:
+        return False
+    return all(
+        bool(assignment.model.strip())
+        and assignment.provider_id in profiles
+        and model_is_verified(profiles[assignment.provider_id], assignment.model)
         for assignment in [*config.seats, config.finalizer]
     )
