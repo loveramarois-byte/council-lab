@@ -33,7 +33,7 @@ printf '2/3 安装并构建网页...\n'
 (
   cd "$FRONTEND_DIR"
   npm ci --no-audit --no-fund
-  npm run build
+  COUNCIL_NEXT_DIST_DIR=.next-runtime npm run build
 )
 
 printf '3/3 创建启动入口...\n'

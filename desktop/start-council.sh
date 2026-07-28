@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$PROJECT_DIR/backend"
 FRONTEND_DIR="$PROJECT_DIR/frontend"
+FRONTEND_DIST_DIR=".next-runtime"
 LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council.pids"
 BACKEND_LOG="$LOG_DIR/backend.log"
@@ -41,7 +42,7 @@ if [[ ! -x "$BACKEND_DIR/.venv/bin/uvicorn" ]]; then
   exit 1
 fi
 
-if [[ ! -x "$FRONTEND_DIR/node_modules/next/dist/bin/next" || ! -f "$FRONTEND_DIR/.next/BUILD_ID" ]]; then
+if [[ ! -x "$FRONTEND_DIR/node_modules/next/dist/bin/next" || ! -f "$FRONTEND_DIR/$FRONTEND_DIST_DIR/BUILD_ID" ]]; then
   osascript -e 'display dialog "网页尚未构建。请双击项目文件夹里的“安装 Council.command”。" buttons {"好"} with title "Council 无法启动"' >/dev/null 2>&1 || true
   exit 1
 fi
@@ -83,7 +84,7 @@ if ! frontend_is_up; then
   printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
   printf '%s\n' "$DESKTOP_TOKEN" > "$DESKTOP_TOKEN_FILE"
   pushd "$FRONTEND_DIR" >/dev/null
-  COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -H 0.0.0.0 -p 3000 >>"$FRONTEND_LOG" 2>&1 &
+  COUNCIL_NEXT_DIST_DIR="$FRONTEND_DIST_DIR" COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -H 0.0.0.0 -p 3000 >>"$FRONTEND_LOG" 2>&1 &
   FRONTEND_PID=$!
   popd >/dev/null
   echo "frontend $FRONTEND_PID" >>"$PID_FILE"

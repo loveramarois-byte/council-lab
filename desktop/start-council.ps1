@@ -7,7 +7,8 @@ $ErrorActionPreference = "Stop"
 $ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendPython = Join-Path $ProjectDir "backend\.venv\Scripts\python.exe"
 $NextScript = Join-Path $ProjectDir "frontend\node_modules\next\dist\bin\next"
-$BuildId = Join-Path $ProjectDir "frontend\.next\BUILD_ID"
+$FrontendDistDir = ".next-runtime"
+$BuildId = Join-Path $ProjectDir "frontend\$FrontendDistDir\BUILD_ID"
 $LocalRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME "AppData\Local" }
 $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $LocalRoot "Council\logs" }
 $PidFile = Join-Path $LogDir "council-pids.json"
@@ -95,8 +96,10 @@ try {
         Set-Content -Encoding ASCII -Path $DesktopTokenFile -Value $DesktopToken
         $PreviousRemoteToken = $env:COUNCIL_REMOTE_TOKEN
         $PreviousDesktopToken = $env:COUNCIL_DESKTOP_TOKEN
+        $PreviousNextDistDir = $env:COUNCIL_NEXT_DIST_DIR
         $env:COUNCIL_REMOTE_TOKEN = $RemoteToken
         $env:COUNCIL_DESKTOP_TOKEN = $DesktopToken
+        $env:COUNCIL_NEXT_DIST_DIR = $FrontendDistDir
         try {
             $Node = (Get-Command "node.exe" -ErrorAction Stop).Source
             $FrontendProcess = Start-Process -FilePath $Node `
@@ -111,6 +114,8 @@ try {
             else { $env:COUNCIL_REMOTE_TOKEN = $PreviousRemoteToken }
             if ($null -eq $PreviousDesktopToken) { Remove-Item Env:COUNCIL_DESKTOP_TOKEN -ErrorAction SilentlyContinue }
             else { $env:COUNCIL_DESKTOP_TOKEN = $PreviousDesktopToken }
+            if ($null -eq $PreviousNextDistDir) { Remove-Item Env:COUNCIL_NEXT_DIST_DIR -ErrorAction SilentlyContinue }
+            else { $env:COUNCIL_NEXT_DIST_DIR = $PreviousNextDistDir }
         }
         if (-not (Wait-Until { Test-Frontend })) {
             throw "The web interface did not start. See $LogDir\frontend.stderr.log"
