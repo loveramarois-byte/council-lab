@@ -12,7 +12,7 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **You remain in the room.** Interjections become public context for later seats and the final synthesis.
 - **Independent seat configuration.** Choose a provider and model for each of the four speakers and the finalizer; the configuration is snapshotted per run.
 - **A deliberate confirmation point.** Council does not finalize after seat four until you approve or add more context.
-- **Projects and evidence.** Add text, public web pages, PDF, DOCX, Markdown, CSV, JSON, or TXT sources and cite complete frozen run snapshots as `[S1]`; model prompts still receive a budgeted working copy.
+- **Explicit first-run setup.** Council distinguishes the local scripted demo from real AI, then guides users through connecting a Provider and assigning all five seats.
 - **Decision follow-up.** Record the decision taken, expected result, review date, actual outcome, and which seat hypotheses held up.
 - **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
 - **Portable reports.** Export a completed deliberation as Markdown or a self-contained HTML report.
@@ -106,8 +106,8 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 ## Privacy and status
 
-Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and imported source text may contain sensitive material; protect the local account and review content before sharing an exported report.
+Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report.
 
-Version `0.4.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
+Version `0.5.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
