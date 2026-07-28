@@ -60,6 +60,7 @@ jobs:
           trap cleanup EXIT
           "$launcher"
           curl -fsS http://127.0.0.1:8001/api/health >/dev/null
+          test "$(curl -fsS http://127.0.0.1:8001/api/update/status | python -c 'import json,sys; print(json.load(sys.stdin)["current_version"])')" = "$(tr -d '[:space:]' < VERSION)"
           curl -fsS http://127.0.0.1:3000/ | grep -q Council
           first_backend="$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           first_frontend="$(awk '$1 == "frontend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
@@ -90,6 +91,20 @@ jobs:
           test "$services_stopped" = 1
           ! kill -0 "$second_backend" 2>/dev/null
           ! kill -0 "$second_frontend" 2>/dev/null
+      - name: Smoke-test verified macOS replacement helper
+        run: |
+          package="$GITHUB_WORKSPACE/artifacts/Council-v$(tr -d '[:space:]' < VERSION)-macOS"
+          target="$RUNNER_TEMP/Council.app"
+          /usr/bin/ditto "$package/Council.app" "$target"
+          echo "0.0.0" > "$target/Contents/Resources/VERSION"
+          export COUNCIL_UPDATE_NO_RESTART=1
+          /bin/zsh "$package/Council.app/Contents/Resources/launcher/update-council.sh" \
+            "$package/Council.app" "$target" \
+            "$target/Contents/Resources/launcher/stop-council.sh" \
+            "$RUNNER_TEMP/update.log" "$RUNNER_TEMP/update-result.json"
+          test "$(tr -d '[:space:]' < "$target/Contents/Resources/VERSION")" = "$(tr -d '[:space:]' < VERSION)"
+          test "$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUNNER_TEMP/update-result.json")" = "success"
+          codesign --verify --deep --strict "$target"
       - uses: actions/upload-artifact@v4
         with:
           name: council-macos
@@ -153,6 +168,8 @@ jobs:
           $env:COUNCIL_DATA_DIR = Join-Path $env:RUNNER_TEMP "launcher-data"
           $env:COUNCIL_LOG_DIR = Join-Path $env:RUNNER_TEMP "launcher-logs"
           & $launcher -NoBrowser
+          $updateStatus = Invoke-RestMethod http://127.0.0.1:8001/api/update/status
+          if ($updateStatus.current_version -ne $version) { throw "Packaged updater reports the wrong current version" }
           $pidFile = Join-Path $env:COUNCIL_LOG_DIR "council-bundled-pids.json"
           $first = Get-Content -Raw $pidFile | ConvertFrom-Json
           & $launcher -NoBrowser
@@ -173,6 +190,41 @@ jobs:
             Start-Sleep -Milliseconds 100
           }
           if (Get-Process -Id $recovered.backend, $recovered.frontend -ErrorAction SilentlyContinue) { throw "Stop launcher left Council processes running" }
+      - name: Smoke-test verified Windows replacement helper
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw VERSION).Trim()
+          $package = Join-Path $PWD "artifacts\Council-v$version-Windows"
+          $target = Join-Path $env:RUNNER_TEMP "Council"
+          Copy-Item -Recurse $package $target
+          Set-Content -Encoding ASCII -Path (Join-Path $target "VERSION") -Value "0.0.0"
+          Set-Content -Encoding ASCII -Path (Join-Path $target "obsolete.txt") -Value "remove me"
+          $env:COUNCIL_UPDATE_NO_RESTART = "1"
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $package "runtime\update-council.ps1") `
+            -NewRoot $package -TargetRoot $target -Stopper (Join-Path $target "runtime\stop-council.ps1") `
+            -LogFile (Join-Path $env:RUNNER_TEMP "update.log") -ResultFile (Join-Path $env:RUNNER_TEMP "update-result.json")
+          if ((Get-Content -Raw (Join-Path $target "VERSION")).Trim() -ne $version) { throw "Windows helper did not install the current version" }
+          if (Test-Path (Join-Path $target "obsolete.txt")) { throw "Windows helper did not mirror the release package" }
+          if ((Get-Content -Raw (Join-Path $env:RUNNER_TEMP "update-result.json") | ConvertFrom-Json).status -ne "success") { throw "Windows helper did not record success" }
+
+          $rollbackTarget = Join-Path $env:RUNNER_TEMP "Council-rollback"
+          Copy-Item -Recurse $package $rollbackTarget
+          Set-Content -Encoding ASCII -Path (Join-Path $rollbackTarget "VERSION") -Value "0.0.1"
+          Set-Content -Encoding ASCII -Path (Join-Path $rollbackTarget "previous-version.txt") -Value "keep me"
+          $locked = [System.IO.File]::Open((Join-Path $package "README-FIRST.txt"), "Open", "Read", "None")
+          try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $package "runtime\update-council.ps1") `
+              -NewRoot $package -TargetRoot $rollbackTarget -Stopper (Join-Path $rollbackTarget "runtime\stop-council.ps1") `
+              -LogFile (Join-Path $env:RUNNER_TEMP "rollback.log") -ResultFile (Join-Path $env:RUNNER_TEMP "rollback-result.json")
+            $rollbackExit = $LASTEXITCODE
+          } finally {
+            $locked.Dispose()
+          }
+          if ($rollbackExit -eq 0) { throw "Locked update unexpectedly succeeded" }
+          if ((Get-Content -Raw (Join-Path $rollbackTarget "VERSION")).Trim() -ne "0.0.1") { throw "Rollback did not restore the previous version" }
+          if (-not (Test-Path (Join-Path $rollbackTarget "previous-version.txt"))) { throw "Rollback lost a previous-version file" }
+          $rollbackResult = Get-Content -Raw (Join-Path $env:RUNNER_TEMP "rollback-result.json") | ConvertFrom-Json
+          if ($rollbackResult.status -ne "error" -or $rollbackResult.message -notmatch "previous version was restored") { throw "Rollback result was not recorded" }
       - uses: actions/upload-artifact@v4
         with:
           name: council-windows
@@ -196,8 +248,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" artifacts/*.zip artifacts/SHA256SUMS.txt \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "Council ${GITHUB_REF_NAME}" \
-            --generate-notes \
-            --notes "macOS：下载 macOS ZIP，解压后双击 Council.app。Windows：下载 Windows ZIP，完整解压后双击 Start Council.cmd。两个包均内置运行环境，不需要安装 Python 或 Node.js。当前开源构建未做 Apple notarization 或 Windows 商业代码签名，请仅从本仓库 Release 下载。"
+          notes="macOS：下载 macOS ZIP，解压后双击 Council.app。Windows：下载 Windows ZIP，完整解压后双击 Start Council.cmd。两个包均内置运行环境，不需要安装 Python 或 Node.js。当前开源构建未做 Apple notarization 或 Windows 商业代码签名，请仅从本仓库 Release 下载。"
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" artifacts/*.zip artifacts/SHA256SUMS.txt --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "Council ${GITHUB_REF_NAME}" --notes "$notes"
+          else
+            gh release create "${GITHUB_REF_NAME}" artifacts/*.zip artifacts/SHA256SUMS.txt \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Council ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --notes "$notes"
+          fi

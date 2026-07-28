@@ -69,6 +69,26 @@ export type DeliberationTemplate = { id: string; name: string; description: stri
 export type SeatOutcomeReview = { role: "analyst" | "challenger" | "builder" | "observer"; status: "pending" | "supported" | "mixed" | "contradicted"; note: string };
 export type DecisionReview = { selected_decision: string; expected_result: string; review_date?: string | null; actual_result: string; outcome_status: "pending" | "successful" | "partial" | "unsuccessful" | "unclear"; seat_outcomes: SeatOutcomeReview[]; updated_at: string };
 export type DecisionReviewInput = Omit<DecisionReview, "updated_at">;
+export type UpdateInfo = {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  can_auto_update: boolean;
+  installation_kind: "macos" | "windows" | "development" | "unsupported";
+  reason: string;
+  release_url: string;
+  published_at?: string | null;
+  notes: string;
+  package_name?: string | null;
+};
+export type UpdateStatus = {
+  current_version: string;
+  phase: "idle" | "checking" | "downloading" | "verifying" | "restarting" | "error";
+  progress: number;
+  message: string;
+  target_version?: string | null;
+  error?: string | null;
+};
 
 export type Run = {
   id: string;
@@ -144,6 +164,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  checkUpdate: (refresh = false) => request<UpdateInfo>(`/api/update/check${refresh ? "?refresh=true" : ""}`, refresh ? { headers: { "X-Council-Request": "app" } } : undefined),
+  updateStatus: () => request<UpdateStatus>("/api/update/status"),
+  installUpdate: () => request<UpdateStatus>("/api/update/install", { method: "POST", headers: { "X-Council-Request": "app" } }),
   providers: () => request<Provider[]>("/api/providers"),
   assignments: () => request<AgentAssignmentsConfig>("/api/agent-assignments"),
   saveAssignments: (body: AgentAssignmentsConfig) => request<AgentAssignmentsConfig>("/api/agent-assignments", { method: "PUT", body: JSON.stringify(body) }),

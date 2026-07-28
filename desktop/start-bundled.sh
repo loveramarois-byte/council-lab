@@ -3,11 +3,12 @@
 set -u
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 BACKEND_EXE="$RESOURCES_DIR/backend/council-backend/council-backend"
 NODE_EXE="$RESOURCES_DIR/runtime/node"
 WEB_DIR="$RESOURCES_DIR/web"
+APP_ROOT="$(cd "$RESOURCES_DIR/../.." && pwd -P)"
 LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council-bundled.pids"
 BACKEND_LOG="$LOG_DIR/backend.log"
@@ -15,6 +16,9 @@ FRONTEND_LOG="$LOG_DIR/frontend.log"
 
 mkdir -p "$LOG_DIR"
 /usr/bin/touch "$PID_FILE"
+export COUNCIL_PACKAGED=1
+export COUNCIL_INSTALL_ROOT="$APP_ROOT"
+export COUNCIL_VERSION="$(/usr/bin/tr -d '[:space:]' < "$RESOURCES_DIR/VERSION")"
 
 show_error() {
   /usr/bin/osascript -e "display dialog \"$1\" buttons {\"好\"} with title \"Council 无法启动\"" >/dev/null 2>&1 || true

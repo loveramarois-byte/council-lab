@@ -30,6 +30,119 @@ test("首页明确四席后由用户确认且不展示未实现工具", async ({
   expect(viewport.page).toBeLessThanOrEqual(viewport.viewport);
 });
 
+test("软件能自动发现、校验并启动安装正式版本", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.route("**/api/update/check*", (route) => route.fulfill({ json: {
+    current_version: "0.3.0",
+    latest_version: "0.4.0",
+    update_available: true,
+    can_auto_update: true,
+    installation_kind: "macos",
+    reason: "可以在软件内完成更新。",
+    release_url: "https://github.com/loveramarois-byte/council-lab/releases/tag/v0.4.0",
+    published_at: "2026-07-28T00:00:00Z",
+    notes: "Updater release",
+    package_name: "Council-v0.4.0-macOS.zip",
+  } }));
+  await page.route("**/api/update/install", (route) => {
+    expect(route.request().headers()["x-council-request"]).toBe("app");
+    return route.fulfill({ json: {
+      current_version: "0.3.0", phase: "checking", progress: 0, message: "正在确认最新版。", target_version: "0.4.0", error: null,
+    } });
+  });
+  await page.route("**/api/update/status", (route) => route.fulfill({ json: {
+    current_version: "0.3.0", phase: "downloading", progress: 42, message: "正在下载 Council-v0.4.0-macOS.zip。", target_version: "0.4.0", error: null,
+  } }));
+
+  await page.goto("/settings/update");
+  await expect(page.getByRole("heading", { name: "Council 0.4.0 已发布。" })).toBeVisible();
+  await expect(page.locator(".update-versions strong").nth(0)).toHaveText("v0.3.0");
+  await expect(page.locator(".update-versions strong").nth(1)).toHaveText("v0.4.0");
+  await expect(page.getByText("SHA256", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "下载并安装" }).click();
+  await expect(page.getByText("正在下载 Council-v0.4.0-macOS.zip。")).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("progress")).toHaveAttribute("value", "42");
+  const viewport = await page.evaluate(() => ({ page: document.documentElement.scrollHeight, viewport: window.innerHeight }));
+  expect(viewport.page).toBeLessThanOrEqual(viewport.viewport);
+});
+
+test("更新不可自动安装时说明原因且移动端保持单屏", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/api/update/check", (route) => route.fulfill({ json: {
+    current_version: "0.4.0",
+    latest_version: "0.5.0",
+    update_available: true,
+    can_auto_update: false,
+    installation_kind: "development",
+    reason: "源码运行模式只检查版本，不自动覆盖项目文件。",
+    release_url: "https://github.com/loveramarois-byte/council-lab/releases/tag/v0.5.0",
+    published_at: "2026-07-28T00:00:00Z",
+    notes: "Manual update only",
+    package_name: null,
+  } }));
+
+  await page.goto("/settings/update");
+  await expect(page.getByText("源码运行模式只检查版本，不自动覆盖项目文件。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载并安装" })).toHaveCount(0);
+  const viewport = await page.evaluate(() => ({ page: document.documentElement.scrollHeight, viewport: window.innerHeight }));
+  expect(viewport.page).toBeLessThanOrEqual(viewport.viewport);
+});
+
+test("更新检查和安装失败时给出可恢复错误", async ({ page }) => {
+  await page.route("**/api/update/check*", (route) => {
+    if (!route.request().url().includes("refresh=true")) return route.fulfill({ status: 503, json: { detail: "暂时无法读取 GitHub 最新版本。" } });
+    expect(route.request().headers()["x-council-request"]).toBe("app");
+    return route.fulfill({ json: {
+      current_version: "0.4.0", latest_version: "0.5.0", update_available: true, can_auto_update: true,
+      installation_kind: "macos", reason: "可以在软件内完成更新。", release_url: "https://github.com/loveramarois-byte/council-lab/releases/tag/v0.5.0",
+      published_at: null, notes: "Retry test", package_name: "Council-v0.5.0-macOS.zip",
+    } });
+  });
+  await page.route("**/api/update/install", (route) => route.fulfill({ status: 500, json: { detail: "无法启动更新。" } }));
+
+  await page.goto("/settings/update");
+  await expect(page.getByText("暂时无法读取 GitHub 最新版本。")).toBeVisible();
+  await page.getByRole("button", { name: "重新检查" }).click();
+  await expect(page.getByRole("heading", { name: "Council 0.5.0 已发布。" })).toBeVisible();
+  await page.getByRole("button", { name: "下载并安装" }).click();
+  await expect(page.getByText("无法启动更新。")).toBeVisible();
+});
+
+test("侧栏发现新版本后直达软件更新", async ({ page }) => {
+  await page.route("**/api/update/check", (route) => route.fulfill({ json: {
+    current_version: "0.4.0", latest_version: "0.5.0", update_available: true, can_auto_update: true,
+    installation_kind: "macos", reason: "可以在软件内完成更新。", release_url: "https://github.com/loveramarois-byte/council-lab/releases/tag/v0.5.0",
+    published_at: null, notes: "Badge test", package_name: "Council-v0.5.0-macOS.zip",
+  } }));
+  await page.goto("/");
+  await expect(page.getByText("有更新", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: /设置.*有更新/ })).toHaveAttribute("href", "/settings/update");
+});
+
+test("最新版和后台安装错误都能形成明确终态", async ({ page }) => {
+  let latestVersion = "0.4.0";
+  await page.route("**/api/update/check*", (route) => route.fulfill({ json: {
+    current_version: "0.4.0", latest_version: latestVersion, update_available: latestVersion !== "0.4.0", can_auto_update: true,
+    installation_kind: "macos", reason: "可以在软件内完成更新。", release_url: `https://github.com/loveramarois-byte/council-lab/releases/tag/v${latestVersion}`,
+    published_at: null, notes: "Terminal state test", package_name: `Council-v${latestVersion}-macOS.zip`,
+  } }));
+  await page.route("**/api/update/install", (route) => route.fulfill({ json: {
+    current_version: "0.4.0", phase: "checking", progress: 0, message: "正在确认最新版。", target_version: "0.5.0", error: null,
+  } }));
+  await page.route("**/api/update/status", (route) => route.fulfill({ json: {
+    current_version: "0.4.0", phase: "error", progress: 88, message: "SHA256 校验失败，当前版本未被修改。", target_version: "0.5.0", error: "SHA256 校验失败，当前版本未被修改。",
+  } }));
+
+  await page.goto("/settings/update");
+  await expect(page.getByText("当前版本已经与正式 Release 一致。")).toBeVisible();
+  latestVersion = "0.5.0";
+  await page.getByRole("button", { name: "重新检查" }).click();
+  await expect(page.getByRole("heading", { name: "Council 0.5.0 已发布。" })).toBeVisible();
+  await page.getByRole("button", { name: "下载并安装" }).click();
+  await expect(page.getByText("SHA256 校验失败，当前版本未被修改。")).toBeVisible({ timeout: 5000 });
+  await expect(page.locator(".update-message.error")).toBeVisible();
+});
+
 test("资料空间、模板、引用和报告形成完整新手路径", async ({ page, request }) => {
   const projectName = `E2E 资料空间 ${Date.now()}`;
   let projectId = "";
