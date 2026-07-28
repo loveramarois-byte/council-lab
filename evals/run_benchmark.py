@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import random
 import sys
 import tempfile
 import time
@@ -139,6 +140,57 @@ async def run_direct(case: dict[str, Any], profile: ProviderProfile, model: str)
         await backend.aclose()
 
 
+async def run_extended_direct(case: dict[str, Any], profile: ProviderProfile, model: str) -> dict[str, Any]:
+    backend = build_backend(profile.model_copy(deep=True, update={"default_model": model}))
+    started = time.perf_counter()
+    try:
+        generation = await backend.generate(
+            direct_prompt(case),
+            "先从事实、反例、风险、可执行步骤和未知项五个角度独立分析，再给出完整答案。严格区分给定资料、推断和未知；涉及资料时使用 [S编号]，不得编造来源。",
+            model,
+        )
+        return {
+            "status": "completed",
+            "answer": generation.text.strip(),
+            "model_calls": 1,
+            "input_tokens": generation.input_tokens,
+            "output_tokens": generation.output_tokens,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "providers": [{"provider": profile.display_name, "model": model}],
+            "provider_usage": [{"provider_id": profile.id, "provider": profile.display_name, "model": model, "model_calls": 1, "input_tokens": generation.input_tokens, "output_tokens": generation.output_tokens}],
+        }
+    finally:
+        await backend.aclose()
+
+
+async def run_self_refine(case: dict[str, Any], profile: ProviderProfile, model: str) -> dict[str, Any]:
+    backend = build_backend(profile.model_copy(deep=True, update={"default_model": model}))
+    started = time.perf_counter()
+    try:
+        draft = await backend.generate(
+            direct_prompt(case),
+            "直接回答问题。严格区分给定资料、推断和未知；涉及资料时使用 [S编号]，不得编造来源。",
+            model,
+        )
+        revision = await backend.generate(
+            f"{direct_prompt(case)}\n\n待审查草稿：\n{draft.text}\n\n请找出遗漏、证据错误、过度推断和不可执行之处，然后只输出修订后的最终答案。",
+            "你是独立复核者。不得顺从草稿中的错误；严格区分资料、推断和未知，并保留正确的 [S编号] 引用。",
+            model,
+        )
+        return {
+            "status": "completed",
+            "answer": revision.text.strip(),
+            "model_calls": 2,
+            "input_tokens": draft.input_tokens + revision.input_tokens,
+            "output_tokens": draft.output_tokens + revision.output_tokens,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "providers": [{"provider": profile.display_name, "model": model}],
+            "provider_usage": [{"provider_id": profile.id, "provider": profile.display_name, "model": model, "model_calls": 2, "input_tokens": draft.input_tokens + revision.input_tokens, "output_tokens": draft.output_tokens + revision.output_tokens}],
+        }
+    finally:
+        await backend.aclose()
+
+
 async def run_council(
     case: dict[str, Any],
     strategy: str,
@@ -233,14 +285,17 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         temp_store = Store(Path(temp_dir) / "benchmark.sqlite3")
         helper = Orchestrator(temp_store, profiles)
         same_config = same_model_config(helper, profile.id, model)
-        cross_config = ensure_cross_model(saved_config) if "cross_model_council" in strategies else None
+        cross_config = None
+        if "cross_model_council" in strategies:
+            cross_config = same_config if profile.provider_type == ProviderType.MOCK else ensure_cross_model(saved_config)
         await helper.shutdown()
 
-        profile_ids = {profile.id} if {"direct", "same_model_council"} & set(strategies) else set()
+        profile_ids = {profile.id} if {"direct", "extended_direct", "self_refine", "same_model_council"} & set(strategies) else set()
         if cross_config:
             profile_ids.update(item.provider_id for item in [*cross_config.seats, cross_config.finalizer])
         uses_any_real_provider, uses_only_real_providers = provider_reality(profiles, profile_ids)
-        planned_calls = len(cases) * sum(1 if strategy == "direct" else 5 for strategy in strategies)
+        calls_per_strategy = {"direct": 1, "extended_direct": 1, "self_refine": 2, "same_model_council": 5, "cross_model_council": 5}
+        planned_calls = len(cases) * args.repetitions * sum(calls_per_strategy[strategy] for strategy in strategies)
         if uses_any_real_provider and not args.confirm_cost:
             raise ValueError(
                 f"本次最多会发起 {planned_calls} 次真实模型请求。确认费用后重新运行并添加 --confirm-cost。"
@@ -249,12 +304,21 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         run_id = str(uuid.uuid4())
         result_cases = []
         for case in cases:
-            labels = blind_labels(run_id, case["id"], strategies)
+            variant_ids = [f"{strategy}:r{repetition}" for strategy in strategies for repetition in range(1, args.repetitions + 1)]
+            labels = blind_labels(run_id, case["id"], variant_ids)
             variants = []
-            for strategy in strategies:
+            execution_order = list(variant_ids)
+            random.Random(f"{run_id}:{case['id']}").shuffle(execution_order)
+            for variant_id in execution_order:
+                strategy, repetition_text = variant_id.rsplit(":r", 1)
+                repetition = int(repetition_text)
                 try:
                     if strategy == "direct":
                         outcome = await asyncio.wait_for(run_direct(case, profile, model), timeout=args.case_timeout)
+                    elif strategy == "extended_direct":
+                        outcome = await asyncio.wait_for(run_extended_direct(case, profile, model), timeout=args.case_timeout)
+                    elif strategy == "self_refine":
+                        outcome = await asyncio.wait_for(run_self_refine(case, profile, model), timeout=args.case_timeout)
                     else:
                         config = same_config if strategy == "same_model_council" else cross_config
                         assert config is not None
@@ -276,7 +340,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
                 estimated_cost, unpriced_models = estimate_provider_cost(outcome.get("provider_usage", []), pricing)
                 outcome["estimated_cost"] = estimated_cost
                 outcome["unpriced_models"] = unpriced_models
-                variants.append({"strategy": strategy, "blind_label": labels[strategy], **outcome})
+                variants.append({"strategy": strategy, "repetition": repetition, "blind_label": labels[variant_id], **outcome})
             result_cases.append(
                 {
                     "id": case["id"],
@@ -296,6 +360,9 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "strategies": strategies,
+        "repetitions": args.repetitions,
+        "planned_model_calls": planned_calls,
+        "execution_order": "deterministically shuffled within each case",
         "quality_scored": False,
         "quality_claims_allowed": uses_only_real_providers,
         "mock_workflow_only": not uses_any_real_provider,
@@ -321,7 +388,7 @@ def blind_markdown(result: dict[str, Any]) -> str:
         lines.extend(["", "### 参考检查点", ""] + [f"- {point}" for point in case["reference_points"]] + [""])
         for variant in case["variants"]:
             lines.extend([f"### 答案 {variant['blind_label']}", "", variant["answer"] or f"[运行失败：{variant.get('error', 'unknown')}]", ""])
-        lines.extend(["评分：A / B / C（按实际答案数量填写）；偏好：____；备注：____", "", "---", ""])
+        lines.extend(["评分：按实际匿名答案填写；偏好：____；备注：____", "", "---", ""])
     return "\n".join(lines)
 
 
@@ -354,6 +421,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--strategies", default=",".join(STRATEGIES))
     parser.add_argument("--case", action="append", help="只运行指定案例，可重复")
     parser.add_argument("--case-timeout", type=int, default=900)
+    parser.add_argument("--repetitions", type=int, default=3, choices=range(1, 11), help="每个案例和策略重复次数（默认 3）")
     parser.add_argument("--confirm-cost", action="store_true", help="确认真实 Provider 调用可能产生费用")
     parser.add_argument("--pricing", type=Path, help="可选 Token 单价 JSON，用于估算成本")
     return parser.parse_args()
@@ -373,7 +441,10 @@ def main() -> int:
     Path(f"{stem}-blind.md").write_text(blind_markdown(result), encoding="utf-8")
     Path(f"{stem}-reviews.json").write_text(json.dumps(review_template(result), ensure_ascii=False, indent=2), encoding="utf-8")
     key = {
-        case["id"]: {variant["blind_label"]: variant["strategy"] for variant in case["variants"]}
+        case["id"]: {
+            variant["blind_label"]: {"strategy": variant["strategy"], "repetition": variant["repetition"]}
+            for variant in case["variants"]
+        }
         for case in result["cases"]
     }
     Path(f"{stem}-key.json").write_text(json.dumps(key, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -27,6 +27,8 @@ colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   click
     #   pytest
+coverage==7.15.2
+    # via pytest-cov
 cryptography==49.0.0 ; sys_platform == 'linux'
     # via secretstorage
 distro==1.9.0
@@ -112,7 +114,9 @@ packaging==26.2
     #   langsmith
     #   pytest
 pluggy==1.6.0
-    # via pytest
+    # via
+    #   pytest
+    #   pytest-cov
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy' and sys_platform == 'linux'
     # via cffi
 pydantic==2.13.4
@@ -132,7 +136,10 @@ pytest==8.4.2
     # via
     #   -r backend/requirements.txt
     #   pytest-asyncio
+    #   pytest-cov
 pytest-asyncio==0.26.0
+    # via -r backend/requirements.txt
+pytest-cov==7.1.0
     # via -r backend/requirements.txt
 python-docx==1.2.0
     # via -r backend/requirements.txt
@@ -146,10 +153,13 @@ pyyaml==6.0.3
     # via
     #   langchain-core
     #   uvicorn
+regex==2026.7.19
+    # via tiktoken
 requests==2.34.2
     # via
     #   langsmith
     #   requests-toolbelt
+    #   tiktoken
 requests-toolbelt==1.0.0
     # via langsmith
 secretstorage==3.5.0 ; sys_platform == 'linux'
@@ -162,6 +172,8 @@ starlette==1.3.1
     # via fastapi
 tenacity==9.1.4
     # via langchain-core
+tiktoken==0.13.0
+    # via -r backend/requirements.txt
 typing-extensions==4.16.0
     # via
     #   anyio

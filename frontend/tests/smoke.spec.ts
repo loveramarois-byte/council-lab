@@ -22,6 +22,7 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
   let createPayload: Record<string, unknown> | null = null;
   await page.route("**/api/runs", (route) => {
+    expect(route.request().headers()["idempotency-key"]).toBeTruthy();
     createPayload = route.request().postDataJSON();
     return route.fulfill({ json: { id: "demo-fixture" } });
   });
@@ -56,6 +57,30 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   await page.getByRole("button", { name: /进入圆桌/ }).click();
   await page.waitForURL("**/runs/demo-fixture");
   expect(createPayload).toEqual({ question: "这个演示请求不应携带资料空间字段", mode: "standard", use_saved_assignments: true, template_id: "open_discussion" });
+});
+
+test("创建请求断线后使用同一幂等键重试", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  const keys: string[] = [];
+  let attempts = 0;
+  await page.route("**/api/runs", async (route) => {
+    attempts += 1;
+    keys.push(route.request().headers()["idempotency-key"] || "");
+    if (attempts === 1) return route.abort("connectionreset");
+    return route.fulfill({ json: { id: "idempotent-retry-fixture" } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByPlaceholder("写下需要四席共同审议的问题").fill("网络断开后不能重复创建任务");
+  await page.getByRole("button", { name: /进入圆桌/ }).click();
+
+  await page.waitForURL("**/runs/idempotent-retry-fixture");
+  expect(attempts).toBe(2);
+  expect(keys[0]).toBeTruthy();
+  expect(keys[1]).toBe(keys[0]);
 });
 
 test("已有真实 Provider 时引导全 Mock 五席进入席位配置", async ({ page }) => {
@@ -482,7 +507,7 @@ test("Token 限额与上下文分开显示，并可提额续跑", async ({ page 
   });
 
   await page.goto("/runs/token-limit-fixture");
-  await expect(page.getByText("上下文 630 / 4000", { exact: true })).toBeVisible();
+  await expect(page.getByText("上下文 630 / 4000 · 估算", { exact: true })).toBeVisible();
   await expect(page.getByText("上游累计 15,391 / 12,000", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "提高到 40,000 Token 并继续" }).click();
   expect(resumePayload).toEqual({ max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 });
@@ -675,4 +700,22 @@ test("手机连接页生成配对码并适配窄屏", async ({ page }) => {
   }));
   expect(metrics.width).toBeLessThanOrEqual(metrics.viewportWidth);
   expect(metrics.qrWidth).toBeGreaterThanOrEqual(200);
+});
+
+test("诊断页只在用户操作后导出脱敏支持包", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/update/check", (route) => route.fulfill({ json: { current_version: "0.7.0", latest_version: "0.7.0", update_available: false } }));
+  await page.route("**/api/diagnostics/export", (route) => route.fulfill({
+    body: "diagnostic-zip-fixture",
+    contentType: "application/zip",
+    headers: { "Content-Disposition": 'attachment; filename="council-diagnostics-test.zip"' },
+  }));
+
+  await page.goto("/settings/diagnostics");
+  await expect(page.getByRole("heading", { name: "把问题说清楚，不把隐私带出去。" })).toBeVisible();
+  await expect(page.getByText(/不包含问题、回答、资料正文、日志内容/)).toBeVisible();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出诊断包" }).click();
+  expect((await download).suggestedFilename()).toBe("council-diagnostics-test.zip");
+  await expect(page.getByText(/诊断包已生成/)).toBeVisible();
 });

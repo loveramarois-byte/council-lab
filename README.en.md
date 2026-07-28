@@ -15,12 +15,15 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **Explicit first-run setup.** Council distinguishes the local scripted demo from real AI, then guides users through connecting a Provider and assigning all five seats.
 - **Decision follow-up.** Record the decision taken, expected result, review date, actual outcome, and which seat hypotheses held up.
 - **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
+- **Recoverable upgrades.** Explicit SQLite schema versions trigger a consistent pre-migration backup; a failed migration restores the original database.
+- **Duplicate-cost protection.** Costly run mutations use persisted idempotency keys, so a network retry cannot silently start the same model work twice.
 - **Replayable live events.** Persisted, sequenced SSE events resume after disconnects, refreshes, or phone backgrounding without repeating model calls; multiple tabs receive independent streams.
 - **Portable reports.** Export a completed deliberation as Markdown or a self-contained HTML report.
 - **Local-first credentials.** API keys are stored in the operating-system credential store, not Council's database or browser storage.
 - **Verified in-app updates.** Council checks official releases, verifies the downloaded package against `SHA256SUMS.txt`, replaces the installed copy, and restarts without moving local data or credentials.
+- **Redacted diagnostics.** A user-triggered support bundle reports runtime, storage integrity, and provider readiness without exporting conversations, log contents, credentials, model names, or host paths.
 - **Paired mobile access.** Keep Council running on the computer, scan the code under **Settings -> Mobile Access**, and use a short-lived signed session that can be inspected and revoked from the desktop.
-- **Reproducible evaluation.** A 12-case benchmark tracks failures, tokens, latency, optional cost estimates, citation support, and unsupported claims without publishing scores from Mock or incomplete blind reviews.
+- **Reproducible evaluation.** A 12-case benchmark compares direct, extended-direct, self-refine, same-model Council, and cross-model Council runs with repeated, shuffled trials and execution confidence intervals. Mock or incomplete blind reviews cannot support quality claims.
 
 Council never displays or saves hidden chain-of-thought. It stores only public model responses and run metadata. It does not currently run web searches or a code sandbox, and model agreement is **not** external fact verification.
 
@@ -42,7 +45,7 @@ The release includes its own runtime. Python and Node.js are not required. This 
 
 The release includes its own runtime and needs neither administrator access nor a separate Python/Node.js installation. This open-source build is not commercially code-signed. If SmartScreen appears, verify that the file came from this repository's Release page, then choose **More info -> Run anyway**. `Create Desktop Shortcut.cmd` adds an optional shortcut.
 
-Every release also includes `SHA256SUMS.txt` for verifying the downloaded ZIP.
+Every release includes `SHA256SUMS.txt` and a GitHub build-provenance attestation. The checksum verifies downloaded content and the attestation links the build to a workflow and commit; neither replaces Apple notarization or Windows commercial code signing.
 
 ### Mobile access
 
@@ -89,6 +92,8 @@ Each seat is a separate API call with its own public role prompt. Separate calls
 
 Quick, Standard, and Rigorous are Council workflow and context tiers. Native reasoning effort is sent only by providers and protocols that explicitly support it.
 
+The run page labels the current context count as either a matching tokenizer or a conservative estimate. Provider-reported cumulative usage remains a separate metric because upstream instructions and protocol framing are outside Council's public discussion window.
+
 ## Providers
 
 | Provider | Setup | Model discovery |
@@ -119,8 +124,8 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 ## Privacy and status
 
-Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report.
+Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report. For troubleshooting, prefer the [redacted diagnostics bundle](docs/DIAGNOSTICS.md) and inspect it before sending.
 
-Version `0.7.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
+Version `0.8.0` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

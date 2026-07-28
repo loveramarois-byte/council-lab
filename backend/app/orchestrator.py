@@ -8,7 +8,7 @@ from typing import Any, TypedDict
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 
-from .context import build_context_window, context_budget_for_mode
+from .context import build_context_window, context_budget_for_mode, token_estimator_for
 from .credentials import get_provider_secret
 from .models import (
     AgentAssignmentsConfig,
@@ -593,6 +593,7 @@ class Orchestrator:
             context_budget_for_mode(run.mode),
             self._evidence_context(run),
             run.project_context,
+            token_estimator_for(assignment.provider_id, assignment.model),
         )
         run.context_snapshot = ContextSnapshot(
             token_budget=context_window.token_budget,
@@ -603,6 +604,8 @@ class Orchestrator:
             summary=context_window.summary,
             source_tokens=context_window.source_tokens,
             history_tokens=context_window.history_tokens,
+            token_estimator=context_window.token_estimator,
+            token_estimator_exact=context_window.token_estimator_exact,
         )
         await self.emit(
             run,
@@ -695,6 +698,7 @@ class Orchestrator:
             context_budget_for_mode(run.mode),
             self._evidence_context(run),
             run.project_context,
+            token_estimator_for(assignment.provider_id, assignment.model),
         )
         run.context_snapshot = ContextSnapshot(
             token_budget=context_window.token_budget,
@@ -705,6 +709,8 @@ class Orchestrator:
             summary=context_window.summary,
             source_tokens=context_window.source_tokens,
             history_tokens=context_window.history_tokens,
+            token_estimator=context_window.token_estimator,
+            token_estimator_exact=context_window.token_estimator_exact,
         )
         await self.emit(run, "summary_started", "summary", "正在根据四席公开讨论和你的最终补充形成答案", 94)
         template = get_template(run.template_id)

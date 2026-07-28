@@ -40,6 +40,8 @@ Council 是一个本地优先、允许用户参与的 AI 审议工具。你提�
 - **最终确认点**：四席完成后不会擅自总结，你可以补充一次或多次再生成答案。
 - **五席独立配置**：四个讨论席和总结席均可分别选择 Provider 与模型，创建审议时固化配置快照。
 - **可恢复运行**：启动时检查未完成任务；有效 checkpoint 可续跑，缺少 checkpoint 或凭据会明确标记为可恢复失败。
+- **可恢复升级**：SQLite 使用显式 schema 版本；已有数据库升级前自动生成一致性备份，迁移失败会恢复原库，诊断页显示当前版本与备份数量。
+- **防重复计费操作**：创建、重跑、推进、插话、重试、续跑、取消和总结支持持久幂等键；网络失败重试不会重复启动同一次模型任务。
 - **可重放实时事件**：SSE 事件持久化并带单调序号；断线、刷新或手机切回前台后会先刷新状态再续接，不重复模型调用，多标签页互不争抢事件。
 - **受控上下文**：按 Token 预算确定性保留原问题、早期关键摘录、最近发言和最新用户插话。
 - **三档工作流模式**：引导 / 圆桌 / 深挖控制上下文预算；仅支持 Responses reasoning 的 Provider 会收到原生 effort 参数。
@@ -52,8 +54,9 @@ Council 是一个本地优先、允许用户参与的 AI 审议工具。你提�
 - **可移交报告**：审议完成后导出 Markdown 或单文件 HTML，保留问题、逐席发言、模型记录、用量和结果回访。
 - **本地优先与密钥保护**：数据默认留在本机，API Key 交给系统凭据库保存。
 - **软件内安全更新**：启动时自动检查正式 Release，可在设置中下载、核对 SHA-256、替换并重启；历史和密钥不随应用目录覆盖。
+- **脱敏诊断包**：遇到故障时可从“设置 → 诊断与支持”手工导出运行、存储与 Provider 就绪摘要；不自动上传，也不包含对话、日志正文、凭据或本机路径。
 - **手机远程审议**：电脑保持运行时，在“设置 → 手机连接”扫码配对；短期签名会话不保存原始令牌，电脑端可查看并立即撤销所有手机会话。
-- **可重复评测**：内置 12 个决策、事实核查、风险和规划案例，记录失败率、Token、耗时、可选成本估算、引用支持率和未经支持主张；Mock 或不完整盲评不能形成效果结论。
+- **可重复评测**：内置 12 个决策、事实核查、风险和规划案例，对直接回答、加强直接回答、自我修正、同模型 Council 和跨模型 Council 默认重复 3 次并打乱顺序，记录失败率、Token、耗时、95% 区间、可选成本估算、引用支持率和未经支持主张；Mock 或不完整盲评不能形成效果结论。
 - **单页工作台**：桌面与移动端均固定一屏，讨论区内部滚动。
 
 Council 当前不执行联网搜索或代码沙箱，也不提供百分比事实置信度。最终答案是模型对公开讨论的综合，**不等于外部事实核验**。
@@ -76,7 +79,7 @@ Release 包已经内置运行环境，不需要安装 Python 或 Node.js。当�
 
 Release 包已经内置运行环境，不需要管理员权限，也不需要安装 Python 或 Node.js。当前开源构建没有商业代码签名；如果 Windows 弹出 SmartScreen，请确认文件来自本仓库 Release，再点“更多信息”→“仍要运行”。`Create Desktop Shortcut.cmd` 可选创建桌面快捷方式。
 
-每个正式 Release 同时提供 `SHA256SUMS.txt`，需要校验下载时可将 ZIP 的 SHA-256 与其中对应条目比较。
+每个正式 Release 同时提供 `SHA256SUMS.txt` 和 GitHub build provenance attestation。前者用于核对下载内容，后者用于关联构建 workflow 与 commit；两者都不等于 Apple notarization 或 Windows 商业代码签名。
 
 ### 手机端
 
@@ -153,17 +156,21 @@ flowchart LR
 
 Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于上游模型的 Low / High / Ultra。设置页会明确显示“原生推理档位”或“仅工作流档位”；只有前者会发送 reasoning effort。
 
-圆桌页分开显示两种 Token：`上下文`是本席发送的公开讨论窗口，`上游累计`是 Provider 返回的全程真实 usage。CC Switch 的 Codex 路径可能为每次请求附加约 4k-5k 基础 instructions，因此后者通常明显更高。累计值达到边界后，Council 不再发起下一次请求；由于发出请求前无法预知其最终 usage，最后一次已允许的请求可能让累计值略微超过边界。
+圆桌页分开显示两种 Token：`上下文`是本席发送的公开讨论窗口，已知 OpenAI-compatible 模型使用匹配 tokenizer 并标记“精确”，未知模型使用带安全余量的保守估算并标记“估算”；`上游累计`是 Provider 返回的全程真实 usage。CC Switch 的 Codex 路径可能为每次请求附加约 4k-5k 基础 instructions，因此后者通常明显更高。累计值达到边界后，Council 不再发起下一次请求；由于发出请求前无法预知其最终 usage，最后一次已允许的请求可能让累计值略微超过边界。
 
 ## 数据与安全
 
 - API Key 不进入 Council SQLite、日志或前端存储；桌面录入后写入 macOS Keychain、Windows Credential Locker 或 Linux Secret Service。
 - 审议记录默认位于 `~/Library/Application Support/Council/data/`（macOS）或 `%LOCALAPPDATA%\Council\data\`（Windows）。
+- 已有业务库发生 schema 升级时会先在数据目录的 `backups/` 保存最近 5 份迁移前备份；这不是用户内容的完整长期备份策略。
+- 旧资料空间只保留历史读取能力。项目、来源、上传和网页抓取写接口默认返回 `410`；仅迁移排障时可临时设置 `COUNCIL_ENABLE_LEGACY_WORKSPACE=1`，不应长期启用。
 - 启动日志默认位于 `~/Library/Logs/Council/`（macOS）或 `%LOCALAPPDATA%\Council\logs\`（Windows）。
 - CC Switch 模型目录为空时，Council 只读查询近期成功调用过的模型名，不读取其 Provider 配置或密钥，也不修改 CC Switch 数据库。
 - 后端默认只监听 loopback。不要把本地凭据接口直接暴露到不可信网络。
 
 完整说明见 [Security Policy](SECURITY.md) 与 [CC Switch 集成边界](docs/CCSWITCH_INTEGRATION.md)。
+
+故障排查时优先使用 [脱敏诊断包](docs/DIAGNOSTICS.md)，发送前仍应自行检查归档内容。
 
 ## 技术栈
 
@@ -184,7 +191,7 @@ docs/          架构、设计决策、评测与集成说明
 
 ## 项目状态
 
-当前版本为 `0.7.0`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
+当前版本为 `0.8.0`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
 
 欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](CONTRIBUTING.md)、[行为规范](CODE_OF_CONDUCT.md) 和 [安全政策](SECURITY.md)。
 

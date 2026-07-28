@@ -213,6 +213,8 @@ class ContextSnapshot(BaseModel):
     summary: str = ""
     source_tokens: int = 0
     history_tokens: int = 0
+    token_estimator: str = "conservative_utf8"
+    token_estimator_exact: bool = False
 
 
 class ProjectRecord(BaseModel):

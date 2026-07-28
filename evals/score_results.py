@@ -15,6 +15,8 @@ from evals.scoring import SCORE_FIELDS, STRATEGIES, summarize_human_reviews
 
 LABELS = {
     "direct": "单模型直接回答",
+    "extended_direct": "单模型加强直接回答",
+    "self_refine": "单模型自我修正",
     "same_model_council": "同模型四角色审议",
     "cross_model_council": "跨模型四席审议",
 }

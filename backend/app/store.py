@@ -3,11 +3,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .migrations import SCHEMA_VERSION, apply_migrations, schema_version
 from .models import AgentAssignmentsConfig, ProjectRecord, ProjectSource, ProviderProfile, RunEvent, RunRecord
+
+
+@dataclass(frozen=True)
+class IdempotencyClaim:
+    state: str
+    response_json: str | None = None
 
 
 class Store:
@@ -20,20 +30,56 @@ class Store:
         self._event_conditions: dict[str, asyncio.Condition] = {}
         self._event_stream_counts: dict[str, int] = {}
         self._event_stream_lock = asyncio.Lock()
+        existed = source_path.exists() and source_path.stat().st_size > 0
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        backup_path = None
+        try:
+            current = schema_version(self.conn)
+            backup_path = self._create_schema_backup(current) if existed and current < SCHEMA_VERSION else None
+            apply_migrations(self.conn)
+        except Exception:
+            self.conn.close()
+            if backup_path:
+                self._restore_schema_backup(backup_path)
+            raise
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
-        self.conn.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
-        self.conn.execute("CREATE TABLE IF NOT EXISTS provider_profiles (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
-        self.conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
-        self.conn.execute("CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
-        self.conn.execute("CREATE TABLE IF NOT EXISTS project_sources (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_project_sources_project ON project_sources(project_id, created_at)")
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS run_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)"
+
+    def _create_schema_backup(self, current_version: int) -> Path:
+        source_path = Path(self.path)
+        backup_dir = source_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_path = backup_dir / f"{source_path.stem}-schema-v{current_version}-to-v{SCHEMA_VERSION}-{timestamp}.sqlite3"
+        destination = sqlite3.connect(backup_path)
+        try:
+            self.conn.backup(destination)
+            destination.commit()
+        finally:
+            destination.close()
+        try:
+            backup_path.chmod(0o600)
+        except OSError:
+            pass
+        self._prune_schema_backups(backup_dir, source_path.stem)
+        return backup_path
+
+    @staticmethod
+    def _prune_schema_backups(backup_dir: Path, stem: str, keep: int = 5) -> None:
+        backups = sorted(
+            backup_dir.glob(f"{stem}-schema-v*-to-v*-*.sqlite3"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
         )
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_run_events_run_sequence ON run_events(run_id, sequence)")
-        self.conn.commit()
+        for obsolete in backups[keep:]:
+            obsolete.unlink(missing_ok=True)
+
+    def _restore_schema_backup(self, backup_path: Path) -> None:
+        target = Path(self.path)
+        for suffix in ("-wal", "-shm"):
+            Path(f"{self.path}{suffix}").unlink(missing_ok=True)
+        shutil.copy2(backup_path, target)
 
     async def save_project(self, project: ProjectRecord) -> None:
         async with self._lock:
@@ -134,6 +180,62 @@ class Store:
     async def save_run(self, run: RunRecord) -> None:
         async with self._lock:
             self.conn.execute("INSERT OR REPLACE INTO runs(id,payload,created_at) VALUES(?,?,?)", (run.id, run.model_dump_json(), run.created_at.isoformat()))
+            self.conn.commit()
+
+    async def claim_idempotent_operation(
+        self,
+        scope: str,
+        operation_key: str,
+        request_hash: str,
+        *,
+        stale_after: timedelta = timedelta(minutes=15),
+    ) -> IdempotencyClaim:
+        now = datetime.now(timezone.utc)
+        async with self._lock:
+            row = self.conn.execute(
+                "SELECT request_hash,status,response_json,updated_at FROM idempotent_operations WHERE scope=? AND operation_key=?",
+                (scope, operation_key),
+            ).fetchone()
+            if row:
+                stored_hash, status, response_json, updated_at = row
+                if stored_hash != request_hash:
+                    return IdempotencyClaim("conflict")
+                if status == "completed" and response_json:
+                    return IdempotencyClaim("cached", response_json)
+                try:
+                    updated = datetime.fromisoformat(updated_at)
+                except (TypeError, ValueError):
+                    updated = now
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=timezone.utc)
+                if status == "in_progress" and now - updated < stale_after:
+                    return IdempotencyClaim("in_progress")
+                self.conn.execute(
+                    "UPDATE idempotent_operations SET status='in_progress',response_json=NULL,updated_at=? WHERE scope=? AND operation_key=?",
+                    (now.isoformat(), scope, operation_key),
+                )
+            else:
+                self.conn.execute(
+                    "INSERT INTO idempotent_operations(scope,operation_key,request_hash,status,response_json,created_at,updated_at) VALUES(?,?,?,'in_progress',NULL,?,?)",
+                    (scope, operation_key, request_hash, now.isoformat(), now.isoformat()),
+                )
+            self.conn.commit()
+        return IdempotencyClaim("claimed")
+
+    async def complete_idempotent_operation(self, scope: str, operation_key: str, response_json: str) -> None:
+        async with self._lock:
+            self.conn.execute(
+                "UPDATE idempotent_operations SET status='completed',response_json=?,updated_at=? WHERE scope=? AND operation_key=?",
+                (response_json, datetime.now(timezone.utc).isoformat(), scope, operation_key),
+            )
+            self.conn.commit()
+
+    async def abandon_idempotent_operation(self, scope: str, operation_key: str) -> None:
+        async with self._lock:
+            self.conn.execute(
+                "DELETE FROM idempotent_operations WHERE scope=? AND operation_key=? AND status='in_progress'",
+                (scope, operation_key),
+            )
             self.conn.commit()
 
     async def get_run(self, run_id: str) -> RunRecord | None:
@@ -252,6 +354,30 @@ class Store:
 
     async def seed_events(self, run_id: str) -> None:
         await self.publish(RunEvent(event_id=f"seed-{run_id}", run_id=run_id, type="run_created", stage="setup", message="审议任务已建立", progress=2))
+
+    async def diagnostic_snapshot(self) -> dict[str, Any]:
+        async with self._lock:
+            counts = {
+                table: int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in ("runs", "projects", "project_sources", "run_events", "provider_profiles")
+            }
+            integrity = str(self.conn.execute("PRAGMA quick_check").fetchone()[0])
+            journal_mode = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0])
+            current_schema_version = schema_version(self.conn)
+        database_file = Path(self.path)
+        checkpoint_file = Path(self.checkpoint_path)
+        backup_dir = database_file.parent / "backups"
+        backups = sorted(backup_dir.glob(f"{database_file.stem}-schema-v*-to-v*-*.sqlite3")) if backup_dir.exists() else []
+        return {
+            "integrity": integrity,
+            "journal_mode": journal_mode,
+            "schema_version": current_schema_version,
+            "schema_version_supported": SCHEMA_VERSION,
+            "database_bytes": database_file.stat().st_size if database_file.exists() else 0,
+            "checkpoint_bytes": checkpoint_file.stat().st_size if checkpoint_file.exists() else 0,
+            "schema_backup_count": len(backups),
+            "counts": counts,
+        }
 
     def close(self) -> None:
         self.conn.close()
