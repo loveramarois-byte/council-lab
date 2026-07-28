@@ -74,6 +74,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.lock
+      - run: python scripts/check_release_consistency.py
       - run: python -m pip install -r backend/requirements.lock
       - run: PYTHONPATH=backend:. pytest -q backend/tests
 
@@ -89,6 +90,8 @@ jobs:
       - run: npm ci
         working-directory: frontend
       - run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend
+      - run: npm run lint
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
@@ -126,7 +129,7 @@ jobs:
         working-directory: .
       - run: npm test
         working-directory: frontend
-      - name: Verify mobile pairing guard and same-origin API
+      - name: Verify mobile pairing abuse controls and session revocation
         run: |
           kill "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
           wait "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
@@ -135,22 +138,51 @@ jobs:
             sleep 0.25
           done
           ! curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null 2>&1
-          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-mobile-token exec node_modules/.bin/next dev --hostname 0.0.0.0) >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-mobile-token COUNCIL_DESKTOP_TOKEN=ci-desktop-token COUNCIL_PAIR_FAILURE_LIMIT=3 COUNCIL_PAIR_LOCK_SECONDS=1 exec node_modules/.bin/next dev --hostname 0.0.0.0) >"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/frontend.pid"
           for attempt in {1..60}; do
             curl -fsS http://127.0.0.1:3000/mobile-access/health >/dev/null && break
             sleep 1
           done
-          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
+          base=http://127.0.0.1:3000
+          origin=http://127.0.0.1:3000
+          status() { curl -sS -o /dev/null -w '%{http_code}' "$@"; }
+          test "$(status "$base/")" = "403"
           cookie_jar="$(mktemp "$RUNNER_TEMP/council-cookie.XXXXXX")"
-          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data '{\"token\":\"wrong\"}' http://127.0.0.1:3000/mobile-access/pair)" = "403"
-          curl -fsS -c "$cookie_jar" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token"}' http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
-          curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/ | grep -q Council
-          curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/api/health | grep -q council-lab
-          test "$(curl -sS -b "$cookie_jar" -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/mobile-access/info)" = "403"
+          test "$(status -H 'Host: attacker.example' -H "Origin: $origin" -H 'Content-Type: application/json' --data '{\"token\":\"wrong\"}' "$base/mobile-access/pair")" = "421"
+          test "$(status -H 'Content-Type: application/json' --data '{\"token\":\"wrong\"}' "$base/mobile-access/pair")" = "403"
+          test "$(status -H "Origin: $origin" -H 'Content-Type: text/plain' --data wrong "$base/mobile-access/pair")" = "415"
+          test "$(status -H "Origin: $origin" -H 'Content-Type: application/jsonp' --data '{\"token\":\"wrong\"}' "$base/mobile-access/pair")" = "415"
+          oversized="$(python -c 'print("x" * 2200)')"
+          test "$(status -H "Origin: $origin" -H 'Content-Type: application/json' --data "{\"token\":\"$oversized\"}" "$base/mobile-access/pair")" = "413"
+          test "$(python -c 'print("x" * 2200)' | curl -sS -o /dev/null -w '%{http_code}' -H "Origin: $origin" -H 'Content-Type: application/json' -H 'Transfer-Encoding: chunked' --data-binary @- "$base/mobile-access/pair")" = "413"
+          for expected in 403 403 429; do
+            test "$(status -H "Origin: $origin" -H 'Content-Type: application/json' --data '{\"token\":\"wrong\"}' "$base/mobile-access/pair")" = "$expected"
+          done
+          test "$(status -H "Origin: $origin" -H 'Content-Type: application/json' --data '{\"token\":\"ci-mobile-token\"}' "$base/mobile-access/pair")" = "429"
+          sleep 1.2
+          curl -fsS -c "$cookie_jar" -H "Origin: $origin" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token"}' "$base/mobile-access/pair" | grep -q '"paired":true'
+          ! grep -q 'ci-mobile-token' "$cookie_jar"
+          curl -fsS -b "$cookie_jar" "$base/" | grep -q Council
+          curl -fsS -b "$cookie_jar" "$base/api/health" | grep -q council-lab
+          test "$(status -b "$cookie_jar" -H 'Origin: http://evil.example' -H 'Content-Type: application/json' --data '{}' "$base/api/runs")" = "403"
+          test "$(status -b "$cookie_jar" "$base/mobile-access/info")" = "403"
           desktop_cookie="$(mktemp "$RUNNER_TEMP/council-desktop-cookie.XXXXXX")"
-          curl -fsS -c "$desktop_cookie" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token","device":"desktop"}' http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
-          curl -fsS -b "$desktop_cookie" http://127.0.0.1:3000/mobile-access/info | grep -q '"pairUrl"'
+          test "$(status -H "Origin: $origin" -H 'Content-Type: application/json' --data '{"token":"ci-mobile-token","device":"desktop"}' "$base/mobile-access/pair")" = "403"
+          curl -fsS -c "$desktop_cookie" -H "Origin: $origin" -H 'Content-Type: application/json' --data '{"token":"ci-desktop-token","device":"desktop"}' "$base/mobile-access/pair" | grep -q '"paired":true'
+          curl -fsS -b "$desktop_cookie" "$base/mobile-access/info" | grep -q '"activeSessions":1'
+          curl -fsS -b "$desktop_cookie" -H "Origin: $origin" -X POST "$base/mobile-access/revoke" | grep -q '"revoked":1'
+          test "$(status -b "$cookie_jar" "$base/")" = "403"
+          kill "$(cat "$RUNNER_TEMP/frontend.pid")"
+          wait "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true
+          (cd frontend && COUNCIL_REMOTE_TOKEN=ci-rotated-token COUNCIL_DESKTOP_TOKEN=ci-rotated-desktop-token exec node_modules/.bin/next dev --hostname 0.0.0.0) >>"$RUNNER_TEMP/frontend-mobile.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/frontend.pid"
+          for attempt in {1..60}; do
+            curl -fsS "$base/mobile-access/health" >/dev/null && break
+            sleep 1
+          done
+          test "$(status -b "$desktop_cookie" "$base/")" = "403"
+          ! grep -q 'ci-mobile-token' "$RUNNER_TEMP/frontend-mobile.log"
       - if: always()
         run: |
           kill "$(cat "$RUNNER_TEMP/backend.pid")" "$(cat "$RUNNER_TEMP/frontend.pid")" 2>/dev/null || true

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Laptop, LoaderCircle, QrCode, RefreshCw, ShieldCheck, Smartphone, Wifi } from "lucide-react";
+import { Check, Copy, Laptop, LoaderCircle, QrCode, RefreshCw, ShieldCheck, ShieldOff, Smartphone, Wifi } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import QRCode from "qrcode";
@@ -10,6 +10,9 @@ type MobileAccessInfo = {
   lanAddress: string;
   origin: string;
   pairUrl: string;
+  activeSessions: number;
+  lastAccessAt: string | null;
+  sessionTtlHours: number;
 };
 
 export default function MobileAccessPage() {
@@ -17,6 +20,8 @@ export default function MobileAccessPage() {
   const [qrCode, setQrCode] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
+  const [revoking, setRevoking] = useState(false);
+  const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -45,6 +50,23 @@ export default function MobileAccessPage() {
     window.setTimeout(() => setCopied(false), 1800);
   };
 
+  const revokeMobileSessions = async () => {
+    setRevoking(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/mobile-access/revoke", { method: "POST" });
+      if (!response.ok) throw new Error("无法撤销手机会话");
+      const result = await response.json() as { revoked: number };
+      setNotice(result.revoked > 0 ? `已撤销 ${result.revoked} 个手机会话` : "当前没有已配对的手机会话");
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法撤销手机会话");
+    } finally {
+      setRevoking(false);
+    }
+  };
+
   const ready = Boolean(info?.enabled && info.pairUrl && qrCode);
 
   return <div className="page-wrap simple-settings mobile-access-page">
@@ -70,7 +92,11 @@ export default function MobileAccessPage() {
           <button type="button" disabled={!ready} onClick={copyPairingLink}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "已复制" : "复制配对链接"}</button>
         </div>
 
-        <div className="pairing-security"><ShieldCheck size={16} /><span><strong>本次启动专属配对</strong><small>访问令牌不会显示在地址栏；Council 重启后旧配对自动失效。</small></span></div>
+        <div className="pairing-security"><ShieldCheck size={16} /><span><strong>短期签名会话</strong><small>原始令牌不会写入 Cookie；会话最长 {info?.sessionTtlHours || 12} 小时，Council 重启后立即失效。</small></span></div>
+        <div className="mobile-session-control">
+          <span><strong>{info?.activeSessions || 0} 台手机已配对</strong><small>{info?.lastAccessAt ? `最近访问 ${new Date(info.lastAccessAt).toLocaleString("zh-CN")}` : "暂无手机访问记录"}</small></span>
+          <button type="button" disabled={revoking || !info} onClick={() => void revokeMobileSessions()}>{revoking ? <LoaderCircle className="spin" size={14} /> : <ShieldOff size={14} />}撤销手机会话</button>
+        </div>
       </div>
 
       <div className="qr-stage">
@@ -81,6 +107,7 @@ export default function MobileAccessPage() {
     </section>
 
     {error && <div className="mobile-access-error">{error}</div>}
+    {notice && <div className="mobile-access-notice" role="status">{notice}</div>}
     <footer className="mobile-access-foot"><ShieldCheck size={15} /><span>API Key、CC Switch 与审议数据继续保存在这台电脑上。</span></footer>
   </div>;
 }

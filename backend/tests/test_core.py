@@ -401,10 +401,7 @@ async def test_four_agents_debate_in_order_user_can_interject_and_confirm_final(
     assert current.final_decision.final_answer == "自动形成的最终答案"
     assert "最终补充条件" in backend.prompts[-1]
     assert "score" not in current.final_decision.confidence
-    events = []
-    queue = store.queue(run.id)
-    while not queue.empty():
-        events.append((await queue.get()).type)
+    events = [event.type for event in await store.list_events(run.id)]
     assert events.count("agent_turn_completed") == 4
     assert events.index("final_completed") > max(index for index, event in enumerate(events) if event == "agent_turn_completed")
 
@@ -804,6 +801,9 @@ async def test_token_limited_run_can_raise_limit_and_resume_without_repeating_tu
     assert current.limit_reason is None
     assert [turn.speaker_name for turn in current.discussion_turns] == ["析理", "诘问", "构策", "观澜"]
     assert calls == 4
+    event_types = [event.type for event in await store.list_events(run.id)]
+    assert event_types.index("run_limit_reached") < len(event_types) - 1
+    assert event_types[-1] == "awaiting_final_input"
 
 
 async def test_limit_resume_keeps_recovery_state_when_credentials_are_missing(tmp_path):

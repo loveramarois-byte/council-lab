@@ -14,6 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Verify release tag matches VERSION
         shell: bash
         run: |
@@ -23,6 +33,13 @@ jobs:
             echo "Release tag $GITHUB_REF_NAME does not match VERSION $version" >&2
             exit 1
           fi
+          python scripts/check_release_consistency.py
+      - run: python -m pip install -r backend/requirements.lock
+      - run: PYTHONPATH=backend:. pytest -q backend/tests
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
 
   macos:
     needs: verify-version
@@ -64,10 +81,15 @@ jobs:
           curl -fsS http://127.0.0.1:3000/mobile-access/health | grep -q council-mobile-access
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
           token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/mobile-access.token")"
+          desktop_token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/desktop-access.token")"
           cookie_jar="$RUNNER_TEMP/launcher-cookie.txt"
-          curl -fsS -c "$cookie_jar" -H 'Content-Type: application/json' --data "{\"token\":\"$token\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
+          curl -fsS -c "$cookie_jar" -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$token\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
           curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/ | grep -q Council
           curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/api/health | grep -q council-lab
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$token\",\"device\":\"desktop\"}" http://127.0.0.1:3000/mobile-access/pair)" = "403"
+          desktop_cookie="$RUNNER_TEMP/launcher-desktop-cookie.txt"
+          curl -fsS -c "$desktop_cookie" -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$desktop_token\",\"device\":\"desktop\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
+          curl -fsS -b "$desktop_cookie" http://127.0.0.1:3000/mobile-access/info | grep -q '"activeSessions":1'
           first_backend="$(awk '$1 == "backend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           first_frontend="$(awk '$1 == "frontend" {print $2}' "$COUNCIL_LOG_DIR/council-bundled.pids")"
           test -n "$first_backend"

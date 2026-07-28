@@ -14,6 +14,7 @@ PID_FILE="$LOG_DIR/council-bundled.pids"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 TOKEN_FILE="$LOG_DIR/mobile-access.token"
+DESKTOP_TOKEN_FILE="$LOG_DIR/desktop-access.token"
 
 mkdir -p "$LOG_DIR"
 /usr/bin/touch "$PID_FILE"
@@ -73,8 +74,10 @@ if ! is_up "http://127.0.0.1:8001/api/health"; then
 fi
 
 REMOTE_TOKEN=""
-if is_up "http://127.0.0.1:3000/mobile-access/health" && [[ -f "$TOKEN_FILE" ]]; then
+DESKTOP_TOKEN=""
+if is_up "http://127.0.0.1:3000/mobile-access/health" && [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
   REMOTE_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$TOKEN_FILE")"
+  DESKTOP_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$DESKTOP_TOKEN_FILE")"
 fi
 
 if ! is_up "http://127.0.0.1:3000/mobile-access/health"; then
@@ -83,10 +86,12 @@ if ! is_up "http://127.0.0.1:3000/mobile-access/health"; then
     exit 1
   fi
   REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  DESKTOP_TOKEN="$(/usr/bin/openssl rand -hex 24)"
   umask 077
   printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
+  printf '%s\n' "$DESKTOP_TOKEN" > "$DESKTOP_TOKEN_FILE"
   pushd "$WEB_DIR" >/dev/null
-  HOSTNAME=0.0.0.0 PORT=3000 NODE_ENV=production COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" \
+  HOSTNAME=0.0.0.0 PORT=3000 NODE_ENV=production COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" \
     /usr/bin/nohup "$NODE_EXE" "$WEB_DIR/server.js" >>"$FRONTEND_LOG" 2>&1 &
   frontend_pid=$!
   popd >/dev/null
@@ -98,8 +103,8 @@ if ! is_up "http://127.0.0.1:3000/mobile-access/health"; then
 fi
 
 if [[ "${COUNCIL_NO_BROWSER:-0}" != "1" ]]; then
-  if [[ -n "$REMOTE_TOKEN" ]]; then
-    /usr/bin/open "http://localhost:3000/pair#desktop:$REMOTE_TOKEN"
+  if [[ -n "$DESKTOP_TOKEN" ]]; then
+    /usr/bin/open "http://localhost:3000/pair#desktop:$DESKTOP_TOKEN"
   else
     /usr/bin/open "http://localhost:3000"
   fi

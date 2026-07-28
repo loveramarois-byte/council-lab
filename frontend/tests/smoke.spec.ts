@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+const backendUrl = process.env.COUNCIL_TEST_BACKEND_URL || "http://127.0.0.1:8001";
 const mockProvider = { id: "mock", preset_id: "mock", display_name: "本地演示", description: "不联网", provider_type: "mock", protocol_mode: "auto", base_url: "", has_api_key: false, credential_source: "none", supports_api_key: false, requires_api_key: false, enabled: true, is_active: true, default_model: "council-mock", reasoning_effort: "low", available_models: ["council-mock"], model_source: "built_in", local_only: true, last_health_check: null, last_error: null, capabilities: {} };
 const readyProvider = { ...mockProvider, id: "deepseek", preset_id: "deepseek", display_name: "DeepSeek", provider_type: "compatible", has_api_key: true, credential_source: "system", supports_api_key: true, requires_api_key: true, default_model: "deepseek-chat", available_models: ["deepseek-chat"], model_source: "provider", local_only: false, last_health_check: "2026-07-28T00:00:00Z" };
 const unreadyProvider = { ...readyProvider, has_api_key: false, credential_source: "none", last_health_check: null };
@@ -8,7 +9,7 @@ const assignments = (providerId = "mock") => ({ seats: [assignment("analyst", pr
 const templates = [{ id: "open_discussion", name: "开放讨论", description: "依次讨论", prompt_hint: "写下需要四席共同审议的问题", system_guidance: "" }];
 
 async function createMockRoundtable(request: import("@playwright/test").APIRequestContext) {
-  const response = await request.post("http://127.0.0.1:8001/api/runs", {
+  const response = await request.post(`${backendUrl}/api/runs`, {
     data: { question: "数据库迁移应该先讨论哪些风险？", mode: "standard", provider_id: "mock", model: "council-mock" },
   });
   expect(response.ok()).toBeTruthy();
@@ -428,10 +429,10 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await page.getByLabel("实际发生了什么").fill("回滚方案通过了演练");
     await page.getByRole("button", { name: "保存回访" }).click();
     await expect(page.getByRole("button", { name: "编辑回访" })).toBeVisible();
-    const saved = await (await request.get(`http://127.0.0.1:8001/api/runs/${run.id}`)).json() as { decision_review?: { expected_result: string; outcome_status: string } };
+    const saved = await (await request.get(`${backendUrl}/api/runs/${run.id}`)).json() as { decision_review?: { expected_result: string; outcome_status: string } };
     expect(saved.decision_review).toMatchObject({ expected_result: "两周内验证回滚方案", outcome_status: "partial" });
   } finally {
-    await request.delete(`http://127.0.0.1:8001/api/runs/${run.id}`);
+    await request.delete(`${backendUrl}/api/runs/${run.id}`);
   }
 });
 
@@ -488,7 +489,7 @@ test("Token 限额与上下文分开显示，并可提额续跑", async ({ page 
 });
 
 test("五个席位配置可保存且明确 Provider 能力", async ({ page, request }) => {
-  const response = await request.get("http://127.0.0.1:8001/api/agent-assignments");
+  const response = await request.get(`${backendUrl}/api/agent-assignments`);
   const original = await response.json();
   try {
     await page.goto("/settings/agents");
@@ -503,7 +504,7 @@ test("五个席位配置可保存且明确 Provider 能力", async ({ page, requ
     await expect(page.getByLabel("析理 Provider")).toHaveValue("mock");
     await expect(page.getByText(/仅工作流档位/).first()).toBeVisible();
   } finally {
-    await request.put("http://127.0.0.1:8001/api/agent-assignments", { data: original });
+    await request.put(`${backendUrl}/api/agent-assignments`, { data: original });
   }
 });
 
@@ -543,7 +544,7 @@ test("移动端圆桌固定一屏，内部消息区滚动", async ({ page, reque
     expect(metrics.height).toBeLessThanOrEqual(metrics.viewportHeight);
     expect(metrics.dialogueScrollable).toBeTruthy();
   } finally {
-    await request.delete(`http://127.0.0.1:8001/api/runs/${run.id}`);
+    await request.delete(`${backendUrl}/api/runs/${run.id}`);
   }
 });
 

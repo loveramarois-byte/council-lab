@@ -13,6 +13,7 @@ $LocalRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME
 $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $LocalRoot "Council\logs" }
 $PidFile = Join-Path $LogDir "council-bundled-pids.json"
 $TokenFile = Join-Path $LogDir "mobile-access.token"
+$DesktopTokenFile = Join-Path $LogDir "desktop-access.token"
 $BackendProcess = $null
 $FrontendProcess = $null
 
@@ -95,8 +96,10 @@ try {
     }
 
     $RemoteToken = ""
-    if ((Test-Frontend) -and (Test-Path $TokenFile)) {
+    $DesktopToken = ""
+    if ((Test-Frontend) -and (Test-Path $TokenFile) -and (Test-Path $DesktopTokenFile)) {
         $RemoteToken = (Get-Content -Raw $TokenFile).Trim()
+        $DesktopToken = (Get-Content -Raw $DesktopTokenFile).Trim()
     }
 
     if (-not (Test-Frontend)) {
@@ -105,13 +108,17 @@ try {
         $PreviousPort = $env:PORT
         $PreviousNodeEnv = $env:NODE_ENV
         $PreviousRemoteToken = $env:COUNCIL_REMOTE_TOKEN
+        $PreviousDesktopToken = $env:COUNCIL_DESKTOP_TOKEN
         $RemoteToken = New-PairingToken
+        $DesktopToken = New-PairingToken
         Set-Content -Encoding ASCII -Path $TokenFile -Value $RemoteToken
+        Set-Content -Encoding ASCII -Path $DesktopTokenFile -Value $DesktopToken
         try {
             $env:HOSTNAME = "0.0.0.0"
             $env:PORT = "3000"
             $env:NODE_ENV = "production"
             $env:COUNCIL_REMOTE_TOKEN = $RemoteToken
+            $env:COUNCIL_DESKTOP_TOKEN = $DesktopToken
             $FrontendProcess = Start-Process -FilePath $NodeExe -ArgumentList @("`"$ServerScript`"") `
                 -WorkingDirectory $WebDir -WindowStyle Hidden -PassThru `
                 -RedirectStandardOutput (Join-Path $LogDir "frontend.stdout.log") `
@@ -123,7 +130,8 @@ try {
                 @{ Name = "HOSTNAME"; Value = $PreviousHost },
                 @{ Name = "PORT"; Value = $PreviousPort },
                 @{ Name = "NODE_ENV"; Value = $PreviousNodeEnv },
-                @{ Name = "COUNCIL_REMOTE_TOKEN"; Value = $PreviousRemoteToken }
+                @{ Name = "COUNCIL_REMOTE_TOKEN"; Value = $PreviousRemoteToken },
+                @{ Name = "COUNCIL_DESKTOP_TOKEN"; Value = $PreviousDesktopToken }
             )) {
                 if ($null -eq $Entry.Value) { Remove-Item "Env:$($Entry.Name)" -ErrorAction SilentlyContinue }
                 else { Set-Item "Env:$($Entry.Name)" $Entry.Value }
@@ -134,7 +142,7 @@ try {
 
     if ($Started.Count -gt 1) { $Started | ConvertTo-Json | Set-Content -Encoding UTF8 -Path $PidFile }
     if (-not $NoBrowser) {
-        $LaunchUrl = if ($RemoteToken) { "http://localhost:3000/pair#desktop:$RemoteToken" } else { "http://localhost:3000" }
+        $LaunchUrl = if ($DesktopToken) { "http://localhost:3000/pair#desktop:$DesktopToken" } else { "http://localhost:3000" }
         Start-Process $LaunchUrl
     }
     Write-Host "Council is running at http://localhost:3000" -ForegroundColor Green

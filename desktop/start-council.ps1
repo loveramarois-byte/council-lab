@@ -12,6 +12,7 @@ $LocalRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME
 $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $LocalRoot "Council\logs" }
 $PidFile = Join-Path $LogDir "council-pids.json"
 $TokenFile = Join-Path $LogDir "mobile-access.token"
+$DesktopTokenFile = Join-Path $LogDir "desktop-access.token"
 $BackendProcess = $null
 $FrontendProcess = $null
 
@@ -80,16 +81,22 @@ try {
     }
 
     $RemoteToken = ""
-    if ((Test-Frontend) -and (Test-Path $TokenFile)) {
+    $DesktopToken = ""
+    if ((Test-Frontend) -and (Test-Path $TokenFile) -and (Test-Path $DesktopTokenFile)) {
         $RemoteToken = (Get-Content -Raw $TokenFile).Trim()
+        $DesktopToken = (Get-Content -Raw $DesktopTokenFile).Trim()
     }
 
     if (-not (Test-Frontend)) {
         if (Test-Port 3000) { throw "Port 3000 is used by another program. Close it, then start Council again." }
         $RemoteToken = New-PairingToken
+        $DesktopToken = New-PairingToken
         Set-Content -Encoding ASCII -Path $TokenFile -Value $RemoteToken
+        Set-Content -Encoding ASCII -Path $DesktopTokenFile -Value $DesktopToken
         $PreviousRemoteToken = $env:COUNCIL_REMOTE_TOKEN
+        $PreviousDesktopToken = $env:COUNCIL_DESKTOP_TOKEN
         $env:COUNCIL_REMOTE_TOKEN = $RemoteToken
+        $env:COUNCIL_DESKTOP_TOKEN = $DesktopToken
         try {
             $Node = (Get-Command "node.exe" -ErrorAction Stop).Source
             $FrontendProcess = Start-Process -FilePath $Node `
@@ -102,6 +109,8 @@ try {
         finally {
             if ($null -eq $PreviousRemoteToken) { Remove-Item Env:COUNCIL_REMOTE_TOKEN -ErrorAction SilentlyContinue }
             else { $env:COUNCIL_REMOTE_TOKEN = $PreviousRemoteToken }
+            if ($null -eq $PreviousDesktopToken) { Remove-Item Env:COUNCIL_DESKTOP_TOKEN -ErrorAction SilentlyContinue }
+            else { $env:COUNCIL_DESKTOP_TOKEN = $PreviousDesktopToken }
         }
         if (-not (Wait-Until { Test-Frontend })) {
             throw "The web interface did not start. See $LogDir\frontend.stderr.log"
@@ -112,7 +121,7 @@ try {
         $Started | ConvertTo-Json | Set-Content -Encoding UTF8 -Path $PidFile
     }
     if (-not $NoBrowser) {
-        $LaunchUrl = if ($RemoteToken) { "http://localhost:3000/pair#desktop:$RemoteToken" } else { "http://localhost:3000" }
+        $LaunchUrl = if ($DesktopToken) { "http://localhost:3000/pair#desktop:$DesktopToken" } else { "http://localhost:3000" }
         Start-Process $LaunchUrl
     }
     Write-Host "Council is running at http://localhost:3000" -ForegroundColor Green

@@ -394,6 +394,7 @@ class FinalDecision(BaseModel):
 
 class RunEvent(BaseModel):
     event_id: str
+    sequence: int = Field(default=0, ge=0)
     run_id: str
     type: str
     stage: str
