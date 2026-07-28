@@ -86,7 +86,8 @@ jobs:
           curl -fsS -c "$cookie_jar" -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$token\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
           curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/ | grep -q Council
           curl -fsS -b "$cookie_jar" http://127.0.0.1:3000/api/health | grep -q council-lab
-          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$token\",\"device\":\"desktop\"}" http://127.0.0.1:3000/mobile-access/pair)" = "403"
+          mobile_desktop_status="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$token\",\"device\":\"desktop\"}" http://127.0.0.1:3000/mobile-access/pair)"
+          [[ "$mobile_desktop_status" == "403" ]]
           desktop_cookie="$RUNNER_TEMP/launcher-desktop-cookie.txt"
           curl -fsS -c "$desktop_cookie" -H 'Origin: http://127.0.0.1:3000' -H 'Content-Type: application/json' --data "{\"token\":\"$desktop_token\",\"device\":\"desktop\"}" http://127.0.0.1:3000/mobile-access/pair | grep -q '"paired":true'
           curl -fsS -b "$desktop_cookie" http://127.0.0.1:3000/mobile-access/info | grep -q '"activeSessions":1'
