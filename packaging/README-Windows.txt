@@ -13,6 +13,8 @@ choose More info > Run anyway after verifying the GitHub release source.
 "Stop Council.cmd" stops the local services. Your data remains in
 %LOCALAPPDATA%\Council\data.
 
-To update, stop Council, extract the new release to a new folder, start it, and
-recreate the desktop shortcut if used. To uninstall, stop Council and remove the
-extracted folder; delete the data directory only to erase local history.
+Council 0.4.0 and later can update from Settings > Software Update. Downloads are
+verified against the release SHA256SUMS.txt, then this extracted directory is
+updated in place and restarted. Existing shortcuts remain valid. To uninstall,
+stop Council and remove the extracted folder; delete the data directory only to
+erase local history.

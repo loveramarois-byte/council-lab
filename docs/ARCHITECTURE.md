@@ -25,6 +25,8 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 桌面 Release 使用 PyInstaller 打包后端、Next standalone 打包网页，并附带 Node runtime。普通用户不依赖系统 Python/Node；源码开发仍使用项目虚拟环境和 npm。macOS 构建执行 ad-hoc codesign 但不做 Apple notarization，Windows 构建目前没有商业代码签名，这两个限制必须在下载说明中保持可见。
 
+打包版本只从固定的 Council Lab GitHub 仓库检查正式 Release，并按版本和系统精确选择资产。更新器限制下载大小、校验 `SHA256SUMS.txt`、限制解压体积与文件数量，并拒绝路径穿越、越界符号链接和重复路径；哈希与解压在线程中执行，避免阻塞本地 API。校验完成后才启动包内独立助手：macOS 深度验证 app 签名结构后以备份替换，Windows 先镜像备份完整安装目录再覆盖，失败时恢复旧版。安装接口要求前端专用请求头，使普通网页不能用简单跨站 POST 触发本机重启。SHA-256 证明下载内容与同一 GitHub Release 一致，但不等同于 Apple notarization 或 Windows 商业代码签名。
+
 每次模型请求前执行真实边界检查：默认最多 8 次尝试（失败请求也计算）、40,000 Provider 累计 Token、120 秒完整运行时间。上下文窗口与累计 usage 是两个指标；CC Switch Codex 路径可能附加约 4k-5k 基础 instructions，因此默认额度按五次真实调用预留。达到边界后 Run 进入 `stopped` 并保留已完成发言；用户可提高边界，通过原 checkpoint 从未完成席位继续。检查发生在请求前，无法预知本次返回的最终 usage，所以最后一次允许的请求可能使累计值超过边界。由于没有稳定的跨 Provider 定价数据，系统不伪造美元预算。
 
 Provider API Key 使用 `keyring` 交给平台凭据库。SQLite 只保存 `credential_saved` 标记与环境变量名，公开 Provider 响应只暴露 `has_api_key` 和 `credential_source`。运行时优先读取环境变量，其次读取系统凭据库。

@@ -12,6 +12,8 @@ the first launch, Control-click Council.app, choose Open, then confirm Open.
 Double-click "Stop Council.command" to stop the local services. Your data remains
 in ~/Library/Application Support/Council/data.
 
-To update, stop Council, download the new release, and replace Council.app. Data
-and API keys live outside the app. To uninstall, stop Council and remove the app;
-delete the data directory only if you also want to erase local history.
+Council 0.4.0 and later can update from Settings > Software Update. Downloads are
+verified against the release SHA256SUMS.txt before Council.app is replaced. macOS
+may ask for authorization when the app is in a protected folder. Data and API
+keys live outside the app. To uninstall, stop Council and remove the app; delete
+the data directory only if you also want to erase local history.

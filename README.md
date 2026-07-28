@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/loveramarois-byte/council-lab/releases/latest"><img src="https://img.shields.io/github/v/release/loveramarois-byte/council-lab?label=下载" alt="Latest release"></a>
+  <a href="https://github.com/loveramarois-byte/council-lab/releases/latest"><img src="https://img.shields.io/github/v/release/loveramarois-byte/council-lab?label=release" alt="Latest release"></a>
   <a href="https://github.com/loveramarois-byte/council-lab/actions/workflows/ci.yml"><img src="https://github.com/loveramarois-byte/council-lab/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
   <img src="https://img.shields.io/badge/data-local--first-2f855a" alt="Local first">
@@ -50,6 +50,7 @@ Council 是一个本地优先、允许用户参与的 AI 审议工具。你提�
 - **决策回访**：答案生成后记录最终选择、预期结果、复盘日期、实际结果，以及四席观点后来得到支持还是被结果反驳。
 - **可移交报告**：审议完成后导出 Markdown 或单文件 HTML，保留问题、逐席发言、模型记录、用量、冻结资料和结果回访。
 - **本地优先与密钥保护**：数据默认留在本机，API Key 交给系统凭据库保存。
+- **软件内安全更新**：启动时自动检查正式 Release，可在设置中下载、核对 SHA-256、替换并重启；历史和密钥不随应用目录覆盖。
 - **可重复评测**：内置 12 个决策、事实核查、风险和规划案例，记录失败率、Token、耗时、可选成本估算、引用支持率和未经支持主张；Mock 或不完整盲评不能形成效果结论。
 - **单页工作台**：桌面与移动端均固定一屏，讨论区内部滚动。
 
@@ -74,6 +75,12 @@ Release 包已经内置运行环境，不需要安装 Python 或 Node.js。当�
 Release 包已经内置运行环境，不需要管理员权限，也不需要安装 Python 或 Node.js。当前开源构建没有商业代码签名；如果 Windows 弹出 SmartScreen，请确认文件来自本仓库 Release，再点“更多信息”→“仍要运行”。`Create Desktop Shortcut.cmd` 可选创建桌面快捷方式。
 
 每个正式 Release 同时提供 `SHA256SUMS.txt`，需要校验下载时可将 ZIP 的 SHA-256 与其中对应条目比较。
+
+### 后续更新
+
+从 `v0.4.0` 开始，Council 启动时会自动检查正式 Release；发现新版本后进入 **设置 → 软件更新**，点击“下载并安装”。下载、SHA-256 校验、替换和重启均在本机完成。macOS 应用位于需要系统权限的位置时会弹出一次授权窗口，Windows 会原地更新当前完整解压目录，桌面快捷方式无需重建。
+
+`v0.3.0` 及更早版本本身没有更新器，因此需要按上面的步骤手动下载并启动 `v0.4.0` 一次。此后即可使用软件内更新。
 
 ### 第一次使用
 
@@ -164,7 +171,7 @@ docs/          架构、设计决策、评测与集成说明
 
 ## 项目状态
 
-当前版本为 `0.3.0`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
+当前版本为 `0.4.0`，适合个人研究、方案讨论和多视角决策辅助。请勿将未经人工复核的输出直接用于医疗、法律、金融或安全关键决策。
 
 欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](CONTRIBUTING.md)、[行为规范](CODE_OF_CONDUCT.md) 和 [安全政策](SECURITY.md)。
 
