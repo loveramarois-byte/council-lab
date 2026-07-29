@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
 
 const backendUrl = process.env.COUNCIL_TEST_BACKEND_URL || "http://127.0.0.1:8001";
-const mockProvider = { id: "mock", preset_id: "mock", display_name: "本地演示", description: "不联网", provider_type: "mock", protocol_mode: "auto", base_url: "", has_api_key: false, credential_source: "none", supports_api_key: false, requires_api_key: false, enabled: true, is_active: true, default_model: "council-mock", reasoning_effort: "low", available_models: ["council-mock"], model_source: "built_in", local_only: true, last_health_check: null, last_error: null, capabilities: {} };
+const mockProvider = { id: "mock", preset_id: "mock", display_name: "本地演示", description: "不联网", provider_type: "mock", protocol_mode: "auto", base_url: "", has_api_key: false, credential_source: "none", supports_api_key: false, requires_api_key: false, enabled: true, is_active: true, default_model: "council-mock", reasoning_effort: "low", timeout_seconds: 30, available_models: ["council-mock"], model_source: "built_in", local_only: true, last_health_check: null, last_error: null, capabilities: {} };
 const readyProvider = { ...mockProvider, id: "deepseek", preset_id: "deepseek", display_name: "DeepSeek", provider_type: "compatible", has_api_key: true, credential_source: "system", supports_api_key: true, requires_api_key: true, default_model: "deepseek-chat", available_models: ["deepseek-chat"], model_source: "provider", local_only: false, last_health_check: "2026-07-28T00:00:00Z" };
+const ccswitchProvider = { ...mockProvider, id: "ccswitch", preset_id: "ccswitch", display_name: "CC Switch", provider_type: "ccswitch_local", protocol_mode: "responses", default_model: "gpt-5.6-sol", reasoning_effort: "ultra", timeout_seconds: 120, available_models: ["gpt-5.6-sol"], model_source: "ccswitch_history", last_health_check: "2026-07-28T00:00:00Z", capabilities: { supports_reasoning_effort: true } };
 const unreadyProvider = { ...readyProvider, has_api_key: false, credential_source: "none", last_health_check: null };
 const assignment = (role: string, providerId = "mock") => ({ role, provider_id: providerId, model: providerId === "mock" ? "council-mock" : "deepseek-chat", protocol: "auto", reasoning_effort: "low", max_output_tokens: 1200, temperature: 0.2, timeout_seconds: 30 });
-const assignments = (providerId = "mock") => ({ seats: [assignment("analyst", providerId), assignment("challenger", providerId), assignment("builder", providerId), assignment("observer", providerId)], finalizer: assignment("finalizer", providerId) });
+const assignments = (providerId = "mock") => ({ schema_version: 2, seats: [assignment("analyst", providerId), assignment("challenger", providerId), assignment("builder", providerId), assignment("observer", providerId)], finalizer: assignment("finalizer", providerId) });
 const templates = [{ id: "open_discussion", name: "开放讨论", description: "依次讨论", prompt_hint: "写下需要四席共同审议的问题", system_guidance: "" }];
 
 async function createMockRoundtable(request: import("@playwright/test").APIRequestContext) {
@@ -461,6 +462,86 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
   }
 });
 
+test("最终综合失败后可重试且不会重复四席讨论", async ({ page }) => {
+  const participantRoles = [
+    { id: "analyst", name: "析理", role: "拆解者", brief: "拆解问题" },
+    { id: "challenger", name: "诘问", role: "挑战者", brief: "寻找反例" },
+    { id: "builder", name: "构策", role: "方案师", brief: "提出方案" },
+    { id: "observer", name: "观澜", role: "观察者", brief: "观察分歧" },
+  ];
+  const discussionTurns = participantRoles.map((participant, index) => ({
+    id: `turn-${participant.id}`,
+    speaker_type: "agent",
+    speaker_id: participant.id,
+    speaker_name: participant.name,
+    role_label: participant.role,
+    content: `第 ${index + 1} 席发言`,
+    provider_id: "ccswitch",
+    provider_name: "CC Switch",
+    model: "gpt-5.6-sol",
+    round: 1,
+    created_at: new Date().toISOString(),
+  }));
+  const baseRun = {
+    id: "finalizer-retry-fixture",
+    question: "总结席超时后能否安全重试？",
+    mode: "standard",
+    provider_id: "ccswitch",
+    model: "gpt-5.6-sol",
+    reasoning_effort: "ultra",
+    workflow_engine: "langgraph",
+    checkpoint_count: 5,
+    context_snapshot: { estimated_tokens: 800, token_budget: 12000, token_estimator_exact: false },
+    status: "awaiting_final_input" as string,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    analysis: null,
+    candidates: [], critiques: [], verifications: [], revisions: [], scores: [],
+    final_decision: null as { final_answer: string } | null,
+    usage: { model_calls: 5, tool_calls: 0, input_tokens: 1200, output_tokens: 400, estimated_cost: null, duration_ms: 30_000 },
+    error: null as string | null,
+    degraded: false,
+    protocol: "responses",
+    discussion_turns: discussionTurns,
+    participant_roles: participantRoles,
+    current_speaker_index: 4,
+    discussion_round: 1,
+    awaiting_user: true,
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 },
+    seat_assignments: participantRoles.map((participant) => ({ ...assignment(participant.id, "ccswitch"), provider_name: "CC Switch" })),
+    finalizer_assignment: { ...assignment("finalizer", "ccswitch"), provider_name: "CC Switch" },
+    template_name: "开放讨论",
+    source_snapshots: [],
+  };
+  let currentRun = baseRun;
+  let summarizeCalls = 0;
+  await page.route("**/api/runs/finalizer-retry-fixture", (route) => route.fulfill({ json: currentRun }));
+  await page.route("**/api/runs/finalizer-retry-fixture/summarize", (route) => {
+    summarizeCalls += 1;
+    currentRun = summarizeCalls === 1
+      ? { ...baseRun, error: "最终综合等待上游超过 120 秒，请重试生成最终答案。" }
+      : {
+        ...baseRun,
+        status: "completed",
+        awaiting_user: false,
+        error: null,
+        usage: { ...baseRun.usage, model_calls: 6 },
+        final_decision: { final_answer: "重试后的最终答案" },
+      };
+    return route.fulfill({ json: currentRun });
+  });
+
+  await page.goto("/runs/finalizer-retry-fixture");
+  await expect(page.locator(".discussion-turn.agent")).toHaveCount(4);
+  await page.getByRole("button", { name: "生成最终答案" }).click();
+  await expect(page.getByText(/最终综合等待上游超过 120 秒/)).toBeVisible();
+  await expect(page.locator(".discussion-turn.agent")).toHaveCount(4);
+  await page.getByRole("button", { name: "生成最终答案" }).click();
+  await expect(page.getByText("重试后的最终答案", { exact: true })).toBeVisible();
+  await expect(page.locator(".discussion-turn.agent")).toHaveCount(4);
+  expect(summarizeCalls).toBe(2);
+});
+
 test("Token 限额与上下文分开显示，并可提额续跑", async ({ page }) => {
   const stoppedRun = {
     id: "token-limit-fixture",
@@ -532,6 +613,33 @@ test("五个席位配置可保存且明确 Provider 能力", async ({ page, requ
     await request.put(`${backendUrl}/api/agent-assignments`, { data: original });
   }
 });
+
+
+test("切换 Provider 时同步模型推理档和超时时限", async ({ page }) => {
+  let saved: ReturnType<typeof assignments> | null = null;
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider, ccswitchProvider] }));
+  await page.route("**/api/agent-assignments", (route) => {
+    if (route.request().method() === "PUT") {
+      saved = route.request().postDataJSON() as ReturnType<typeof assignments>;
+      return route.fulfill({ json: saved });
+    }
+    return route.fulfill({ json: assignments() });
+  });
+
+  await page.goto("/settings/agents");
+  await page.getByLabel("析理 Provider").selectOption("ccswitch");
+  await page.getByRole("button", { name: "保存席位" }).click();
+
+  expect(saved).not.toBeNull();
+  expect(saved!.seats[0]).toMatchObject({
+    provider_id: "ccswitch",
+    model: "gpt-5.6-sol",
+    protocol: "responses",
+    reasoning_effort: "ultra",
+    timeout_seconds: 120,
+  });
+});
+
 
 test("五个真实 AI 席位就绪后才显示完成入口", async ({ page }) => {
   const readyAssignments = assignments("deepseek");

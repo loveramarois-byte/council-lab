@@ -14,6 +14,7 @@ from .models import (
     AgentAssignmentsConfig,
     AgentModelAssignment,
     CandidateAnswer,
+    CURRENT_ASSIGNMENT_SCHEMA_VERSION,
     ContextSnapshot,
     DiscussionAction,
     DiscussionTurn,
@@ -46,6 +47,7 @@ CCSWITCH_EFFORT_FALLBACKS = {
 }
 
 EFFORT_LABELS = {"ultra": "Ultra", "high": "High", "low": "Low"}
+LEGACY_ASSIGNMENT_TIMEOUT_SECONDS = 30
 
 
 class DebateWorkflowState(TypedDict):
@@ -199,8 +201,19 @@ class Orchestrator:
             provider_snapshot=snapshot,
         )
 
+    def normalize_assignment_config(self, config: AgentAssignmentsConfig) -> AgentAssignmentsConfig:
+        normalized = config.model_copy(deep=True)
+        if normalized.schema_version < CURRENT_ASSIGNMENT_SCHEMA_VERSION:
+            for assignment in [*normalized.seats, normalized.finalizer]:
+                profile = self.providers.get(assignment.provider_id)
+                if profile and assignment.timeout_seconds == LEGACY_ASSIGNMENT_TIMEOUT_SECONDS:
+                    assignment.timeout_seconds = profile.timeout_seconds
+            normalized.schema_version = CURRENT_ASSIGNMENT_SCHEMA_VERSION
+        return normalized
+
     def _resolve_config(self, request: RunCreate) -> tuple[list[ResolvedAgentAssignment], ResolvedAgentAssignment]:
         config = request.assignment_config or self.default_assignment_config(request.provider_id, request.model, request.mode)
+        config = self.normalize_assignment_config(config)
         if [item.role for item in config.seats] != [item["id"] for item in self.PARTICIPANTS]:
             raise ValueError("四席配置顺序必须为 analyst、challenger、builder、observer")
         if config.finalizer.role != "finalizer":
@@ -293,6 +306,7 @@ class Orchestrator:
             protocol=primary.protocol,
             participant_roles=self.PARTICIPANTS,
             limits=request.limits,
+            assignment_schema_version=CURRENT_ASSIGNMENT_SCHEMA_VERSION,
             seat_assignments=seats,
             finalizer_assignment=finalizer,
             auto_summarize=request.auto_summarize,
@@ -949,11 +963,22 @@ class Orchestrator:
             await self.store.save_run(run)
 
     def _ensure_run_assignments(self, run: RunRecord) -> None:
-        if len(run.seat_assignments) == len(self.PARTICIPANTS) and run.finalizer_assignment:
-            return
-        config = self.default_assignment_config(run.provider_id, run.model, run.mode)
-        run.seat_assignments = [self._resolve_assignment(item) for item in config.seats]
-        run.finalizer_assignment = self._resolve_assignment(config.finalizer)
+        assignments_were_missing = len(run.seat_assignments) != len(self.PARTICIPANTS) or not run.finalizer_assignment
+        if assignments_were_missing:
+            config = self.default_assignment_config(run.provider_id, run.model, run.mode)
+            if len(run.seat_assignments) != len(self.PARTICIPANTS):
+                run.seat_assignments = [self._resolve_assignment(item) for item in config.seats]
+            if not run.finalizer_assignment:
+                run.finalizer_assignment = self._resolve_assignment(config.finalizer)
+        if run.assignment_schema_version < CURRENT_ASSIGNMENT_SCHEMA_VERSION:
+            for assignment in [*run.seat_assignments, run.finalizer_assignment]:
+                if not assignment:
+                    continue
+                profile = self.providers.get(assignment.provider_id)
+                if profile and assignment.timeout_seconds == LEGACY_ASSIGNMENT_TIMEOUT_SECONDS:
+                    assignment.timeout_seconds = profile.timeout_seconds
+                    assignment.provider_snapshot.timeout_seconds = profile.timeout_seconds
+        run.assignment_schema_version = CURRENT_ASSIGNMENT_SCHEMA_VERSION
 
     @staticmethod
     def _ensure_credentials(run: RunRecord, finalizer_only: bool = False) -> None:

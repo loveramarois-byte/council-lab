@@ -33,8 +33,17 @@ export default function AgentsSettingsPage() {
     if (!config) return;
     const next = [...assignments];
     const provider = patch.provider_id ? providers.find((item) => item.id === patch.provider_id) : null;
-    next[index] = { ...next[index], ...patch, ...(provider ? { model: provider.default_model || provider.available_models[0] || "" } : {}) };
-    setConfig({ seats: next.slice(0, 4), finalizer: next[4] });
+    next[index] = {
+      ...next[index],
+      ...patch,
+      ...(provider ? {
+        model: provider.default_model || provider.available_models[0] || "",
+        protocol: provider.protocol_mode as AgentAssignment["protocol"],
+        reasoning_effort: provider.reasoning_effort,
+        timeout_seconds: provider.timeout_seconds,
+      } : {}),
+    };
+    setConfig({ ...config, seats: next.slice(0, 4), finalizer: next[4] });
     setMessage("");
     setSetupComplete(false);
   };

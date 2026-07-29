@@ -18,6 +18,7 @@ const mockProvider = {
   is_active: true,
   default_model: "council-mock",
   reasoning_effort: "low",
+  timeout_seconds: 30,
   available_models: ["council-mock"],
   model_source: "built_in",
   local_only: true,
