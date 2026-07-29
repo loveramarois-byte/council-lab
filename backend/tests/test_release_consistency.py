@@ -51,6 +51,13 @@ def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_bu
     for script in (mac_release, windows_release):
         assert ".next-release" in script
         assert "COUNCIL_NEXT_DIST_DIR" in script
+    assert 'web/$RELEASE_DIST_DIR/static' in mac_release
+    assert 'web\\$ReleaseDistDir\\static' in windows_release
+
+
+def test_release_workflow_requests_packaged_javascript_and_css():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert workflow.count("check_frontend_assets.mjs") >= 2
 
 
 def copy_release_files(tmp_path: Path) -> None:

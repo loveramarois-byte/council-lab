@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-07-29
+
+### Fixed
+
+- 将自包含发行包的 Next.js 静态资源复制到 standalone 配置实际使用的 `.next-release/static`，修复首页 HTML 可打开但全部 JavaScript/CSS 返回 404 的问题。
+- macOS 和 Windows 发布烟测新增真实页面静态资源请求，避免只检查 HTML 文本而漏过不可交互的空壳页面。
+
 ## [0.8.1] - 2026-07-29
 
 ### Fixed
