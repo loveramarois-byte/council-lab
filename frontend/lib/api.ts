@@ -19,6 +19,7 @@ export type Provider = {
   is_active: boolean;
   default_model: string;
   reasoning_effort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  timeout_seconds: number;
   available_models: string[];
   model_source: "none" | "recommended" | "provider" | "ccswitch_history" | "built_in" | "saved";
   local_only: boolean;
@@ -47,7 +48,7 @@ export type AgentAssignment = {
   timeout_seconds: number;
 };
 
-export type AgentAssignmentsConfig = { seats: AgentAssignment[]; finalizer: AgentAssignment };
+export type AgentAssignmentsConfig = { schema_version: number; seats: AgentAssignment[]; finalizer: AgentAssignment };
 export type ResolvedAssignment = AgentAssignment & { provider_name: string };
 export type RunLimits = { max_model_calls: number; max_tokens: number; timeout_seconds: number };
 export type Project = {

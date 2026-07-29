@@ -142,8 +142,12 @@ class Store:
         if not row:
             return None
         try:
-            return AgentAssignmentsConfig.model_validate_json(row[0])
-        except ValueError:
+            payload = json.loads(row[0])
+            if not isinstance(payload, dict):
+                return None
+            payload.setdefault("schema_version", 1)
+            return AgentAssignmentsConfig.model_validate(payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
             return None
 
     async def save_assignment_config(self, config: AgentAssignmentsConfig) -> None:

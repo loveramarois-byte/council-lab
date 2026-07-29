@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import sqlite3
 import time
 
@@ -999,6 +1000,145 @@ async def test_run_timeout_applies_to_each_active_model_call(tmp_path, monkeypat
     assert "超过 1 秒" in (current.error or "")
 
 
+async def test_stale_assignment_timeout_is_upgraded_before_finalizer(tmp_path, monkeypatch):
+    backend_timeouts: list[float] = []
+
+    class FinalizerBackend:
+        def __init__(self, timeout_seconds: float):
+            backend_timeouts.append(timeout_seconds)
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            return Generation(text="迁移旧时限后生成的最终答案" if "记录员" in system else "表态：认同。席位发言")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: FinalizerBackend(profile.timeout_seconds))
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK, timeout_seconds=120)
+    assignments = Orchestrator(store, {"mock": profile}).default_assignment_config("mock", "council-mock", "standard")
+    assignments.schema_version = 1
+    for assignment in [*assignments.seats, assignments.finalizer]:
+        assignment.timeout_seconds = 30
+
+    orchestrator = Orchestrator(store, {"mock": profile})
+    run = await orchestrator.start(
+        RunCreate(
+            question="验证旧席位时限迁移",
+            provider_id="mock",
+            assignment_config=assignments,
+            limits=RunLimits(timeout_seconds=120),
+        )
+    )
+    await orchestrator.tasks[run.id]
+    assert run.finalizer_assignment is not None
+    run.assignment_schema_version = 1
+    for assignment in [*run.seat_assignments, run.finalizer_assignment]:
+        assignment.timeout_seconds = 30
+        assignment.provider_snapshot.timeout_seconds = 30
+    await store.save_run(run)
+    await orchestrator.summarize(run.id)
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None
+    assert current.status == "completed"
+    assert current.error is None
+    assert current.final_decision is not None
+    assert current.final_decision.final_answer == "迁移旧时限后生成的最终答案"
+    assert backend_timeouts == [120, 120, 120, 120, 120]
+    assert [assignment.timeout_seconds for assignment in current.seat_assignments] == [120, 120, 120, 120]
+    assert current.finalizer_assignment is not None and current.finalizer_assignment.timeout_seconds == 120
+    assert current.assignment_schema_version == 2
+
+    profile.timeout_seconds = 180
+    orchestrator._ensure_run_assignments(current)
+    assert [assignment.timeout_seconds for assignment in current.seat_assignments] == [120, 120, 120, 120]
+    assert current.finalizer_assignment.timeout_seconds == 120
+
+
+async def test_explicit_v2_thirty_second_assignment_is_preserved(tmp_path):
+    store = Store(tmp_path / "explicit-thirty.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK, timeout_seconds=120)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    config = orchestrator.default_assignment_config("mock", "council-mock", "standard")
+    for assignment in [*config.seats, config.finalizer]:
+        assignment.timeout_seconds = 30
+
+    normalized = orchestrator.normalize_assignment_config(config)
+
+    assert normalized.schema_version == 2
+    assert [assignment.timeout_seconds for assignment in normalized.seats] == [30, 30, 30, 30]
+    assert normalized.finalizer.timeout_seconds == 30
+
+
+async def test_missing_legacy_finalizer_preserves_historical_seat_snapshots(tmp_path):
+    store = Store(tmp_path / "missing-finalizer.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK, timeout_seconds=120)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    config = orchestrator.default_assignment_config("mock", "council-mock", "standard")
+    seats, _ = orchestrator._resolve_config(RunCreate(question="构造历史席位", assignment_config=config))
+    seats[0].model = "historical-model"
+    seats[0].provider_snapshot.default_model = "historical-model"
+    run = RunRecord(
+        id="missing-finalizer",
+        question="只补总结席",
+        mode="standard",
+        provider_id="mock",
+        model="council-mock",
+        status="awaiting_final_input",
+        created_at=utc_now(),
+        updated_at=utc_now(),
+        seat_assignments=seats,
+        finalizer_assignment=None,
+    )
+
+    orchestrator._ensure_run_assignments(run)
+
+    assert run.assignment_schema_version == 2
+    assert run.seat_assignments[0].model == "historical-model"
+    assert run.seat_assignments[0].provider_snapshot.default_model == "historical-model"
+    assert run.finalizer_assignment is not None
+    assert run.finalizer_assignment.model == "council-mock"
+
+
+async def test_failed_finalizer_retry_clears_error_without_duplicate_turns(tmp_path, monkeypatch):
+    finalizer_calls = 0
+
+    class FlakyFinalizerBackend:
+        async def generate(self, prompt, system, model, temperature=0.2):
+            nonlocal finalizer_calls
+            if "记录员" in system:
+                finalizer_calls += 1
+                if finalizer_calls == 1:
+                    await asyncio.sleep(1.1)
+                return Generation(text="重试后的最终答案")
+            return Generation(text="表态：认同。席位发言")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: FlakyFinalizerBackend())
+    store = Store(tmp_path / "retry-finalizer.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK, timeout_seconds=1)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    run = await orchestrator.start(RunCreate(question="验证最终答案重试", provider_id="mock"))
+    await orchestrator.tasks[run.id]
+
+    await orchestrator.summarize(run.id)
+    await orchestrator.tasks[run.id]
+    failed = await store.get_run(run.id)
+    assert failed is not None and failed.status == "awaiting_final_input"
+    assert "超过 1 秒" in (failed.error or "")
+    assert len([turn for turn in failed.discussion_turns if turn.speaker_type == "agent"]) == 4
+
+    await orchestrator.summarize(run.id)
+    await orchestrator.tasks[run.id]
+    completed = await store.get_run(run.id)
+
+    assert completed is not None and completed.status == "completed"
+    assert completed.error is None
+    assert completed.final_decision is not None
+    assert completed.final_decision.final_answer == "重试后的最终答案"
+    assert finalizer_calls == 2
+    assert completed.usage.model_calls == 6
+    assert len([turn for turn in completed.discussion_turns if turn.speaker_type == "agent"]) == 4
+
+
 async def test_total_debate_duration_may_exceed_per_seat_timeout(tmp_path, monkeypatch):
     class SlowButHealthyBackend:
         async def generate(self, prompt, system, model, temperature=0.2):
@@ -1169,6 +1309,66 @@ async def test_assignment_settings_persist_across_store_restart(tmp_path):
 
     reopened = Store(path)
     assert reopened.load_assignment_config() == config
+
+
+async def test_legacy_assignment_settings_load_as_v1_and_migrate_once(tmp_path):
+    path = tmp_path / "legacy-assignments.sqlite3"
+    store = Store(path)
+    config = AgentAssignmentsConfig(
+        seats=[AgentModelAssignment(role=role, provider_id="mock", model=f"model-{role}") for role in ["analyst", "challenger", "builder", "observer"]],
+        finalizer=AgentModelAssignment(role="finalizer", provider_id="mock", model="model-final"),
+    )
+    legacy_payload = config.model_dump(mode="json", exclude={"schema_version"})
+    store.conn.execute(
+        "INSERT OR REPLACE INTO app_settings(key,payload) VALUES('agent_assignments',?)",
+        (json.dumps(legacy_payload),),
+    )
+    store.conn.commit()
+
+    loaded = store.load_assignment_config()
+    assert loaded is not None and loaded.schema_version == 1
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK, timeout_seconds=120)
+    normalized = Orchestrator(store, {"mock": profile}).normalize_assignment_config(loaded)
+
+    assert normalized.schema_version == 2
+    assert [assignment.timeout_seconds for assignment in normalized.seats] == [120, 120, 120, 120]
+    assert normalized.finalizer.timeout_seconds == 120
+    await store.save_assignment_config(normalized)
+    store.close()
+
+    reopened = Store(path)
+    persisted = reopened.load_assignment_config()
+    assert persisted is not None and persisted.schema_version == 2
+    profile.timeout_seconds = 180
+    stable = Orchestrator(reopened, {"mock": profile}).normalize_assignment_config(persisted)
+    assert [assignment.timeout_seconds for assignment in stable.seats] == [120, 120, 120, 120]
+    assert stable.finalizer.timeout_seconds == 120
+
+
+def test_assignment_config_rejects_unsupported_future_schema():
+    with pytest.raises(ValueError, match="schema_version"):
+        AgentAssignmentsConfig(
+            schema_version=999,
+            seats=[AgentModelAssignment(role=role, provider_id="mock", model="council-mock") for role in ["analyst", "challenger", "builder", "observer"]],
+            finalizer=AgentModelAssignment(role="finalizer", provider_id="mock", model="council-mock"),
+        )
+
+
+def test_run_create_treats_assignment_payload_without_schema_as_legacy():
+    config = AgentAssignmentsConfig(
+        seats=[AgentModelAssignment(role=role, provider_id="mock", model="council-mock") for role in ["analyst", "challenger", "builder", "observer"]],
+        finalizer=AgentModelAssignment(role="finalizer", provider_id="mock", model="council-mock"),
+    )
+
+    request = RunCreate.model_validate(
+        {
+            "question": "旧客户端请求如何迁移？",
+            "assignment_config": config.model_dump(mode="json", exclude={"schema_version"}),
+        }
+    )
+
+    assert request.assignment_config is not None
+    assert request.assignment_config.schema_version == 1
 
 
 async def test_each_seat_and_finalizer_use_independent_persisted_snapshots(tmp_path, monkeypatch):

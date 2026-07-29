@@ -19,7 +19,7 @@ from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_w
 from .errors import install_error_handling
 from .idempotency import execute_idempotent_run_action
 from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
-from .models import AgentAssignmentsConfig, AgentModelAssignment, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
+from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
 from .provider_catalog import BUILTIN_PROVIDER_IDS, builtin_providers
@@ -43,10 +43,16 @@ if active_profile is None:
 saved_assignments = store.load_assignment_config()
 saved_assignments_valid = assignment_config_is_valid(saved_assignments, providers)
 assignments = saved_assignments if saved_assignments_valid else orchestrator.default_assignment_config(active_profile.id, active_profile.default_model)
+assignments = orchestrator.normalize_assignment_config(assignments)
+assignments_need_persist = bool(
+    saved_assignments_valid and saved_assignments and saved_assignments.schema_version < assignments.schema_version
+)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if assignments_need_persist:
+        await store.save_assignment_config(assignments)
     await orchestrator.recover_incomplete_runs()
     try:
         yield
@@ -440,6 +446,7 @@ async def rerun(
     assignment_config = None
     if source.seat_assignments and source.finalizer_assignment:
         assignment_config = AgentAssignmentsConfig(
+            schema_version=source.assignment_schema_version,
             seats=[
                 AgentModelAssignment(
                     role=item.role,
@@ -767,14 +774,14 @@ async def get_assignments():
 
 
 @app.put("/api/agent-assignments")
-async def put_assignments(payload: AgentAssignmentsConfig):
+async def put_assignments(payload: AgentAssignmentsPayload):
     global assignments
     try:
         orchestrator._resolve_config(RunCreate(question="验证席位配置", assignment_config=payload))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    assignments = payload
-    await store.save_assignment_config(payload)
+    assignments = orchestrator.normalize_assignment_config(payload)
+    await store.save_assignment_config(assignments)
     return assignments
 
 

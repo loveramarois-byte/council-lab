@@ -19,6 +19,7 @@ const provider = (patch: Partial<Provider> = {}): Provider => ({
   is_active: true,
   default_model: "deepseek-chat",
   reasoning_effort: "low",
+  timeout_seconds: 30,
   available_models: ["deepseek-chat"],
   model_source: "provider",
   local_only: false,

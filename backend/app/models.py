@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, field_validator
+
+
+CURRENT_ASSIGNMENT_SCHEMA_VERSION = 2
 
 
 def utc_now() -> datetime:
@@ -119,8 +122,21 @@ class AgentModelAssignment(BaseModel):
 
 
 class AgentAssignmentsConfig(BaseModel):
+    schema_version: int = Field(default=CURRENT_ASSIGNMENT_SCHEMA_VERSION, ge=1, le=CURRENT_ASSIGNMENT_SCHEMA_VERSION)
     seats: list[AgentModelAssignment] = Field(min_length=4, max_length=4)
     finalizer: AgentModelAssignment
+
+
+def mark_missing_assignment_schema_as_legacy(value: Any) -> Any:
+    if isinstance(value, dict) and "schema_version" not in value:
+        return {**value, "schema_version": 1}
+    return value
+
+
+AgentAssignmentsPayload = Annotated[
+    AgentAssignmentsConfig,
+    BeforeValidator(mark_missing_assignment_schema_as_legacy),
+]
 
 
 class ResolvedAgentAssignment(BaseModel):
@@ -147,7 +163,7 @@ class RunCreate(BaseModel):
     mode: Literal["quick", "standard", "rigorous"] = "standard"
     provider_id: str = "mock"
     model: str | None = None
-    assignment_config: AgentAssignmentsConfig | None = None
+    assignment_config: AgentAssignmentsPayload | None = None
     use_saved_assignments: bool = False
     auto_summarize: bool = False
     project_id: str | None = None
@@ -436,6 +452,7 @@ class RunRecord(BaseModel):
     discussion_round: int = 1
     awaiting_user: bool = False
     limits: RunLimits = Field(default_factory=RunLimits)
+    assignment_schema_version: int = Field(default=1, ge=1, le=CURRENT_ASSIGNMENT_SCHEMA_VERSION)
     seat_assignments: list[ResolvedAgentAssignment] = Field(default_factory=list)
     finalizer_assignment: ResolvedAgentAssignment | None = None
     auto_summarize: bool = False
