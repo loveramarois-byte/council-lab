@@ -75,8 +75,8 @@ mkdir -p "$RESOURCES_DIR/backend" "$RESOURCES_DIR/runtime" "$RESOURCES_DIR/launc
 
 /usr/bin/ditto "$PYINSTALLER_DIST/council-backend" "$RESOURCES_DIR/backend/council-backend"
 /usr/bin/ditto "$PROJECT_DIR/frontend/$RELEASE_DIST_DIR/standalone" "$RESOURCES_DIR/web"
-mkdir -p "$RESOURCES_DIR/web/.next"
-/usr/bin/ditto "$PROJECT_DIR/frontend/$RELEASE_DIST_DIR/static" "$RESOURCES_DIR/web/.next/static"
+mkdir -p "$RESOURCES_DIR/web/$RELEASE_DIST_DIR"
+/usr/bin/ditto "$PROJECT_DIR/frontend/$RELEASE_DIST_DIR/static" "$RESOURCES_DIR/web/$RELEASE_DIST_DIR/static"
 cp "$NODE_RUNTIME_DIR/bin/node" "$RESOURCES_DIR/runtime/node"
 cp "$PROJECT_DIR/desktop/start-bundled.sh" "$RESOURCES_DIR/launcher/start-council.sh"
 cp "$PROJECT_DIR/desktop/stop-bundled.sh" "$RESOURCES_DIR/launcher/stop-council.sh"

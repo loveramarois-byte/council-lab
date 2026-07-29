@@ -54,8 +54,8 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
 New-Item -ItemType Directory -Force -Path $StageDir, (Join-Path $StageDir "backend"), (Join-Path $StageDir "runtime") | Out-Null
 Copy-Item -Recurse (Join-Path $PyInstallerDist "council-backend") (Join-Path $StageDir "backend\council-backend")
 Copy-Item -Recurse (Join-Path $ProjectDir "frontend\$ReleaseDistDir\standalone") (Join-Path $StageDir "web")
-New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "web\.next") | Out-Null
-Copy-Item -Recurse (Join-Path $ProjectDir "frontend\$ReleaseDistDir\static") (Join-Path $StageDir "web\.next\static")
+New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "web\$ReleaseDistDir") | Out-Null
+Copy-Item -Recurse (Join-Path $ProjectDir "frontend\$ReleaseDistDir\static") (Join-Path $StageDir "web\$ReleaseDistDir\static")
 $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 Copy-Item $NodeExe (Join-Path $StageDir "runtime\node.exe")
 Copy-Item (Join-Path $ProjectDir "desktop\start-bundled.ps1") (Join-Path $StageDir "runtime\start-council.ps1")

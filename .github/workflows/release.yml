@@ -86,6 +86,7 @@ jobs:
           curl -fsS http://127.0.0.1:8001/api/health >/dev/null
           test "$(curl -fsS http://127.0.0.1:8001/api/update/status | python -c 'import json,sys; print(json.load(sys.stdin)["current_version"])')" = "$(tr -d '[:space:]' < VERSION)"
           curl -fsS http://127.0.0.1:3000/mobile-access/health | grep -q council-mobile-access
+          node scripts/check_frontend_assets.mjs http://127.0.0.1:3000/pair
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
           token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/mobile-access.token")"
           desktop_token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/desktop-access.token")"
@@ -180,15 +181,21 @@ jobs:
           $env:PORT = "3000"
           $frontend = Start-Process -FilePath (Join-Path $package "runtime\node.exe") -ArgumentList "server.js" -WorkingDirectory (Join-Path $package "web") -PassThru -WindowStyle Hidden
           try {
+            $healthy = $false
             for ($attempt = 0; $attempt -lt 80; $attempt++) {
               try {
                 $health = Invoke-RestMethod http://127.0.0.1:8001/api/health -TimeoutSec 2
                 $page = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/ -TimeoutSec 2
-                if ($health.status -eq "ok" -and $page.Content -match "Council") { exit 0 }
+                if ($health.status -eq "ok" -and $page.Content -match "Council") {
+                  $healthy = $true
+                  break
+                }
               } catch {}
               Start-Sleep -Milliseconds 250
             }
-            throw "Packaged services did not become healthy"
+            if (-not $healthy) { throw "Packaged services did not become healthy" }
+            & node scripts/check_frontend_assets.mjs http://127.0.0.1:3000/pair
+            if ($LASTEXITCODE -ne 0) { throw "Packaged frontend assets failed validation" }
           } finally {
             Stop-Process -Id $backend.Id, $frontend.Id -Force -ErrorAction SilentlyContinue
             if ($null -eq $oldHost) { Remove-Item Env:HOSTNAME -ErrorAction SilentlyContinue } else { $env:HOSTNAME = $oldHost }
