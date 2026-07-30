@@ -22,6 +22,7 @@ from app.updater import (
     parse_checksum,
     parse_release,
     public_update_info,
+    runtime_identity,
     safe_extract_zip,
 )
 
@@ -52,6 +53,15 @@ def test_install_requires_council_specific_request_header():
     assert install_request_is_allowed("app")
     assert not install_request_is_allowed(None)
     assert not install_request_is_allowed("external-page")
+
+
+def test_runtime_identity_defaults_safely_and_preserves_packaged_identity(monkeypatch):
+    monkeypatch.delenv("COUNCIL_RUNTIME_ID", raising=False)
+    assert runtime_identity() == "development"
+    monkeypatch.setenv("COUNCIL_RUNTIME_ID", "   ")
+    assert runtime_identity() == "development"
+    monkeypatch.setenv("COUNCIL_RUNTIME_ID", "macos:install-123")
+    assert runtime_identity() == "macos:install-123"
 
 
 def test_release_selects_exact_platform_asset_and_rejects_untrusted_url():

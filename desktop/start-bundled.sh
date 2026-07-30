@@ -21,24 +21,92 @@ mkdir -p "$LOG_DIR"
 export COUNCIL_PACKAGED=1
 export COUNCIL_INSTALL_ROOT="$APP_ROOT"
 export COUNCIL_VERSION="$(/usr/bin/tr -d '[:space:]' < "$RESOURCES_DIR/VERSION")"
+export COUNCIL_RUNTIME_ID="macos:$(/usr/bin/printf '%s\0%s' "$APP_ROOT" "$COUNCIL_VERSION" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print substr($1, 1, 24)}')"
 
 show_error() {
   /usr/bin/osascript -e "display dialog \"$1\" buttons {\"好\"} with title \"Council 无法启动\"" >/dev/null 2>&1 || true
 }
 
-is_up() {
-  /usr/bin/curl -fsS --max-time 2 "$1" >/dev/null 2>&1
+service_is_current() {
+  local url="$1"
+  local service="$2"
+  local response
+  response="$(/usr/bin/curl -fsS --max-time 2 "$url" 2>/dev/null || true)"
+  [[ "$response" == *"\"service\":\"$service\""* && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* ]]
+}
+
+backend_is_current() {
+  service_is_current "http://127.0.0.1:8001/api/health" "council-lab"
+}
+
+frontend_is_current() {
+  service_is_current "http://127.0.0.1:3000/mobile-access/health" "council-mobile-access"
 }
 
 port_is_used() {
   /usr/sbin/lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
 }
 
-wait_for() {
-  local url="$1"
+process_is_council() {
+  local pid="$1"
+  local service="$2"
+  local process_cwd
+  local process_command
+  local process_executable
+  process_cwd="$(/usr/sbin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -1)"
+  process_command="$(/bin/ps -p "$pid" -o command= 2>/dev/null || true)"
+  process_executable="$(/usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null | /usr/bin/sed -n 's/^n//p' | /usr/bin/head -1)"
+  if [[ "$service" == "council-lab" ]]; then
+    [[ "$process_executable" == */Contents/Resources/backend/council-backend/council-backend ]] && return 0
+    [[ "$process_cwd" == */backend && -f "$process_cwd/app/main.py" && "$process_command" == *"uvicorn app.main:app"* ]] && return 0
+  elif [[ "$service" == "council-mobile-access" ]]; then
+    [[ "$process_executable" == */Contents/Resources/runtime/node && "$process_cwd" == */Contents/Resources/web && -f "$process_cwd/server.js" ]] && return 0
+    [[ "$process_cwd" == */frontend && -f "$process_cwd/package.json" && -f "$process_cwd/next.config.ts" && -f "$process_cwd/app/layout.tsx" ]] \
+      && /usr/bin/grep -Eq '"name"[[:space:]]*:[[:space:]]*"council-lab-web"' "$process_cwd/package.json" \
+      && return 0
+  fi
+  return 1
+}
+
+stop_existing_council_service() {
+  local port="$1"
+  local url="$2"
+  local service="$3"
+  local response
+  local listeners_before
+  local listeners_after
+  local pid
+  local attempt
+  listeners_before=" $(/usr/sbin/lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | /usr/bin/tr '\n' ' ') "
+  response="$(/usr/bin/curl -fsS --max-time 2 "$url" 2>/dev/null || true)"
+  [[ "$response" == *"\"service\":\"$service\""* ]] || return 1
+  listeners_after=" $(/usr/sbin/lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null | /usr/bin/tr '\n' ' ') "
+  for pid in $=listeners_after; do
+    [[ "$pid" == <-> ]] || continue
+    (( pid > 1 )) || continue
+    [[ "$listeners_before" == *" $pid "* ]] || continue
+    process_is_council "$pid" "$service" || continue
+    /bin/kill "$pid" 2>/dev/null || true
+  done
+  for attempt in {1..30}; do
+    port_is_used "$port" || return 0
+    /bin/sleep 0.1
+  done
+  for pid in $(/usr/sbin/lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null); do
+    [[ "$pid" == <-> ]] || continue
+    (( pid > 1 )) || continue
+    [[ "$listeners_before" == *" $pid "* ]] || continue
+    process_is_council "$pid" "$service" || continue
+    /bin/kill -KILL "$pid" 2>/dev/null || true
+  done
+  ! port_is_used "$port"
+}
+
+wait_for_service() {
+  local checker="$1"
   local attempts=0
   while (( attempts < 60 )); do
-    is_up "$url" && return 0
+    "$checker" && return 0
     /bin/sleep 0.25
     attempts=$((attempts + 1))
   done
@@ -59,15 +127,17 @@ if [[ ! -x "$BACKEND_EXE" || ! -x "$NODE_EXE" || ! -f "$WEB_DIR/server.js" ]]; t
   exit 1
 fi
 
-if ! is_up "http://127.0.0.1:8001/api/health"; then
+if ! backend_is_current; then
   if port_is_used 8001; then
-    show_error "端口 8001 已被其他程序占用，请先关闭该程序。"
-    exit 1
+    if ! stop_existing_council_service 8001 "http://127.0.0.1:8001/api/health" "council-lab"; then
+      show_error "端口 8001 已被其他程序占用，请先关闭该程序。"
+      exit 1
+    fi
   fi
   /usr/bin/nohup "$BACKEND_EXE" >>"$BACKEND_LOG" 2>&1 &
   backend_pid=$!
   record_pid backend "$backend_pid"
-  if ! wait_for "http://127.0.0.1:8001/api/health"; then
+  if ! wait_for_service backend_is_current; then
     show_error "后端启动失败，请查看 ~/Library/Logs/Council/backend.log。"
     exit 1
   fi
@@ -75,15 +145,17 @@ fi
 
 REMOTE_TOKEN=""
 DESKTOP_TOKEN=""
-if is_up "http://127.0.0.1:3000/mobile-access/health" && [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
+if frontend_is_current && [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
   REMOTE_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$TOKEN_FILE")"
   DESKTOP_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$DESKTOP_TOKEN_FILE")"
 fi
 
-if ! is_up "http://127.0.0.1:3000/mobile-access/health"; then
+if ! frontend_is_current; then
   if port_is_used 3000; then
-    show_error "端口 3000 已被其他程序占用，请先关闭该程序。"
-    exit 1
+    if ! stop_existing_council_service 3000 "http://127.0.0.1:3000/mobile-access/health" "council-mobile-access"; then
+      show_error "端口 3000 已被其他程序占用，请先关闭该程序。"
+      exit 1
+    fi
   fi
   REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
   DESKTOP_TOKEN="$(/usr/bin/openssl rand -hex 24)"
@@ -96,7 +168,7 @@ if ! is_up "http://127.0.0.1:3000/mobile-access/health"; then
   frontend_pid=$!
   popd >/dev/null
   record_pid frontend "$frontend_pid"
-  if ! wait_for "http://127.0.0.1:3000/mobile-access/health"; then
+  if ! wait_for_service frontend_is_current; then
     show_error "网页启动失败，请查看 ~/Library/Logs/Council/frontend.log。"
     exit 1
   fi
