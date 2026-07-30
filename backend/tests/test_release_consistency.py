@@ -82,9 +82,9 @@ def test_release_notes_include_version_changes_and_installation(tmp_path):
     assert result.returncode == 0, result.stderr
     notes = output.read_text(encoding="utf-8")
     assert f"Council v{(ROOT / 'VERSION').read_text(encoding='utf-8').strip()} 更新内容" in notes
-    assert "高风险决策支持模式" in notes
-    assert "不执行任何外部副作用" in notes
-    assert "审批只能消费一次" in notes
+    assert "统一请求边界" in notes
+    assert "服务端内部令牌" in notes
+    assert "恶意网页" in notes
     assert "## 安装与升级" in notes
 
 
@@ -101,7 +101,9 @@ def test_packaged_launchers_only_reuse_services_from_the_same_installation():
     assert "listeners_before" in mac_launcher
     assert "process_is_council" in mac_launcher
     assert "\"$APP_ROOT\" \"$COUNCIL_VERSION\"" in mac_launcher
+    assert "internal_api_id" in mac_launcher
     assert "$Health.runtime_id -eq $env:COUNCIL_RUNTIME_ID" in windows_launcher
+    assert "$Health.internal_api_id -eq $InternalApiId" in windows_launcher
     assert "Stop-ExistingCouncilService" in windows_launcher
     assert "$ProcessIdsBefore -contains $ProcessId" in windows_launcher
     assert "Test-CouncilProcessOwnership" in windows_launcher
@@ -114,14 +116,20 @@ def _free_port() -> int:
         return int(server.getsockname()[1])
 
 
-def _health_server(port: int, service: str, runtime_id: str, cwd: Path | None = None) -> subprocess.Popen[str]:
+def _health_server(
+    port: int,
+    service: str,
+    runtime_id: str,
+    cwd: Path | None = None,
+    internal_api_id: str = "current-token-id",
+) -> subprocess.Popen[str]:
     source = """
 import http.server
 import json
 import sys
 
 port = int(sys.argv[1])
-payload = json.dumps({"status": "ok", "service": sys.argv[2], "runtime_id": sys.argv[3]}, separators=(",", ":")).encode()
+payload = json.dumps({"status": "ok", "service": sys.argv[2], "runtime_id": sys.argv[3], "internal_api_id": sys.argv[4]}, separators=(",", ":")).encode()
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -135,7 +143,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 """
-    process = subprocess.Popen([sys.executable, "-c", source, str(port), service, runtime_id], text=True, cwd=cwd)
+    process = subprocess.Popen(
+        [sys.executable, "-c", source, str(port), service, runtime_id, internal_api_id],
+        text=True,
+        cwd=cwd,
+    )
     for _ in range(50):
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.1).close()
@@ -153,7 +165,7 @@ def test_macos_launcher_reuses_only_current_install_and_replaces_stale_council(t
     helpers = launcher[launcher.index("service_is_current()") : launcher.index("if [[ ! -x")]
     helper_script = tmp_path / "launcher-helpers.zsh"
     helper_script.write_text(
-        f"set -u\nCOUNCIL_RUNTIME_ID=current-install\n{helpers}",
+        f"set -u\nCOUNCIL_RUNTIME_ID=current-install\nINTERNAL_API_ID=current-token-id\n{helpers}",
         encoding="utf-8",
     )
 
@@ -191,7 +203,7 @@ def test_macos_launcher_never_stops_a_foreign_service_spoofing_council_health(tm
     helpers = launcher[launcher.index("service_is_current()") : launcher.index("if [[ ! -x")]
     helper_script = tmp_path / "launcher-helpers.zsh"
     helper_script.write_text(
-        f"set -u\nCOUNCIL_RUNTIME_ID=current-install\n{helpers}",
+        f"set -u\nCOUNCIL_RUNTIME_ID=current-install\nINTERNAL_API_ID=current-token-id\n{helpers}",
         encoding="utf-8",
     )
     port = _free_port()

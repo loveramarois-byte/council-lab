@@ -27,6 +27,7 @@ from .providers import build_backend, discover_ccswitch_models, is_loopback_url,
 from .risk.schemas import ApprovalDecisionRequest, ApprovalRecord, ApprovalRequest, FactsUpdateRequest, HighRiskCreate, HighRiskRun, PrepareReviewRequest, PublicAuditEvent, RevokeApprovalRequest, RiskOverrideRequest, TransitionRequest
 from .risk.service import HighRiskService
 from .reports import run_html, run_markdown
+from .request_boundary import load_internal_api_token, token_identifier
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
 from .templates import list_templates
@@ -67,7 +68,8 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Council Lab", version=current_version(), lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
-install_error_handling(app)
+internal_api_token = load_internal_api_token()
+install_error_handling(app, internal_api_token)
 
 
 def provider_error_message(exc: Exception) -> str:
@@ -124,7 +126,12 @@ def require_reviewer_secret(value: str | None) -> str:
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "council-lab", "runtime_id": runtime_identity()}
+    return {
+        "status": "ok",
+        "service": "council-lab",
+        "runtime_id": runtime_identity(),
+        "internal_api_id": token_identifier(internal_api_token),
+    }
 
 
 @app.get("/api/update/check")

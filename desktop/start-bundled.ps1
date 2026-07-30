@@ -14,6 +14,7 @@ $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $L
 $PidFile = Join-Path $LogDir "council-bundled-pids.json"
 $TokenFile = Join-Path $LogDir "mobile-access.token"
 $DesktopTokenFile = Join-Path $LogDir "desktop-access.token"
+$InternalTokenFile = Join-Path $LogDir "backend-access.token"
 $BackendProcess = $null
 $FrontendProcess = $null
 
@@ -31,7 +32,7 @@ $env:COUNCIL_RUNTIME_ID = "windows:$($RootHash.Substring(0, 24))"
 function Test-Backend {
     try {
         $Health = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 2
-        return $Health.status -eq "ok" -and $Health.service -eq "council-lab" -and $Health.runtime_id -eq $env:COUNCIL_RUNTIME_ID
+        return $Health.status -eq "ok" -and $Health.service -eq "council-lab" -and $Health.runtime_id -eq $env:COUNCIL_RUNTIME_ID -and $Health.internal_api_id -eq $InternalApiId
     }
     catch { return $false }
 }
@@ -39,7 +40,7 @@ function Test-Backend {
 function Test-Frontend {
     try {
         $Response = Invoke-RestMethod -Uri "http://127.0.0.1:3000/mobile-access/health" -TimeoutSec 2
-        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.runtime_id -eq $env:COUNCIL_RUNTIME_ID
+        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.runtime_id -eq $env:COUNCIL_RUNTIME_ID -and $Response.internal_api_id -eq $InternalApiId
     }
     catch { return $false }
 }
@@ -50,6 +51,15 @@ function New-PairingToken {
     try { $Generator.GetBytes($Bytes) }
     finally { $Generator.Dispose() }
     return [BitConverter]::ToString($Bytes).Replace("-", "").ToLowerInvariant()
+}
+
+function Get-TokenIdentifier([string]$Token) {
+    $TokenHasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $Digest = $TokenHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Token))
+        return ([BitConverter]::ToString($Digest).Replace("-", "").ToLowerInvariant()).Substring(0, 16)
+    }
+    finally { $TokenHasher.Dispose() }
 }
 
 function Test-Port([int]$Port) {
@@ -120,6 +130,12 @@ try {
     }
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $Started = [ordered]@{ package_root = $PackageRoot }
+    $InternalToken = if (Test-Path $InternalTokenFile) { (Get-Content -Raw $InternalTokenFile).Trim() } else { "" }
+    if ($InternalToken.Length -lt 32) {
+        $InternalToken = New-PairingToken
+        Set-Content -Encoding ASCII -Path $InternalTokenFile -Value $InternalToken
+    }
+    $InternalApiId = Get-TokenIdentifier $InternalToken
     if (Test-Path $PidFile) {
         try {
             $Existing = Get-Content -Raw -Path $PidFile | ConvertFrom-Json
@@ -139,9 +155,17 @@ try {
         if ((Test-Port 8001) -and -not (Stop-ExistingCouncilService 8001 "http://127.0.0.1:8001/api/health" "council-lab")) {
             throw "Port 8001 is used by another program. Close it, then start Council again."
         }
-        $BackendProcess = Start-Process -FilePath $BackendExe -WorkingDirectory $PackageRoot -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput (Join-Path $LogDir "backend.stdout.log") `
-            -RedirectStandardError (Join-Path $LogDir "backend.stderr.log")
+        $PreviousInternalToken = [Environment]::GetEnvironmentVariable("COUNCIL_INTERNAL_API_TOKEN", "Process")
+        $env:COUNCIL_INTERNAL_API_TOKEN = $InternalToken
+        try {
+            $BackendProcess = Start-Process -FilePath $BackendExe -WorkingDirectory $PackageRoot -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $LogDir "backend.stdout.log") `
+                -RedirectStandardError (Join-Path $LogDir "backend.stderr.log")
+        }
+        finally {
+            if ($null -eq $PreviousInternalToken) { Remove-Item Env:COUNCIL_INTERNAL_API_TOKEN -ErrorAction SilentlyContinue }
+            else { $env:COUNCIL_INTERNAL_API_TOKEN = $PreviousInternalToken }
+        }
         $Started.backend = $BackendProcess.Id
         if (-not (Wait-Until { Test-Backend })) { throw "The backend did not start. See $LogDir\backend.stderr.log" }
     }
@@ -162,6 +186,7 @@ try {
         $PreviousNodeEnv = $env:NODE_ENV
         $PreviousRemoteToken = $env:COUNCIL_REMOTE_TOKEN
         $PreviousDesktopToken = $env:COUNCIL_DESKTOP_TOKEN
+        $PreviousInternalToken = [Environment]::GetEnvironmentVariable("COUNCIL_INTERNAL_API_TOKEN", "Process")
         $RemoteToken = New-PairingToken
         $DesktopToken = New-PairingToken
         Set-Content -Encoding ASCII -Path $TokenFile -Value $RemoteToken
@@ -172,6 +197,7 @@ try {
             $env:NODE_ENV = "production"
             $env:COUNCIL_REMOTE_TOKEN = $RemoteToken
             $env:COUNCIL_DESKTOP_TOKEN = $DesktopToken
+            $env:COUNCIL_INTERNAL_API_TOKEN = $InternalToken
             $FrontendProcess = Start-Process -FilePath $NodeExe -ArgumentList @("`"$ServerScript`"") `
                 -WorkingDirectory $WebDir -WindowStyle Hidden -PassThru `
                 -RedirectStandardOutput (Join-Path $LogDir "frontend.stdout.log") `
@@ -184,7 +210,8 @@ try {
                 @{ Name = "PORT"; Value = $PreviousPort },
                 @{ Name = "NODE_ENV"; Value = $PreviousNodeEnv },
                 @{ Name = "COUNCIL_REMOTE_TOKEN"; Value = $PreviousRemoteToken },
-                @{ Name = "COUNCIL_DESKTOP_TOKEN"; Value = $PreviousDesktopToken }
+                @{ Name = "COUNCIL_DESKTOP_TOKEN"; Value = $PreviousDesktopToken },
+                @{ Name = "COUNCIL_INTERNAL_API_TOKEN"; Value = $PreviousInternalToken }
             )) {
                 if ($null -eq $Entry.Value) { Remove-Item "Env:$($Entry.Name)" -ErrorAction SilentlyContinue }
                 else { Set-Item "Env:$($Entry.Name)" $Entry.Value }

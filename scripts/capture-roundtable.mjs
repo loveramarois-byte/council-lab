@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = process.argv[2] || path.join(repoRoot, "docs/images/roundtable-v2.png");
 const baseURL = process.env.COUNCIL_SHOWCASE_URL || "http://127.0.0.1:3000";
-const apiURL = process.env.COUNCIL_SHOWCASE_API_URL || "http://127.0.0.1:8001";
 const now = "2026-07-28T10:30:00Z";
 
 const participants = [
@@ -97,8 +96,8 @@ const provider = {
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
-  await page.route(`${apiURL}/api/providers`, (route) => route.fulfill({ json: [provider] }));
-  await page.route(`${apiURL}/api/runs/showcase`, (route) => route.fulfill({ json: run }));
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [provider] }));
+  await page.route("**/api/runs/showcase", (route) => route.fulfill({ json: run }));
   await page.goto(`${baseURL}/runs/showcase`, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: question }).waitFor();
   await page.addStyleTag({ content: `

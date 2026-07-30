@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PAIRING_COOKIE, validatePairingSession } from "./lib/mobileAccess";
+import { internalApiRequestHeaders } from "./lib/internalApiBoundary";
 import { validateRequestHost, validateSameOrigin } from "./lib/mobileRequestGuard";
 
 export function proxy(request: NextRequest) {
+  const forwardedHeaders = internalApiRequestHeaders(
+    request.nextUrl.pathname,
+    request.headers,
+    process.env.COUNCIL_INTERNAL_API_TOKEN,
+  );
+  if (!forwardedHeaders) {
+    return NextResponse.json(
+      { error: "Council 内部服务认证尚未就绪。" },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+  const forward = () => NextResponse.next({ request: { headers: forwardedHeaders } });
   const expectedToken = process.env.COUNCIL_REMOTE_TOKEN;
-  if (!expectedToken) return NextResponse.next();
+  if (!expectedToken) return forward();
 
   const hostGuard = validateRequestHost(request);
   if (!hostGuard.allowed) {
@@ -18,7 +31,7 @@ export function proxy(request: NextRequest) {
         return NextResponse.json({ error: originGuard.message }, { status: originGuard.status, headers: { "Cache-Control": "no-store" } });
       }
     }
-    const response = NextResponse.next();
+    const response = forward();
     response.headers.set("Referrer-Policy", "no-referrer");
     response.headers.set("X-Content-Type-Options", "nosniff");
     return response;

@@ -1,3 +1,5 @@
+import { internalApiTokenIdentifier } from "../../../lib/internalApiBoundary";
+
 export const dynamic = "force-dynamic";
 
 export async function GET() {
@@ -6,6 +8,7 @@ export async function GET() {
       status: "ok",
       service: "council-mobile-access",
       runtime_id: process.env.COUNCIL_RUNTIME_ID || "development",
+      internal_api_id: await internalApiTokenIdentifier(process.env.COUNCIL_INTERNAL_API_TOKEN),
     },
     { headers: { "Cache-Control": "no-store" } },
   );
