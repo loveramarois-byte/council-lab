@@ -261,3 +261,13 @@ def test_all_desktop_launchers_share_and_remove_the_internal_token():
         content = script.read_text(encoding="utf-8")
         assert "backend-access.token" in content
         assert "Remove-Item" in content or "rm -f" in content
+
+
+@pytest.mark.security_boundary
+def test_release_smoke_uses_internal_token_for_protected_backend_api():
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert workflow.count("backend-access.token") >= 2
+    assert 'X-Council-Internal-Token: $internal_token' in workflow
+    assert '"X-Council-Internal-Token" = $internalToken' in workflow
