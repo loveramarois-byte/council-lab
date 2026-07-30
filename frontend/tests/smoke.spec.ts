@@ -565,6 +565,7 @@ test("沉浸模式同步原生全屏、失败回退和手机端退出", async ({
   await expect(page.getByRole("button", { name: "进入沉浸模式" })).toBeFocused();
 
   await page.getByRole("button", { name: "进入沉浸模式" }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
   await page.evaluate(() => document.exitFullscreen());
   await expect(page.locator(".council-page")).not.toHaveClass(/immersive/);
   await expect(page.getByRole("button", { name: "进入沉浸模式" })).toBeFocused();
