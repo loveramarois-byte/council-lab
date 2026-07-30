@@ -503,6 +503,126 @@ body:has(.council-page) .sidebar-footnote { border-color: var(--border); }
   .decision-review-backdrop { padding: 6px; }.decision-review-dialog { max-height: calc(100vh - 12px); }.decision-review-dialog > header { padding: 12px; }.decision-review-fields { padding: 10px 12px 8px; gap: 7px; }.seat-review-list { padding: 0 12px 9px; }.seat-review-list > div { grid-template-columns: 40px 105px minmax(0, 1fr); gap: 4px; }.decision-review-dialog > footer { padding: 6px 12px; }
 }
 
+/* Immersive reading keeps the discussion usable even when browser fullscreen is unavailable. */
+body:has(.council-page.immersive) .sidebar,
+body:has(.council-page.immersive) .mobile-menu { display: none; }
+body:has(.council-page.immersive) .main-content { width: 100%; }
+.council-page.immersive {
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  background: #f7f5f1;
+}
+.council-page.immersive:fullscreen { width: 100vw; height: 100dvh; }
+.council-page.immersive .council-topbar,
+.council-page.immersive .council-callboard,
+.council-page.immersive .source-strip,
+.council-page.immersive .completed-actions { display: none; }
+.immersive-exit {
+  position: fixed;
+  z-index: 30;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  width: 40px;
+  height: 40px;
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 5px 18px rgba(58, 48, 40, .08);
+  backdrop-filter: blur(10px);
+}
+.council-page.immersive .council-stage {
+  width: min(920px, 100%);
+  padding: 24px 28px 28px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+}
+.council-page.immersive .council-question {
+  display: block;
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 0 52px 0 0;
+}
+.council-page.immersive .council-question > span,
+.council-page.immersive .council-question p { display: none; }
+.council-page.immersive .council-question h1 {
+  overflow: visible;
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.42;
+  text-overflow: clip;
+  white-space: normal;
+}
+.council-page.immersive .council-dialogue,
+.council-page.immersive .council-dialogue.with-sources {
+  grid-template-rows: 42px minmax(0, 1fr) auto;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.council-page.immersive .dialogue-header {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  padding: 0;
+  border-color: var(--border);
+  background: transparent;
+}
+.council-page.immersive .dialogue-scroll {
+  padding: 22px max(0px, calc((100% - 760px) / 2)) 40px;
+  scroll-padding-bottom: 40px;
+}
+.council-page.immersive .opening-question,
+.council-page.immersive .discussion-turn,
+.council-page.immersive .discussion-thinking,
+.council-page.immersive .roundtable-summary {
+  width: 100%;
+  max-width: 760px;
+}
+.council-page.immersive .discussion-turn { padding-top: 15px; padding-bottom: 18px; }
+.council-page.immersive .rich-text { font-size: 16px; line-height: 1.72; }
+.council-page.immersive .opening-question span { color: #4f596c; }
+.council-page.immersive .roundtable-summary {
+  padding: 22px 24px 26px;
+  background: #fdf8f4;
+  box-shadow: 0 12px 34px rgba(58, 48, 40, .055);
+}
+.council-page.immersive .roundtable-summary header { color: #a64d34; }
+.council-page.immersive .roundtable-summary > .rich-text { font-size: 16px; line-height: 1.76; }
+.council-page.immersive .participation-dock,
+.council-page.immersive .failed-actions {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(58, 48, 40, .06);
+}
+
+@media (max-width: 680px) {
+  .council-page.immersive { min-height: 0; }
+  .immersive-exit {
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    width: 44px;
+    height: 44px;
+  }
+  .council-page.immersive .council-stage {
+    padding: calc(max(8px, env(safe-area-inset-top)) + 7px) 10px max(10px, env(safe-area-inset-bottom));
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+  }
+  .council-page.immersive .council-question { min-height: 44px; padding: 3px 50px 5px 2px; }
+  .council-page.immersive .council-question h1 { font-size: 18px; line-height: 1.35; }
+  .council-page.immersive .council-dialogue,
+  .council-page.immersive .council-dialogue.with-sources { grid-template-rows: 38px minmax(0, 1fr) auto; }
+  .council-page.immersive .dialogue-header { height: 38px; padding: 0 2px; }
+  .council-page.immersive .dialogue-scroll { padding: 12px 2px 28px; scroll-padding-bottom: 28px; }
+  .council-page.immersive .discussion-turn { padding: 10px 9px 13px; }
+  .council-page.immersive .rich-text { font-size: 16px; line-height: 1.66; }
+  .council-page.immersive .roundtable-summary { padding: 16px 13px 19px; }
+  .council-page.immersive .roundtable-summary > .rich-text { font-size: 16px; line-height: 1.7; }
+  .council-page.immersive .participation-dock,
+  .council-page.immersive .failed-actions { width: 100%; }
+}
+
 /* Verified in-app updates */
 .update-badge { margin-left: auto; border-radius: 4px; background: var(--accent-soft); padding: 2px 6px; color: var(--accent); font-size: 8px; font-weight: 700; }
 .update-page { min-height: 100dvh; }

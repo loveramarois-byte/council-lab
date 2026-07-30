@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, MessageCircle, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, DecisionReviewInput, Participant, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
@@ -12,8 +12,15 @@ const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_resu
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const pageRef = useRef<HTMLDivElement>(null);
+  const immersiveTriggerRef = useRef<HTMLButtonElement>(null);
+  const immersiveExitRef = useRef<HTMLButtonElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const fullscreenOwnedRef = useRef(false);
+  const immersiveDesiredRef = useRef(false);
+  const immersiveRequestRef = useRef(0);
   const [run, setRun] = useState<Run | null>(null);
+  const [immersive, setImmersive] = useState(false);
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -51,6 +58,42 @@ export default function RunDetailPage() {
     return () => window.clearInterval(timer);
   }, [run?.id, run?.status, run?.awaiting_user, run?.updated_at]);
   useEffect(() => { setWaitingNoticeDismissed(false); }, [run?.updated_at]);
+  useEffect(() => {
+    if (!immersive) return;
+    const frame = window.requestAnimationFrame(() => immersiveExitRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [immersive]);
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const ownsFullscreen = document.fullscreenElement === pageRef.current;
+      if (ownsFullscreen) {
+        fullscreenOwnedRef.current = true;
+        if (immersiveDesiredRef.current) setImmersive(true);
+        else void document.exitFullscreen().catch(() => undefined);
+      } else if (fullscreenOwnedRef.current) {
+        fullscreenOwnedRef.current = false;
+        immersiveDesiredRef.current = false;
+        immersiveRequestRef.current += 1;
+        setImmersive(false);
+        window.requestAnimationFrame(() => immersiveTriggerRef.current?.focus());
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !immersive) return;
+      immersiveDesiredRef.current = false;
+      immersiveRequestRef.current += 1;
+      fullscreenOwnedRef.current = false;
+      setImmersive(false);
+      window.requestAnimationFrame(() => immersiveTriggerRef.current?.focus());
+      if (document.fullscreenElement === pageRef.current) void document.exitFullscreen().catch(() => undefined);
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [immersive]);
 
   const nextParticipant = useMemo(() => run?.participant_roles[run.current_speaker_index], [run]);
   const selectedParticipant = run?.participant_roles.find((item) => item.id === target) || null;
@@ -154,14 +197,46 @@ export default function RunDetailPage() {
     } finally { setBusy(false); }
   };
 
+  const enterImmersive = async () => {
+    immersiveDesiredRef.current = true;
+    const requestId = immersiveRequestRef.current + 1;
+    immersiveRequestRef.current = requestId;
+    setImmersive(true);
+    const supportsDesktopFullscreen = window.matchMedia("(min-width: 681px)").matches && document.fullscreenEnabled && pageRef.current?.requestFullscreen;
+    if (!supportsDesktopFullscreen) return;
+    try {
+      await pageRef.current!.requestFullscreen();
+      if (!immersiveDesiredRef.current || immersiveRequestRef.current !== requestId) {
+        if (document.fullscreenElement === pageRef.current) await document.exitFullscreen().catch(() => undefined);
+        return;
+      }
+      fullscreenOwnedRef.current = true;
+    } catch {
+      fullscreenOwnedRef.current = false;
+    }
+  };
+
+  const exitImmersive = async () => {
+    immersiveDesiredRef.current = false;
+    immersiveRequestRef.current += 1;
+    setImmersive(false);
+    fullscreenOwnedRef.current = false;
+    window.requestAnimationFrame(() => immersiveTriggerRef.current?.focus());
+    if (document.fullscreenElement === pageRef.current) {
+      try { await document.exitFullscreen(); } catch { /* CSS immersion has already exited. */ }
+    }
+  };
+
   if (!run) return <div className="loading-state"><LoaderCircle className="spin" size={22} />正在进入圆桌…</div>;
 
-  return <div className="council-page">
+  return <div ref={pageRef} className={`council-page ${immersive ? "immersive" : ""}`}>
     <header className="council-topbar">
       <Link href="/" className="back-link"><ArrowLeft size={15} />退出圆桌</Link>
       <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {run.mode === "quick" ? "引导" : run.mode === "rigorous" ? "深挖" : "圆桌"}模式</div>
-      <div className="council-top-actions"><a className="icon-button" href={runExportUrl(run.id, "markdown")} download title="下载 Markdown 报告" aria-label="下载 Markdown 报告"><Download size={15} /></a><a className="icon-button" href={runExportUrl(run.id, "html")} download title="下载 HTML 报告" aria-label="下载 HTML 报告"><FileCheck2 size={15} /></a><button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => api.cancelRun(run.id).then(setRun)} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button></div>
+      <div className="council-top-actions"><button ref={immersiveTriggerRef} className="icon-button immersive-enter" type="button" aria-label="进入沉浸模式" title="进入沉浸模式" aria-pressed={immersive} onClick={enterImmersive}><Maximize2 size={16} /></button><a className="icon-button" href={runExportUrl(run.id, "markdown")} download title="下载 Markdown 报告" aria-label="下载 Markdown 报告"><Download size={15} /></a><a className="icon-button" href={runExportUrl(run.id, "html")} download title="下载 HTML 报告" aria-label="下载 HTML 报告"><FileCheck2 size={15} /></a><button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => api.cancelRun(run.id).then(setRun)} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button></div>
     </header>
+
+    {immersive && <button ref={immersiveExitRef} className="immersive-exit icon-button" type="button" aria-label="退出沉浸模式" title="退出沉浸模式" aria-pressed={true} onClick={exitImmersive}><Minimize2 size={17} /></button>}
 
     <main className="council-stage">
       <section className="council-question">
