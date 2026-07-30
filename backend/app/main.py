@@ -28,7 +28,7 @@ from .reports import run_html, run_markdown
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
 from .templates import list_templates
-from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, update_manager
+from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, runtime_identity, update_manager
 
 store = Store(database_path())
 providers = restore_provider_profiles(store.load_providers())
@@ -103,7 +103,7 @@ def offline_model_catalog(profile: ProviderProfile) -> tuple[list[str], str]:
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "council-lab"}
+    return {"status": "ok", "service": "council-lab", "runtime_id": runtime_identity()}
 
 
 @app.get("/api/update/check")

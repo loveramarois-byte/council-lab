@@ -73,7 +73,11 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
 
     start = AsyncMock(return_value={"phase": "checking", "current_version": "0.4.0"})
     monkeypatch.setattr(main.update_manager, "start", start)
+    monkeypatch.setenv("COUNCIL_RUNTIME_ID", "test-runtime")
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+        health = await client.get("/api/health")
+        assert health.json() == {"status": "ok", "service": "council-lab", "runtime_id": "test-runtime"}
+
         hostile_host = await client.get("/api/health", headers={"Host": "attacker.example"})
         assert hostile_host.status_code == 400
         assert hostile_host.json()["error"]["code"] == "INVALID_HOST"

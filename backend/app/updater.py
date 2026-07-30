@@ -74,6 +74,10 @@ def current_version() -> str:
     return "0.0.0"
 
 
+def runtime_identity() -> str:
+    return os.getenv("COUNCIL_RUNTIME_ID", "development").strip() or "development"
+
+
 def version_key(value: str) -> tuple[int, int, int]:
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
     if not match:

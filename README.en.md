@@ -126,6 +126,6 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report. For troubleshooting, prefer the [redacted diagnostics bundle](docs/DIAGNOSTICS.md) and inspect it before sending.
 
-Version `0.8.3` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
+Version `0.8.4` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

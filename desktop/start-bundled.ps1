@@ -20,11 +20,18 @@ $FrontendProcess = $null
 $env:COUNCIL_PACKAGED = "1"
 $env:COUNCIL_INSTALL_ROOT = $PackageRoot
 $env:COUNCIL_VERSION = (Get-Content -Raw (Join-Path $PackageRoot "VERSION")).Trim()
+$Hasher = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $RuntimeSeed = "$PackageRoot$([char]0)$($env:COUNCIL_VERSION)"
+    $RootHash = [BitConverter]::ToString($Hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($RuntimeSeed))).Replace("-", "").ToLowerInvariant()
+}
+finally { $Hasher.Dispose() }
+$env:COUNCIL_RUNTIME_ID = "windows:$($RootHash.Substring(0, 24))"
 
 function Test-Backend {
     try {
         $Health = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 2
-        return $Health.status -eq "ok" -and $Health.service -eq "council-lab"
+        return $Health.status -eq "ok" -and $Health.service -eq "council-lab" -and $Health.runtime_id -eq $env:COUNCIL_RUNTIME_ID
     }
     catch { return $false }
 }
@@ -32,7 +39,7 @@ function Test-Backend {
 function Test-Frontend {
     try {
         $Response = Invoke-RestMethod -Uri "http://127.0.0.1:3000/mobile-access/health" -TimeoutSec 2
-        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access"
+        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.runtime_id -eq $env:COUNCIL_RUNTIME_ID
     }
     catch { return $false }
 }
@@ -55,6 +62,48 @@ function Test-Port([int]$Port) {
     }
     catch { return $false }
     finally { $Client.Dispose() }
+}
+
+function Test-CouncilProcessOwnership([int]$ProcessId, [string]$Service) {
+    $Process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if ($null -eq $Process) { return $false }
+    $Executable = [string]$Process.ExecutablePath
+    $CommandLine = [string]$Process.CommandLine
+    if ($Service -eq "council-lab") {
+        if ($Executable -match '\\backend\\council-backend\\council-backend\.exe$') {
+            $Root = Split-Path (Split-Path (Split-Path $Executable -Parent) -Parent) -Parent
+            return (Test-Path (Join-Path $Root "VERSION"))
+        }
+        return $CommandLine -match '\\backend\\\.venv\\Scripts\\python\.exe' -and $CommandLine -match 'uvicorn' -and $CommandLine -match 'app\.main:app'
+    }
+    if ($Service -eq "council-mobile-access") {
+        if ($Executable -match '\\runtime\\node\.exe$') {
+            $Root = Split-Path (Split-Path $Executable -Parent) -Parent
+            return (Test-Path (Join-Path $Root "VERSION")) -and (Test-Path (Join-Path $Root "web\server.js"))
+        }
+        return $CommandLine -match '\\frontend\\node_modules\\next\\dist\\bin\\next' -and $CommandLine -match 'start'
+    }
+    return $false
+}
+
+function Stop-ExistingCouncilService([int]$Port, [string]$Uri, [string]$Service) {
+    try {
+        $ProcessIdsBefore = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+        $Health = Invoke-RestMethod -Uri $Uri -TimeoutSec 2
+        if ($Health.service -ne $Service) { return $false }
+        $ProcessIdsAfter = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+        foreach ($ProcessId in $ProcessIdsAfter) {
+            if ($ProcessId -gt 1 -and $ProcessIdsBefore -contains $ProcessId -and (Test-CouncilProcessOwnership $ProcessId $Service)) {
+                Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
+        for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
+            if (-not (Test-Port $Port)) { return $true }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    catch { return $false }
+    return -not (Test-Port $Port)
 }
 
 function Wait-Until([scriptblock]$Probe) {
@@ -87,7 +136,9 @@ try {
     }
 
     if (-not (Test-Backend)) {
-        if (Test-Port 8001) { throw "Port 8001 is used by another program. Close it, then start Council again." }
+        if ((Test-Port 8001) -and -not (Stop-ExistingCouncilService 8001 "http://127.0.0.1:8001/api/health" "council-lab")) {
+            throw "Port 8001 is used by another program. Close it, then start Council again."
+        }
         $BackendProcess = Start-Process -FilePath $BackendExe -WorkingDirectory $PackageRoot -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Join-Path $LogDir "backend.stdout.log") `
             -RedirectStandardError (Join-Path $LogDir "backend.stderr.log")
@@ -103,7 +154,9 @@ try {
     }
 
     if (-not (Test-Frontend)) {
-        if (Test-Port 3000) { throw "Port 3000 is used by another program. Close it, then start Council again." }
+        if ((Test-Port 3000) -and -not (Stop-ExistingCouncilService 3000 "http://127.0.0.1:3000/mobile-access/health" "council-mobile-access")) {
+            throw "Port 3000 is used by another program. Close it, then start Council again."
+        }
         $PreviousHost = $env:HOSTNAME
         $PreviousPort = $env:PORT
         $PreviousNodeEnv = $env:NODE_ENV

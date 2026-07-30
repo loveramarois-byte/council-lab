@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 const backendUrl = process.env.COUNCIL_TEST_BACKEND_URL || "http://127.0.0.1:8001";
@@ -462,6 +463,154 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
   }
 });
 
+test("沉浸模式同步原生全屏、失败回退和手机端退出", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      get: () => (window as Window & { __fullscreenElement?: Element | null }).__fullscreenElement || null,
+    });
+    Object.defineProperty(Element.prototype, "requestFullscreen", {
+      configurable: true,
+      value: function () {
+        const state = window as Window & { __fullscreenDelay?: number; __fullscreenElement?: Element | null; __fullscreenRequests?: number; __fullscreenShouldReject?: boolean };
+        state.__fullscreenRequests = (state.__fullscreenRequests || 0) + 1;
+        if (state.__fullscreenShouldReject) return Promise.reject(new Error("Fullscreen denied by test browser"));
+        const target = this as Element;
+        return new Promise<void>((resolve) => window.setTimeout(() => {
+          state.__fullscreenElement = target;
+          document.dispatchEvent(new Event("fullscreenchange"));
+          resolve();
+        }, state.__fullscreenDelay || 0));
+      },
+    });
+    Object.defineProperty(document, "exitFullscreen", {
+      configurable: true,
+      value: () => {
+        const state = window as Window & { __fullscreenElement?: Element | null; __fullscreenExits?: number };
+        state.__fullscreenExits = (state.__fullscreenExits || 0) + 1;
+        state.__fullscreenElement = null;
+        document.dispatchEvent(new Event("fullscreenchange"));
+        return Promise.resolve();
+      },
+    });
+  });
+  const participantRoles = [
+    { id: "analyst", name: "析理", role: "拆解者", brief: "拆解问题" },
+    { id: "challenger", name: "诘问", role: "挑战者", brief: "寻找反例" },
+    { id: "builder", name: "构策", role: "方案师", brief: "提出方案" },
+    { id: "observer", name: "观澜", role: "观察者", brief: "观察分歧" },
+  ];
+  const runFixture = {
+    id: "immersive-fixture",
+    question: "沉浸阅读时怎样保留必要上下文？",
+    mode: "standard",
+    provider_id: "mock",
+    model: "council-mock",
+    reasoning_effort: "low",
+    workflow_engine: "langgraph",
+    checkpoint_count: 6,
+    context_snapshot: { estimated_tokens: 620, token_budget: 7000, token_estimator_exact: false },
+    status: "completed",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    analysis: null,
+    candidates: [], critiques: [], verifications: [], revisions: [], scores: [],
+    final_decision: { final_answer: "保留议题、讨论正文和明确的退出入口，隐藏席位配置及导出等次要操作。" },
+    usage: { model_calls: 5, tool_calls: 0, input_tokens: 900, output_tokens: 350, estimated_cost: null, duration_ms: 2000 },
+    error: null,
+    degraded: false,
+    protocol: "auto",
+    discussion_turns: participantRoles.map((participant, index) => ({
+      id: `immersive-${participant.id}`,
+      speaker_type: "agent",
+      speaker_id: participant.id,
+      speaker_name: participant.name,
+      role_label: participant.role,
+      content: `第 ${index + 1} 席关于沉浸阅读的意见。`,
+      provider_name: "本地演示",
+      model: "council-mock",
+      round: 1,
+      created_at: new Date().toISOString(),
+    })),
+    participant_roles: participantRoles,
+    current_speaker_index: 4,
+    discussion_round: 1,
+    awaiting_user: false,
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 },
+    seat_assignments: participantRoles.map((participant) => ({ ...assignment(participant.id), provider_name: "本地演示" })),
+    finalizer_assignment: { ...assignment("finalizer"), provider_name: "本地演示" },
+    template_name: "开放讨论",
+    source_snapshots: [],
+  };
+  await page.route("**/api/runs/immersive-fixture", (route) => route.fulfill({ json: runFixture }));
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/runs/immersive-fixture");
+  const enter = page.getByRole("button", { name: "进入沉浸模式" });
+  await expect(enter).toHaveAttribute("title", "进入沉浸模式");
+  await expect(enter).toHaveAttribute("aria-pressed", "false");
+  await enter.click();
+
+  await expect(page.locator(".council-page")).toHaveClass(/immersive/);
+  await expect(page.getByRole("button", { name: "退出沉浸模式" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "退出沉浸模式" })).toBeFocused();
+  await expect(page.locator(".council-callboard")).toBeHidden();
+  await expect(page.locator(".sidebar")).toBeHidden();
+  await expect(page.locator(".council-dialogue")).toBeVisible();
+  expect(await page.evaluate(() => (window as Window & { __fullscreenRequests?: number }).__fullscreenRequests)).toBe(1);
+  await page.getByRole("button", { name: "退出沉浸模式" }).click();
+  await expect(page.locator(".council-page")).not.toHaveClass(/immersive/);
+  expect(await page.evaluate(() => (window as Window & { __fullscreenExits?: number }).__fullscreenExits)).toBe(1);
+  await expect(page.getByRole("button", { name: "进入沉浸模式" })).toBeFocused();
+
+  await page.getByRole("button", { name: "进入沉浸模式" }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
+  await page.evaluate(() => document.exitFullscreen());
+  await expect(page.locator(".council-page")).not.toHaveClass(/immersive/);
+  await expect(page.getByRole("button", { name: "进入沉浸模式" })).toBeFocused();
+
+  await page.evaluate(() => { (window as Window & { __fullscreenShouldReject?: boolean }).__fullscreenShouldReject = true; });
+  await page.getByRole("button", { name: "进入沉浸模式" }).click();
+  await expect(page.locator(".council-page")).toHaveClass(/immersive/);
+  await expect(page.getByRole("button", { name: "退出沉浸模式" })).toBeFocused();
+  const accessibility = await new AxeBuilder({ page }).include(".council-page").analyze();
+  expect(accessibility.violations.filter((violation) => ["serious", "critical"].includes(violation.impact || ""))).toEqual([]);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".council-page")).not.toHaveClass(/immersive/);
+  await expect(page.getByRole("button", { name: "进入沉浸模式" })).toBeFocused();
+
+  await page.evaluate(() => {
+    const state = window as Window & { __fullscreenDelay?: number; __fullscreenShouldReject?: boolean };
+    state.__fullscreenShouldReject = false;
+    state.__fullscreenDelay = 120;
+  });
+  await page.getByRole("button", { name: "进入沉浸模式" }).click();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(180);
+  await expect(page.locator(".council-page")).not.toHaveClass(/immersive/);
+  await expect(page.getByRole("button", { name: "进入沉浸模式" })).toBeFocused();
+  expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "进入沉浸模式" }).click();
+  await expect(page.getByRole("button", { name: "退出沉浸模式" })).toBeVisible();
+  expect(await page.evaluate(() => (window as Window & { __fullscreenRequests?: number }).__fullscreenRequests)).toBe(4);
+  const mobileViewport = await page.evaluate(() => ({
+    pageWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    pageHeight: document.documentElement.scrollHeight,
+    viewportHeight: window.innerHeight,
+  }));
+  expect(mobileViewport.pageWidth).toBeLessThanOrEqual(mobileViewport.viewportWidth);
+  expect(mobileViewport.pageHeight).toBeLessThanOrEqual(mobileViewport.viewportHeight);
+
+  await page.getByRole("button", { name: "退出沉浸模式" }).click();
+  await expect(page.locator(".council-page")).not.toHaveClass(/immersive/);
+  await expect(page.getByRole("button", { name: "进入沉浸模式" })).toBeFocused();
+});
+
 test("最终综合失败后可重试且不会重复四席讨论", async ({ page }) => {
   const participantRoles = [
     { id: "analyst", name: "析理", role: "拆解者", brief: "拆解问题" },
@@ -722,6 +871,8 @@ test("席位失败时明确显示原因并允许从当前席位重试", async ({
   await expect(page.getByText(/等待上游超过 120 秒/)).toBeVisible();
   await expect(page.getByText("0 次 AI 发言 · 0 次你的参与", { exact: true })).toBeVisible();
   await expect(page.locator(".council-seat.failed")).toContainText("析理");
+  await page.getByRole("button", { name: "进入沉浸模式" }).click();
+  await expect(page.getByRole("button", { name: "重试析理" })).toBeVisible();
   await page.getByRole("button", { name: "重试析理" }).click();
   expect(retryRequested).toBeTruthy();
 });
@@ -780,6 +931,9 @@ test("CC Switch 长时间等待时显示路由边界并允许重试当前席位"
   await expect(page.getByText("正在等待 CC Switch 返回上游响应")).toBeVisible();
   await expect(page.getByText(/若已配置故障转移，将由它处理/)).toBeVisible();
   await expect(page.getByText(/已等待 \d+ 秒/)).toBeVisible();
+  await page.getByRole("button", { name: "进入沉浸模式" }).click();
+  await expect(page.getByPlaceholder("我想补充 / 反驳 / 改变讨论方向…")).toBeEnabled();
+  await expect(page.getByText("正在等待 CC Switch 返回上游响应")).toBeVisible();
   await expect(page.getByRole("button", { name: "继续等待" })).toBeVisible();
   await page.getByRole("button", { name: "重试本席" }).click();
   expect(retryRequested).toBeTruthy();
