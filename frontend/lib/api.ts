@@ -1,4 +1,6 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+// Browser API traffic must stay same-origin so Next.js can inject the private
+// backend token. The direct loopback port is intentionally not a public API.
+const API_URL = "";
 
 export type Provider = {
   id: string;

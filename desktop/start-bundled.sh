@@ -15,6 +15,7 @@ BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 TOKEN_FILE="$LOG_DIR/mobile-access.token"
 DESKTOP_TOKEN_FILE="$LOG_DIR/desktop-access.token"
+INTERNAL_TOKEN_FILE="$LOG_DIR/backend-access.token"
 
 mkdir -p "$LOG_DIR"
 /usr/bin/touch "$PID_FILE"
@@ -32,7 +33,9 @@ service_is_current() {
   local service="$2"
   local response
   response="$(/usr/bin/curl -fsS --max-time 2 "$url" 2>/dev/null || true)"
-  [[ "$response" == *"\"service\":\"$service\""* && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* ]]
+  [[ "$response" == *"\"service\":\"$service\""* \
+    && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* \
+    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
 }
 
 backend_is_current() {
@@ -127,6 +130,18 @@ if [[ ! -x "$BACKEND_EXE" || ! -x "$NODE_EXE" || ! -f "$WEB_DIR/server.js" ]]; t
   exit 1
 fi
 
+umask 077
+INTERNAL_TOKEN=""
+if [[ -f "$INTERNAL_TOKEN_FILE" ]]; then
+  INTERNAL_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$INTERNAL_TOKEN_FILE")"
+fi
+if (( ${#INTERNAL_TOKEN} < 32 )); then
+  INTERNAL_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  printf '%s\n' "$INTERNAL_TOKEN" > "$INTERNAL_TOKEN_FILE"
+fi
+/bin/chmod 600 "$INTERNAL_TOKEN_FILE"
+INTERNAL_API_ID="$(/usr/bin/printf '%s' "$INTERNAL_TOKEN" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print substr($1, 1, 16)}')"
+
 if ! backend_is_current; then
   if port_is_used 8001; then
     if ! stop_existing_council_service 8001 "http://127.0.0.1:8001/api/health" "council-lab"; then
@@ -134,7 +149,7 @@ if ! backend_is_current; then
       exit 1
     fi
   fi
-  /usr/bin/nohup "$BACKEND_EXE" >>"$BACKEND_LOG" 2>&1 &
+  COUNCIL_INTERNAL_API_TOKEN="$INTERNAL_TOKEN" /usr/bin/nohup "$BACKEND_EXE" >>"$BACKEND_LOG" 2>&1 &
   backend_pid=$!
   record_pid backend "$backend_pid"
   if ! wait_for_service backend_is_current; then
@@ -159,11 +174,10 @@ if ! frontend_is_current; then
   fi
   REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
   DESKTOP_TOKEN="$(/usr/bin/openssl rand -hex 24)"
-  umask 077
   printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
   printf '%s\n' "$DESKTOP_TOKEN" > "$DESKTOP_TOKEN_FILE"
   pushd "$WEB_DIR" >/dev/null
-  HOSTNAME=0.0.0.0 PORT=3000 NODE_ENV=production COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" \
+  HOSTNAME=0.0.0.0 PORT=3000 NODE_ENV=production COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" COUNCIL_INTERNAL_API_TOKEN="$INTERNAL_TOKEN" \
     /usr/bin/nohup "$NODE_EXE" "$WEB_DIR/server.js" >>"$FRONTEND_LOG" 2>&1 &
   frontend_pid=$!
   popd >/dev/null

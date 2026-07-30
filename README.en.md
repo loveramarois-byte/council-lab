@@ -135,8 +135,8 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 ## Privacy and status
 
-Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report. For troubleshooting, prefer the [redacted diagnostics bundle](docs/DIAGNOSTICS.md) and inspect it before sending.
+Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Browsers use the same-origin Next.js proxy only; every FastAPI route except health requires a launcher-generated server token and rejects foreign origins, cross-site fetch metadata, and unknown hosts. CORS is not treated as CSRF protection. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report. For troubleshooting, prefer the [redacted diagnostics bundle](docs/DIAGNOSTICS.md) and inspect it before sending.
 
-Version `0.9.0` is intended for personal research, planning, and non-binding decision support. High-risk mode adds gates and auditability; it does not prove factual verification, professional participation, or regulatory compliance. Do not use its output directly for medical, legal, financial, compliance, or safety-critical execution.
+Version `0.9.1` is intended for personal research, planning, and non-binding decision support. High-risk mode adds gates and auditability; it does not prove factual verification, professional participation, or regulatory compliance. Do not use its output directly for medical, legal, financial, compliance, or safety-critical execution.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

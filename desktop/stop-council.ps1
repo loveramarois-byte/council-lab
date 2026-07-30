@@ -8,10 +8,11 @@ $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $L
 $PidFile = Join-Path $LogDir "council-pids.json"
 $TokenFile = Join-Path $LogDir "mobile-access.token"
 $DesktopTokenFile = Join-Path $LogDir "desktop-access.token"
+$InternalTokenFile = Join-Path $LogDir "backend-access.token"
 
 try {
     if (-not (Test-Path $PidFile)) {
-        Remove-Item -Force $TokenFile, $DesktopTokenFile -ErrorAction SilentlyContinue
+        Remove-Item -Force $TokenFile, $DesktopTokenFile, $InternalTokenFile -ErrorAction SilentlyContinue
         Write-Host "No Council process record was found."
         exit 0
     }
@@ -29,7 +30,7 @@ try {
         }
     }
     Set-Content -Encoding UTF8 -Path $PidFile -Value "{}"
-    Remove-Item -Force $TokenFile, $DesktopTokenFile -ErrorAction SilentlyContinue
+    Remove-Item -Force $TokenFile, $DesktopTokenFile, $InternalTokenFile -ErrorAction SilentlyContinue
     Write-Host "Council local services have stopped." -ForegroundColor Green
 }
 catch {

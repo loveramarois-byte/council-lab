@@ -8,6 +8,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from .request_boundary import (
+    INTERNAL_API_HEADER,
+    browser_origin_is_trusted,
+    request_requires_internal_auth,
+    token_matches,
+)
+
 
 logger = logging.getLogger("council.api")
 TRUSTED_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -62,12 +69,31 @@ def _error_response(
     )
 
 
-def install_error_handling(app: FastAPI) -> None:
+def install_error_handling(app: FastAPI, internal_api_token: str) -> None:
     @app.middleware("http")
     async def request_context(request: Request, call_next):
         request.state.request_id = uuid.uuid4().hex
         if request.url.hostname not in TRUSTED_HOSTS:
             return _error_response(request, 400, "INVALID_HOST", "请求主机不受信任。")
+        if request_requires_internal_auth(request.url.path):
+            supplied_token = request.headers.get(INTERNAL_API_HEADER)
+            if not token_matches(internal_api_token, supplied_token):
+                return _error_response(
+                    request,
+                    403,
+                    "INTERNAL_API_AUTH_REQUIRED",
+                    "请求未通过 Council 内部服务认证。",
+                )
+            if not browser_origin_is_trusted(
+                request.headers.get("Origin"),
+                request.headers.get("Sec-Fetch-Site"),
+            ):
+                return _error_response(
+                    request,
+                    403,
+                    "UNTRUSTED_BROWSER_ORIGIN",
+                    "浏览器来源不受信任。",
+                )
         response = await call_next(request)
         response.headers["X-Council-Request-ID"] = request.state.request_id
         return response

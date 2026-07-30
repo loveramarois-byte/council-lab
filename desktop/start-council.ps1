@@ -14,13 +14,14 @@ $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $L
 $PidFile = Join-Path $LogDir "council-pids.json"
 $TokenFile = Join-Path $LogDir "mobile-access.token"
 $DesktopTokenFile = Join-Path $LogDir "desktop-access.token"
+$InternalTokenFile = Join-Path $LogDir "backend-access.token"
 $BackendProcess = $null
 $FrontendProcess = $null
 
 function Test-Backend {
     try {
         $Health = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 2
-        return $Health.status -eq "ok" -and $Health.service -eq "council-lab"
+        return $Health.status -eq "ok" -and $Health.service -eq "council-lab" -and $Health.internal_api_id -eq $InternalApiId
     }
     catch { return $false }
 }
@@ -28,7 +29,7 @@ function Test-Backend {
 function Test-Frontend {
     try {
         $Response = Invoke-RestMethod -Uri "http://127.0.0.1:3000/mobile-access/health" -TimeoutSec 2
-        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access"
+        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.internal_api_id -eq $InternalApiId
     }
     catch { return $false }
 }
@@ -41,6 +42,15 @@ function New-PairingToken {
     return [BitConverter]::ToString($Bytes).Replace("-", "").ToLowerInvariant()
 }
 
+function Get-TokenIdentifier([string]$Token) {
+    $TokenHasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $Digest = $TokenHasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Token))
+        return ([BitConverter]::ToString($Digest).Replace("-", "").ToLowerInvariant()).Substring(0, 16)
+    }
+    finally { $TokenHasher.Dispose() }
+}
+
 function Test-Port([int]$Port) {
     $Client = [System.Net.Sockets.TcpClient]::new()
     try {
@@ -51,6 +61,24 @@ function Test-Port([int]$Port) {
     }
     catch { return $false }
     finally { $Client.Dispose() }
+}
+
+function Stop-ProjectListener([int]$Port, [string]$ProjectPath) {
+    $ProcessIds = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    foreach ($ProcessId in $ProcessIds) {
+        if ($ProcessId -le 1) { continue }
+        $Process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+        if ($null -eq $Process) { continue }
+        $CommandLine = [string]$Process.CommandLine
+        if ($CommandLine.IndexOf($ProjectPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+    for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
+        if (-not (Test-Port $Port)) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    return -not (Test-Port $Port)
 }
 
 function Wait-Until([scriptblock]$Probe) {
@@ -67,14 +95,28 @@ try {
     }
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $Started = [ordered]@{ project_dir = $ProjectDir }
+    $InternalToken = if (Test-Path $InternalTokenFile) { (Get-Content -Raw $InternalTokenFile).Trim() } else { "" }
+    if ($InternalToken.Length -lt 32) {
+        $InternalToken = New-PairingToken
+        Set-Content -Encoding ASCII -Path $InternalTokenFile -Value $InternalToken
+    }
+    $InternalApiId = Get-TokenIdentifier $InternalToken
 
     if (-not (Test-Backend)) {
-        if (Test-Port 8001) { throw "Port 8001 is used by another program. Close it, then start Council again." }
-        $BackendProcess = Start-Process -FilePath $BackendPython `
-            -ArgumentList @("-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8001") `
-            -WorkingDirectory $ProjectDir -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput (Join-Path $LogDir "backend.stdout.log") `
-            -RedirectStandardError (Join-Path $LogDir "backend.stderr.log")
+        if ((Test-Port 8001) -and -not (Stop-ProjectListener 8001 $BackendPython)) { throw "Port 8001 is used by another program. Close it, then start Council again." }
+        $PreviousInternalToken = [Environment]::GetEnvironmentVariable("COUNCIL_INTERNAL_API_TOKEN", "Process")
+        $env:COUNCIL_INTERNAL_API_TOKEN = $InternalToken
+        try {
+            $BackendProcess = Start-Process -FilePath $BackendPython `
+                -ArgumentList @("-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--host", "127.0.0.1", "--port", "8001") `
+                -WorkingDirectory $ProjectDir -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $LogDir "backend.stdout.log") `
+                -RedirectStandardError (Join-Path $LogDir "backend.stderr.log")
+        }
+        finally {
+            if ($null -eq $PreviousInternalToken) { Remove-Item Env:COUNCIL_INTERNAL_API_TOKEN -ErrorAction SilentlyContinue }
+            else { $env:COUNCIL_INTERNAL_API_TOKEN = $PreviousInternalToken }
+        }
         $Started.backend = $BackendProcess.Id
         if (-not (Wait-Until { Test-Backend })) {
             throw "The backend did not start. See $LogDir\backend.stderr.log"
@@ -89,16 +131,18 @@ try {
     }
 
     if (-not (Test-Frontend)) {
-        if (Test-Port 3000) { throw "Port 3000 is used by another program. Close it, then start Council again." }
+        if ((Test-Port 3000) -and -not (Stop-ProjectListener 3000 (Join-Path $ProjectDir "frontend"))) { throw "Port 3000 is used by another program. Close it, then start Council again." }
         $RemoteToken = New-PairingToken
         $DesktopToken = New-PairingToken
         Set-Content -Encoding ASCII -Path $TokenFile -Value $RemoteToken
         Set-Content -Encoding ASCII -Path $DesktopTokenFile -Value $DesktopToken
         $PreviousRemoteToken = $env:COUNCIL_REMOTE_TOKEN
         $PreviousDesktopToken = $env:COUNCIL_DESKTOP_TOKEN
+        $PreviousInternalToken = [Environment]::GetEnvironmentVariable("COUNCIL_INTERNAL_API_TOKEN", "Process")
         $PreviousNextDistDir = $env:COUNCIL_NEXT_DIST_DIR
         $env:COUNCIL_REMOTE_TOKEN = $RemoteToken
         $env:COUNCIL_DESKTOP_TOKEN = $DesktopToken
+        $env:COUNCIL_INTERNAL_API_TOKEN = $InternalToken
         $env:COUNCIL_NEXT_DIST_DIR = $FrontendDistDir
         try {
             $Node = (Get-Command "node.exe" -ErrorAction Stop).Source
@@ -114,6 +158,8 @@ try {
             else { $env:COUNCIL_REMOTE_TOKEN = $PreviousRemoteToken }
             if ($null -eq $PreviousDesktopToken) { Remove-Item Env:COUNCIL_DESKTOP_TOKEN -ErrorAction SilentlyContinue }
             else { $env:COUNCIL_DESKTOP_TOKEN = $PreviousDesktopToken }
+            if ($null -eq $PreviousInternalToken) { Remove-Item Env:COUNCIL_INTERNAL_API_TOKEN -ErrorAction SilentlyContinue }
+            else { $env:COUNCIL_INTERNAL_API_TOKEN = $PreviousInternalToken }
             if ($null -eq $PreviousNextDistDir) { Remove-Item Env:COUNCIL_NEXT_DIST_DIR -ErrorAction SilentlyContinue }
             else { $env:COUNCIL_NEXT_DIST_DIR = $PreviousNextDistDir }
         }

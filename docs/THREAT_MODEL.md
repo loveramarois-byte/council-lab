@@ -31,12 +31,12 @@ The operating system, browser, router, DNS configuration, and selected Provider 
 
 ## Trust boundaries and data flow
 
-1. The launcher generates separate random 192-bit mobile and desktop-bootstrap tokens for the current application start and stores them in the user's Council log directory with user-only file permissions.
+1. The launcher generates separate random 192-bit mobile, desktop-bootstrap, and backend-internal tokens for the current launcher lifecycle and stores them in the user's Council log directory with user-only file permissions.
 2. The local browser receives only the desktop-bootstrap token. After that succeeds, the desktop-only settings page creates a LAN URL whose fragment contains only the mobile token. URL fragments are not sent in HTTP requests or ordinary access logs.
 3. The pair page removes either fragment from browser history before sending a same-origin JSON POST. A client cannot select desktop authority with the mobile token.
 4. A successful POST creates a random, signed, HttpOnly, SameSite=Strict browser session. Neither raw token is stored in a Cookie.
-5. Next.js validates the signed session before proxying requests. FastAPI and CC Switch remain bound to loopback.
-6. Council restart rotates the token and clears in-memory sessions. The desktop operator can revoke every mobile session without restarting.
+5. Next.js validates the signed session before proxying requests, removes any browser-supplied internal-auth header, and injects a separate server-only startup token. FastAPI requires that token with constant-time comparison for every `/api/*` route except health. FastAPI and CC Switch remain bound to loopback.
+6. A full Council stop/start rotates the tokens and clears in-memory sessions. A launcher retry reuses the internal token only when both processes report the same non-secret identifier. The desktop operator can revoke every mobile session without restarting.
 
 High-risk reviewer authorization is a separate server boundary. A paired browser may submit an actor label, but approval and risk-override endpoints independently require a reviewer secret configured in `COUNCIL_HIGH_RISK_REVIEWERS`. The secret is not derived from the mobile session, pairing token, or UI state.
 
@@ -71,6 +71,14 @@ The rate limiter is process-local and global, not a durable per-device identity 
 
 These controls do not provide a general-purpose reverse proxy, distributed rate limiting, or protection against a device that already has a valid paired session.
 
+### Browser-to-loopback API boundary
+
+- CORS is response-read policy, not CSRF protection. It does not stop a malicious page from sending simple form or text requests to a loopback service.
+- Every application API route, including read routes and future mutations, is denied unless the Next.js server supplies the per-start internal token. Only `/api/health` remains public for launcher supervision.
+- The launcher generates the token with 192 bits of randomness, stores it in a user-only token file, and passes it to the loopback backend and Next.js process. It is never returned to browser JavaScript, placed in a URL, or written to diagnostics. Health responses expose only a truncated SHA-256 process identifier so launchers can detect and safely restart stale processes that inherited a different token.
+- FastAPI also rejects null, public/foreign, same-site-but-not-same-origin, and cross-site browser origins. Loopback and private-LAN origins remain compatible only on the configured frontend port used by the paired-phone UI.
+- Unknown backend Host values are rejected before routing, including DNS-rebinding-style names that merely contain a loopback string.
+
 ## Logging and privacy
 
 - The token is carried in a URL fragment, not a query string.
@@ -100,7 +108,7 @@ Release CI must verify at minimum:
 5. Repeated wrong tokens trigger `429` and recover after the lock window.
 6. A valid token creates a Cookie that does not contain the token.
 7. A paired browser can access the same-origin UI and API.
-8. A foreign Origin cannot perform a state-changing API request.
+8. A foreign, null, or missing-token request cannot read or mutate the direct loopback API, including simple form and text requests.
 9. Only the desktop session can read pairing information and revoke mobile sessions.
 10. Revocation and token rotation invalidate existing mobile Cookies.
 11. Two SSE subscribers can replay the same persisted events without consuming each other's stream.

@@ -14,6 +14,7 @@ BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 TOKEN_FILE="$LOG_DIR/mobile-access.token"
 DESKTOP_TOKEN_FILE="$LOG_DIR/desktop-access.token"
+INTERNAL_TOKEN_FILE="$LOG_DIR/backend-access.token"
 
 mkdir -p "$LOG_DIR"
 : > "$PID_FILE"
@@ -23,7 +24,41 @@ is_up() {
 }
 
 frontend_is_up() {
-  curl -fsS --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null | grep -q 'council-mobile-access'
+  local response
+  response="$(curl -fsS --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null || true)"
+  [[ "$response" == *'"service":"council-mobile-access"'* \
+    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
+}
+
+backend_is_up() {
+  local response
+  response="$(curl -fsS --max-time 2 "http://127.0.0.1:8001/api/health" 2>/dev/null || true)"
+  [[ "$response" == *'"service":"council-lab"'* \
+    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
+}
+
+stop_project_listener() {
+  local port="$1"
+  local project_path="$2"
+  local pid
+  local process_cwd
+  local process_command
+  for pid in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null); do
+    [[ "$pid" == <-> ]] || continue
+    (( pid > 1 )) || continue
+    process_cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+    process_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$process_cwd" == "$project_path"* || "$process_command" == *"$project_path"* ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+  local attempts=0
+  while lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
+    (( attempts >= 30 )) && return 1
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  return 0
 }
 
 wait_for() {
@@ -47,13 +82,29 @@ if [[ ! -x "$FRONTEND_DIR/node_modules/next/dist/bin/next" || ! -f "$FRONTEND_DI
   exit 1
 fi
 
-if ! is_up "http://127.0.0.1:8001/api/health"; then
+umask 077
+INTERNAL_TOKEN=""
+if [[ -f "$INTERNAL_TOKEN_FILE" ]]; then
+  INTERNAL_TOKEN="$(tr -d '[:space:]' < "$INTERNAL_TOKEN_FILE")"
+fi
+if (( ${#INTERNAL_TOKEN} < 32 )); then
+  INTERNAL_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  printf '%s\n' "$INTERNAL_TOKEN" > "$INTERNAL_TOKEN_FILE"
+fi
+chmod 600 "$INTERNAL_TOKEN_FILE"
+INTERNAL_API_ID="$(printf '%s' "$INTERNAL_TOKEN" | shasum -a 256 | awk '{print substr($1, 1, 16)}')"
+
+if ! backend_is_up; then
+  if lsof -tiTCP:8001 -sTCP:LISTEN >/dev/null 2>&1 && ! stop_project_listener 8001 "$BACKEND_DIR"; then
+    osascript -e 'display dialog "端口 8001 已被其他程序占用，请先关闭该程序。" buttons {"好"} with title "Council 无法启动"' >/dev/null 2>&1 || true
+    exit 1
+  fi
   pushd "$BACKEND_DIR" >/dev/null
-  nohup "$BACKEND_DIR/.venv/bin/uvicorn" app.main:app --host 127.0.0.1 --port 8001 >>"$BACKEND_LOG" 2>&1 &
+  COUNCIL_INTERNAL_API_TOKEN="$INTERNAL_TOKEN" nohup "$BACKEND_DIR/.venv/bin/uvicorn" app.main:app --host 127.0.0.1 --port 8001 >>"$BACKEND_LOG" 2>&1 &
   BACKEND_PID=$!
   popd >/dev/null
   echo "backend $BACKEND_PID" >>"$PID_FILE"
-  if ! wait_for "http://127.0.0.1:8001/api/health"; then
+  if ! wait_for "http://127.0.0.1:8001/api/health" || ! backend_is_up; then
     osascript -e 'display dialog "后端启动失败，请查看 ~/Library/Logs/Council/backend.log" buttons {"好"} with title "Council 无法启动"' >/dev/null 2>&1 || true
     exit 1
   fi
@@ -69,22 +120,17 @@ fi
 if ! frontend_is_up; then
   EXISTING_FRONTEND_PID="$(lsof -tiTCP:3000 -sTCP:LISTEN 2>/dev/null | head -n 1)"
   if [[ -n "$EXISTING_FRONTEND_PID" ]]; then
-    EXISTING_FRONTEND_COMMAND="$(ps -p "$EXISTING_FRONTEND_PID" -o command= 2>/dev/null || true)"
-    if [[ "$EXISTING_FRONTEND_COMMAND" == *"$FRONTEND_DIR"* || "$EXISTING_FRONTEND_COMMAND" == *"next-server"* ]]; then
-      kill "$EXISTING_FRONTEND_PID" >/dev/null 2>&1 || true
-      sleep 1
-    else
+    if ! stop_project_listener 3000 "$FRONTEND_DIR"; then
       osascript -e 'display dialog "端口 3000 已被其他程序占用，请先关闭该程序。" buttons {"好"} with title "Council 无法启动"' >/dev/null 2>&1 || true
       exit 1
     fi
   fi
   REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
   DESKTOP_TOKEN="$(/usr/bin/openssl rand -hex 24)"
-  umask 077
   printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
   printf '%s\n' "$DESKTOP_TOKEN" > "$DESKTOP_TOKEN_FILE"
   pushd "$FRONTEND_DIR" >/dev/null
-  COUNCIL_NEXT_DIST_DIR="$FRONTEND_DIST_DIR" COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -H 0.0.0.0 -p 3000 >>"$FRONTEND_LOG" 2>&1 &
+  COUNCIL_NEXT_DIST_DIR="$FRONTEND_DIST_DIR" COUNCIL_REMOTE_TOKEN="$REMOTE_TOKEN" COUNCIL_DESKTOP_TOKEN="$DESKTOP_TOKEN" COUNCIL_INTERNAL_API_TOKEN="$INTERNAL_TOKEN" nohup "$FRONTEND_DIR/node_modules/next/dist/bin/next" start -H 0.0.0.0 -p 3000 >>"$FRONTEND_LOG" 2>&1 &
   FRONTEND_PID=$!
   popd >/dev/null
   echo "frontend $FRONTEND_PID" >>"$PID_FILE"

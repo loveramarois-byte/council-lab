@@ -5,8 +5,12 @@ from unittest.mock import AsyncMock
 
 import httpx
 
+from conftest import TEST_INTERNAL_API_TOKEN
 from app.models import RunCreate, RunRecord
 from app.updater import Release, UpdateError
+
+
+INTERNAL_HEADERS = {"X-Council-Internal-Token": TEST_INTERNAL_API_TOKEN}
 
 
 async def test_lifespan_persists_migrated_assignment_config(monkeypatch):
@@ -55,7 +59,7 @@ async def test_assignment_api_migrates_payload_without_schema_version(monkeypatc
         "finalizer": {"role": "finalizer", **assignment},
     }
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001", headers=INTERNAL_HEADERS) as client:
         response = await client.put("/api/agent-assignments", json=payload)
 
     assert response.status_code == 200
@@ -74,9 +78,14 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
     start = AsyncMock(return_value={"phase": "checking", "current_version": "0.4.0"})
     monkeypatch.setattr(main.update_manager, "start", start)
     monkeypatch.setenv("COUNCIL_RUNTIME_ID", "test-runtime")
-    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001", headers=INTERNAL_HEADERS) as client:
         health = await client.get("/api/health")
-        assert health.json() == {"status": "ok", "service": "council-lab", "runtime_id": "test-runtime"}
+        assert health.json() == {
+            "status": "ok",
+            "service": "council-lab",
+            "runtime_id": "test-runtime",
+            "internal_api_id": "d600895cb89eface",
+        }
 
         hostile_host = await client.get("/api/health", headers={"Host": "attacker.example"})
         assert hostile_host.status_code == 400
@@ -136,7 +145,7 @@ async def test_legacy_workspace_is_read_only_unless_explicitly_enabled(monkeypat
     transport = httpx.ASGITransport(app=main.app)
     monkeypatch.delenv("COUNCIL_ENABLE_LEGACY_WORKSPACE", raising=False)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001", headers=INTERNAL_HEADERS) as client:
         readable = await client.get("/api/projects")
         assert readable.status_code == 200
         assert readable.headers["Deprecation"] == "true"
@@ -179,7 +188,7 @@ async def test_run_creation_idempotency_replays_without_duplicate_start(monkeypa
     headers = {"Idempotency-Key": f"create-request-{uuid.uuid4().hex}"}
     payload = {"question": "只创建一次", "provider_id": "mock"}
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001", headers=INTERNAL_HEADERS) as client:
         first = await client.post("/api/runs", json=payload, headers=headers)
         replayed = await client.post("/api/runs", json=payload, headers=headers)
         conflict = await client.post(
@@ -231,7 +240,7 @@ async def test_rerun_idempotency_does_not_create_a_second_run(monkeypatch):
     monkeypatch.setattr(main.orchestrator, "start", start)
     headers = {"Idempotency-Key": f"rerun-request-{uuid.uuid4().hex}"}
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001", headers=INTERNAL_HEADERS) as client:
         first = await client.post("/api/runs/rerun-source/rerun", headers=headers)
         replayed = await client.post("/api/runs/rerun-source/rerun", headers=headers)
 

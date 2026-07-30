@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-31
+
+### Added
+
+- 增加浏览器到 loopback 后端的统一请求边界：除 `/api/health` 外，全部现有及未来 `/api/*` 路由都要求启动器生成的服务端内部令牌。
+- macOS 与 Windows 的源码和自包含启动器共享用户私有的 `backend-access.token`，并通过不泄露令牌的进程标识识别、替换继承了旧令牌的进程。
+- 增加恶意网页、空来源、简单表单、`text/plain`、跨站 Fetch Metadata、异常 Host、端口混淆和 IPv4/IPv6 边界回归测试。
+
+### Changed
+
+- 浏览器 API 客户端固定使用 Next.js 同源代理；不再支持通过公开 `NEXT_PUBLIC_*` 地址从浏览器直连 FastAPI。
+- 自定义开发端口必须在后端显式设置 `COUNCIL_FRONTEND_PORT`；默认只信任产品端口 `3000`，手机端局域网访问保持兼容。
+
+### Fixed
+
+- 修复恶意网页可以向 `127.0.0.1:8001` 发送简单跨站请求并触发 Provider 等状态变更的问题。
+- 修复内部令牌文件被删除或损坏后，后端与前端可能继承不同令牌并导致界面 API 持续返回 `403` 的问题。
+
+### Security
+
+- Next.js 会删除浏览器伪造的内部认证头，只从服务端环境注入真实令牌；令牌不进入浏览器 JavaScript、URL、SQLite、诊断包或日志。
+- FastAPI 使用恒定时间比较校验令牌，并额外拒绝恶意或空 Origin、非同源 Fetch Metadata、非预期前端端口及 DNS rebinding 风格 Host。
+
 ## [0.9.0] - 2026-07-30
 
 ### Added

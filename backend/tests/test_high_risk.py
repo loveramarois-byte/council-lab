@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import httpx
 
+from conftest import TEST_INTERNAL_API_TOKEN
 from app.errors import ApiError
 from app.idempotency import execute_idempotent_model_action
 from app.risk.classifier import assess_risk
@@ -29,6 +30,9 @@ from app.orchestrator import Orchestrator
 from app.provider_catalog import builtin_providers
 from app.reports import run_html, run_markdown
 from app.store import Store
+
+
+INTERNAL_HEADERS = {"X-Council-Internal-Token": TEST_INTERNAL_API_TOKEN}
 
 
 def reviewer_config() -> dict[str, str]:
@@ -608,7 +612,7 @@ async def test_api_requires_actor_and_blocks_legacy_mutation_routes(monkeypatch)
     payload = {"run_id": run_id, "question": run.question}
     key = f"high-risk-create-{run_id}"
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001", headers=INTERNAL_HEADERS) as client:
         missing_actor = await client.post("/api/high-risk/runs", json=payload)
         assert missing_actor.status_code == 401
         assert missing_actor.json()["error"]["code"] == "HIGH_RISK_ACTOR_REQUIRED"

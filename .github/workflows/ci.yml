@@ -103,6 +103,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    env:
+      COUNCIL_INTERNAL_API_TOKEN: council-ci-internal-token-with-32-characters
     strategy:
       fail-fast: false
       matrix:

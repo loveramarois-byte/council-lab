@@ -104,8 +104,12 @@ cd council-lab
 也可以分别启动：
 
 ```bash
-backend/.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8001
-cd frontend && npm run dev
+export COUNCIL_INTERNAL_API_TOKEN="$(openssl rand -hex 24)"
+backend/.venv/bin/uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8001 &
+cd frontend && COUNCIL_INTERNAL_API_TOKEN="$COUNCIL_INTERNAL_API_TOKEN" npm run dev
 ```
+
+后端除 `/api/health` 外不接受浏览器直连。开发时前后端必须共享同一个仅服务端可见的 `COUNCIL_INTERNAL_API_TOKEN`，浏览器始终访问 Next.js 同源 `/api` 代理；不要设置公开的 `NEXT_PUBLIC_*` 后端地址。
+如果开发环境明确把 Next.js 改到其他端口，后端还必须设置同一个 `COUNCIL_FRONTEND_PORT`；未设置时只信任产品默认的 `3000` 端口。
 
 源码启动脚本和旧版安装器仍供开发场景使用；普通 macOS / Windows 用户应优先下载自包含 Release。
