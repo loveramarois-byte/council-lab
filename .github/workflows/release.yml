@@ -117,6 +117,7 @@ jobs:
           frontend_runtime="$(curl -fsS http://127.0.0.1:3000/mobile-access/health | python -c 'import json,sys; print(json.load(sys.stdin)["runtime_id"])')"
           [[ "$backend_runtime" == macos:* ]]
           test "$backend_runtime" = "$frontend_runtime"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/api/update/status)" = "403"
           internal_token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/backend-access.token")"
           test "$(curl -fsS -H "X-Council-Internal-Token: $internal_token" http://127.0.0.1:8001/api/update/status | python -c 'import json,sys; print(json.load(sys.stdin)["current_version"])')" = "$version"
           curl -fsS http://127.0.0.1:3000/mobile-access/health | grep -q council-mobile-access
@@ -279,6 +280,8 @@ jobs:
           if ($backendHealth.runtime_id -eq $staleRuntime -or $backendHealth.runtime_id -ne $frontendHealth.runtime_id -or -not $backendHealth.runtime_id.StartsWith("windows:")) {
             throw "Launcher did not establish one matching packaged runtime identity"
           }
+          $unauthorizedUpdateStatus = (Invoke-WebRequest http://127.0.0.1:8001/api/update/status -SkipHttpErrorCheck).StatusCode
+          if ($unauthorizedUpdateStatus -ne 403) { throw "Protected updater status accepted a request without internal authentication" }
           $internalToken = (Get-Content -Raw (Join-Path $env:COUNCIL_LOG_DIR "backend-access.token")).Trim()
           $updateStatus = Invoke-RestMethod http://127.0.0.1:8001/api/update/status -Headers @{ "X-Council-Internal-Token" = $internalToken }
           if ($updateStatus.current_version -ne $version) { throw "Packaged updater reports the wrong current version" }

@@ -70,6 +70,20 @@ def test_release_workflow_requests_packaged_javascript_and_css():
     assert workflow.count("--notes-file artifacts/RELEASE_NOTES.md") == 2
 
 
+def test_release_smoke_preserves_internal_api_authentication_on_both_platforms():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    macos_job = workflow.split("\n  macos:\n", 1)[1].split("\n  windows:\n", 1)[0]
+    windows_job = workflow.split("\n  windows:\n", 1)[1].split("\n  publish:\n", 1)[0]
+
+    assert 'backend-access.token' in macos_job
+    assert 'http://127.0.0.1:8001/api/update/status)\" = \"403\"' in macos_job
+    assert 'curl -fsS -H "X-Council-Internal-Token: $internal_token" http://127.0.0.1:8001/api/update/status' in macos_job
+
+    assert 'backend-access.token' in windows_job
+    assert '$unauthorizedUpdateStatus -ne 403' in windows_job
+    assert 'Invoke-RestMethod http://127.0.0.1:8001/api/update/status -Headers @{ "X-Council-Internal-Token" = $internalToken }' in windows_job
+
+
 def test_release_notes_include_version_changes_and_installation(tmp_path):
     output = tmp_path / "RELEASE_NOTES.md"
     result = subprocess.run(
@@ -89,8 +103,55 @@ def test_release_notes_include_version_changes_and_installation(tmp_path):
     expected_body = changelog[section_body_start : section_end if section_end >= 0 else None].strip()
 
     assert f"Council v{version} 更新内容" in notes
+    assert expected_body
     assert expected_body in notes
     assert "## 安装与升级" in notes
+
+
+def test_release_notes_reject_an_empty_current_version_section(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+    (root / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [Unreleased]\n\n## [9.9.9] - 2026-07-31\n\n## [9.9.8] - 2026-07-30\n\n- Previous.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "RELEASE_NOTES.md"
+
+    result = subprocess.run(
+        [sys.executable, str(RELEASE_NOTES_SCRIPT), "--root", str(root), "--output", str(output)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "empty release section" in result.stderr
+    assert not output.exists()
+
+
+def test_release_notes_exclude_previous_version_content(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "VERSION").write_text("9.9.9\n", encoding="utf-8")
+    (root / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [9.9.9] - 2026-07-31\n\n- Current-only marker.\n\n"
+        "## [9.9.8] - 2026-07-30\n\n- Previous-only marker.\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "RELEASE_NOTES.md"
+
+    result = subprocess.run(
+        [sys.executable, str(RELEASE_NOTES_SCRIPT), "--root", str(root), "--output", str(output)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    notes = output.read_text(encoding="utf-8")
+    assert "Current-only marker." in notes
+    assert "Previous-only marker." not in notes
 
 
 def test_packaged_launchers_only_reuse_services_from_the_same_installation():

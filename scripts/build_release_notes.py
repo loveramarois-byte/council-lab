@@ -25,7 +25,10 @@ def release_section(changelog: str, version: str) -> str:
     match = pattern.search(changelog)
     if not match:
         raise ValueError(f"CHANGELOG.md does not contain a {version} release section")
-    return f"## Council v{version} 更新内容\n\n{match.group('body').strip()}\n"
+    body = match.group("body").strip()
+    if not body:
+        raise ValueError(f"CHANGELOG.md contains an empty release section for {version}")
+    return f"## Council v{version} 更新内容\n\n{body}\n"
 
 
 def main() -> int:
