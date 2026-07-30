@@ -18,6 +18,8 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 
 五席配置持久化在应用设置中。创建 Run 时，Provider 公共配置、协议、模型、reasoning effort、超时和输出上限被复制为 Run 快照；后续修改或删除 Provider 不会改写历史 Run。单席调用失败不会静默切换到 Mock 或其他 Provider。
 
+Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `structure_source` 记录来源：`agent_output`、`postprocessed`、`manual`、`legacy_default` 或 `none`。当前顺序审议没有可靠的结构化提取，因此新 Candidate 使用 `none` 且相关数组保持为空。旧版本遗留的通用模板会原样保留以兼容历史 Run，但统一标记为 `legacy_default`；界面、报告和评测不得将其描述为模型明确给出的理由、假设或风险。
+
 运行数据分成两个 SQLite 文件：
 
 - `council.sqlite3` 保存应用设置、完整公开 Run、五席快照、发言、最终答案、结果回访、用量和上下文快照。

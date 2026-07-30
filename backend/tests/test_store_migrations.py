@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -66,6 +67,50 @@ def test_failed_migration_restores_original_database(tmp_path, monkeypatch):
         assert restored.execute("SELECT id FROM runs").fetchone()[0] == "protected-run"
     finally:
         restored.close()
+
+
+def test_v3_migration_marks_existing_candidate_structure_as_legacy_default(tmp_path):
+    database = tmp_path / "council.sqlite3"
+    connection = sqlite3.connect(database)
+    for version in (1, 2, 3):
+        for statement in SCHEMA_MIGRATIONS[version]:
+            connection.execute(statement)
+        connection.execute(f"PRAGMA user_version={version}")
+    payload = {
+        "id": "legacy-candidate-run",
+        "candidates": [
+            {
+                "candidate_id": "candidate-analyst",
+                "answer": "旧席位正文",
+                "key_reasons": ["旧版通用理由"],
+                "model": "council-mock",
+                "provider": "Mock",
+            },
+            {
+                "candidate_id": "candidate-explicit",
+                "answer": "新版席位正文",
+                "structure_source": "agent_output",
+                "key_reasons": ["模型明确给出的理由"],
+                "model": "council-mock",
+                "provider": "Mock",
+            },
+        ],
+    }
+    connection.execute(
+        "INSERT INTO runs(id,payload,created_at) VALUES(?,?,?)",
+        ("legacy-candidate-run", json.dumps(payload, ensure_ascii=False), "2026-07-29T00:00:00+00:00"),
+    )
+    connection.commit()
+    connection.close()
+
+    store = Store(database)
+    migrated = json.loads(
+        store.conn.execute("SELECT payload FROM runs WHERE id='legacy-candidate-run'").fetchone()[0]
+    )
+    store.close()
+
+    assert migrated["candidates"][0]["structure_source"] == "legacy_default"
+    assert migrated["candidates"][1]["structure_source"] == "agent_output"
 
 
 async def test_idempotent_operation_survives_process_restart(tmp_path):

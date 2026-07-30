@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -22,7 +23,28 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE TABLE IF NOT EXISTS idempotent_operations (scope TEXT NOT NULL, operation_key TEXT NOT NULL, request_hash TEXT NOT NULL, status TEXT NOT NULL, response_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(scope, operation_key))",
         "CREATE INDEX IF NOT EXISTS idx_idempotent_operations_updated ON idempotent_operations(updated_at)",
     ),
+    4: (),
 }
+
+
+def _mark_candidate_structure_provenance(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("SELECT id, payload FROM runs").fetchall()
+    for run_id, raw_payload in rows:
+        payload = json.loads(raw_payload)
+        candidates = payload.get("candidates", []) if isinstance(payload, dict) else []
+        changed = False
+        for candidate in candidates:
+            if isinstance(candidate, dict) and "structure_source" not in candidate:
+                candidate["structure_source"] = "legacy_default"
+                changed = True
+        if changed:
+            connection.execute(
+                "UPDATE runs SET payload=? WHERE id=?",
+                (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), run_id),
+            )
+
+
+DATA_MIGRATIONS = {4: _mark_candidate_structure_provenance}
 
 
 def schema_version(connection: sqlite3.Connection) -> int:
@@ -42,10 +64,13 @@ def apply_migrations(connection: sqlite3.Connection) -> tuple[int, int]:
     try:
         for target in range(current + 1, SCHEMA_VERSION + 1):
             statements = SCHEMA_MIGRATIONS.get(target)
-            if not statements:
+            if statements is None:
                 raise RuntimeError(f"缺少数据库迁移 v{target}")
             for statement in statements:
                 connection.execute(statement)
+            data_migration = DATA_MIGRATIONS.get(target)
+            if data_migration:
+                data_migration(connection)
             connection.execute(f"PRAGMA user_version={target}")
         connection.commit()
     except Exception:

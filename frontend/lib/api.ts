@@ -159,7 +159,8 @@ export type Run = {
 export type Participant = { id: string; name: string; role: string; brief: string };
 export type DiscussionTurn = { id: string; speaker_type: "user" | "agent" | "system"; speaker_id: string; speaker_name: string; role_label: string; content: string; provider_id?: string | null; provider_name?: string | null; model?: string | null; round: number; created_at: string };
 
-export type Candidate = { candidate_id: string; anonymous_label?: string; answer: string; model: string; provider: string; status: string; usage: Usage; key_reasons: string[]; uncertainties: string[] };
+export type CandidateStructureSource = "agent_output" | "postprocessed" | "manual" | "legacy_default" | "none";
+export type Candidate = { candidate_id: string; anonymous_label?: string; answer: string; model: string; provider: string; status: string; usage: Usage; structure_source: CandidateStructureSource; key_reasons: string[]; assumptions: string[]; claims_to_verify: string[]; uncertainties: string[]; risks: string[]; proposed_sources: string[] };
 export type Critique = { candidate_id: string; severity: string; issue_type: string; issue: string; possible_counterexample: string; confidence: number };
 export type Verification = { task_id: string; claim: string; status: string; evidence_summary: string; sources: string[]; confidence: number; limitations: string[] };
 export type Revision = { candidate_id: string; revised_answer: string; accepted_critiques: string[]; remaining_uncertainties: string[] };

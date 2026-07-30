@@ -4,7 +4,16 @@ from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 
 CURRENT_ASSIGNMENT_SCHEMA_VERSION = 2
@@ -328,6 +337,7 @@ class DeliberationTemplate(BaseModel):
 class CandidateAnswer(BaseModel):
     candidate_id: str
     answer: str
+    structure_source: Literal["agent_output", "postprocessed", "manual", "legacy_default", "none"]
     key_reasons: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     claims_to_verify: list[str] = Field(default_factory=list)
@@ -339,6 +349,27 @@ class CandidateAnswer(BaseModel):
     usage: UsageSummary = Field(default_factory=UsageSummary)
     status: str = "completed"
     anonymous_label: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def mark_missing_structure_source_as_legacy(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "structure_source" not in value:
+            return {**value, "structure_source": "legacy_default"}
+        return value
+
+    @model_validator(mode="after")
+    def validate_structure_provenance(self) -> "CandidateAnswer":
+        attributed_fields = (
+            self.key_reasons,
+            self.assumptions,
+            self.claims_to_verify,
+            self.uncertainties,
+            self.risks,
+            self.proposed_sources,
+        )
+        if self.structure_source == "none" and any(attributed_fields):
+            raise ValueError("structure_source=none requires all structured Candidate fields to be empty")
+        return self
 
 
 class Critique(BaseModel):

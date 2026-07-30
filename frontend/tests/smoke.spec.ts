@@ -515,7 +515,15 @@ test("沉浸模式同步原生全屏、失败回退和手机端退出", async ({
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     analysis: null,
-    candidates: [], critiques: [], verifications: [], revisions: [], scores: [],
+    candidates: [{
+      candidate_id: "candidate-legacy",
+      answer: "第 1 席关于沉浸阅读的意见。",
+      structure_source: "legacy_default",
+      key_reasons: ["旧版通用理由，不是模型明确表达"],
+      assumptions: [], claims_to_verify: [], uncertainties: [], risks: [], proposed_sources: [],
+      model: "council-mock", provider: "本地演示", status: "completed",
+      usage: { model_calls: 1, tool_calls: 0, input_tokens: 0, output_tokens: 0, estimated_cost: null, duration_ms: 0 },
+    }], critiques: [], verifications: [], revisions: [], scores: [],
     final_decision: { final_answer: "保留议题、讨论正文和明确的退出入口，隐藏席位配置及导出等次要操作。" },
     usage: { model_calls: 5, tool_calls: 0, input_tokens: 900, output_tokens: 350, estimated_cost: null, duration_ms: 2000 },
     error: null,
@@ -547,6 +555,8 @@ test("沉浸模式同步原生全屏、失败回退和手机端退出", async ({
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/runs/immersive-fixture");
+  await expect(page.getByText("第 1 席关于沉浸阅读的意见。", { exact: true })).toBeVisible();
+  await expect(page.getByText("旧版通用理由，不是模型明确表达", { exact: true })).toHaveCount(0);
   const enter = page.getByRole("button", { name: "进入沉浸模式" });
   await expect(enter).toHaveAttribute("title", "进入沉浸模式");
   await expect(enter).toHaveAttribute("aria-pressed", "false");

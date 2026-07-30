@@ -109,15 +109,11 @@ def make_candidate(
     text: str,
     usage: UsageSummary,
 ) -> CandidateAnswer:
+    del question, role
     return CandidateAnswer(
         candidate_id=candidate_id,
         answer=text,
-        key_reasons=["将结论拆成可检查的条件和依据", "显式保留上下文不足带来的不确定性"],
-        assumptions=["问题中的关键术语按通常含义理解"],
-        claims_to_verify=[f"关于“{question[:100]}”的核心判断尚未经过外部事实核验"],
-        uncertainties=["当前版本只进行模型间公开审议，不执行外部事实核验"],
-        risks=["如果题目省略关键约束，结论需要重新评估"],
-        proposed_sources=[],
+        structure_source="none",
         model=model,
         provider=provider,
         usage=usage,
