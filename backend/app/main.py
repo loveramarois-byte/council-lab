@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -17,13 +17,15 @@ from .credentials import CredentialStoreError, delete_provider_secret, get_provi
 from .diagnostics import DIAGNOSTICS_SCHEMA_VERSION, build_diagnostic_bundle
 from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_webpage
 from .errors import install_error_handling
-from .idempotency import execute_idempotent_run_action
+from .idempotency import execute_idempotent_model_action, execute_idempotent_run_action
 from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
 from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
 from .provider_catalog import BUILTIN_PROVIDER_IDS, builtin_providers
 from .providers import build_backend, discover_ccswitch_models, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
+from .risk.schemas import ApprovalDecisionRequest, ApprovalRecord, ApprovalRequest, FactsUpdateRequest, HighRiskCreate, HighRiskRun, PrepareReviewRequest, PublicAuditEvent, RevokeApprovalRequest, RiskOverrideRequest, TransitionRequest
+from .risk.service import HighRiskService
 from .reports import run_html, run_markdown
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
@@ -34,7 +36,8 @@ store = Store(database_path())
 providers = restore_provider_profiles(store.load_providers())
 if not any(profile.is_active for profile in providers.values()):
     providers["ccswitch"].is_active = True
-orchestrator = Orchestrator(store, providers)
+high_risk_service = HighRiskService(store)
+orchestrator = Orchestrator(store, providers, high_risk_service)
 active_profile = next((profile for profile in providers.values() if profile.is_active and profile.default_model), None)
 if active_profile is None:
     for profile in providers.values():
@@ -53,6 +56,7 @@ assignments_need_persist = bool(
 async def lifespan(_: FastAPI):
     if assignments_need_persist:
         await store.save_assignment_config(assignments)
+    await high_risk_service.recover()
     await orchestrator.recover_incomplete_runs()
     try:
         yield
@@ -99,6 +103,23 @@ def offline_model_catalog(profile: ProviderProfile) -> tuple[list[str], str]:
     if catalog and catalog.model_source == "recommended":
         return list(catalog.available_models), "recommended"
     return [], "none"
+
+
+def require_actor(actor_id: str | None) -> str:
+    normalized = (actor_id or "").strip()
+    if not normalized or len(normalized) > 128:
+        from .errors import ApiError
+
+        raise ApiError(401, "HIGH_RISK_ACTOR_REQUIRED", "高风险操作需要明确的本地操作主体。")
+    return normalized
+
+
+def require_reviewer_secret(value: str | None) -> str:
+    if not value:
+        from .errors import ApiError
+
+        raise ApiError(401, "REVIEWER_CREDENTIAL_REQUIRED", "高风险审批需要服务端配置的复核凭据。")
+    return value
 
 
 @app.get("/api/health")
@@ -148,6 +169,7 @@ async def install_update(x_council_request: str | None = Header(default=None)):
 async def create_run(
     request: RunCreate,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if not legacy_workspace_enabled() and (request.project_id or request.source_ids):
@@ -160,20 +182,307 @@ async def create_run(
             raise HTTPException(404, "Provider 不存在")
         if not (request.model or profile.default_model):
             raise HTTPException(400, "请先在 Provider 设置中填写默认模型")
+    high_risk_actor = require_actor(actor_header) if request.high_risk else None
+    if request.high_risk and request.auto_summarize:
+        from .errors import ApiError
+
+        raise ApiError(400, "HIGH_RISK_AUTO_SUMMARY_FORBIDDEN", "高风险模式不能开启自动总结。")
+
     async def start_run():
-        return await orchestrator.start(request)
+        return await orchestrator.start(request, high_risk_actor=high_risk_actor)
 
     try:
         return await execute_idempotent_run_action(
             store,
             "runs:create",
             idempotency_key,
-            request.model_dump(mode="json"),
+            {**request.model_dump(mode="json"), "actor_id": high_risk_actor},
             start_run,
             response,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/high-risk/runs", response_model=HighRiskRun)
+async def create_high_risk_run(
+    payload: HighRiskCreate,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    run = await store.get_run(payload.run_id)
+    if not run:
+        from .errors import ApiError
+
+        raise ApiError(404, "RESOURCE_NOT_FOUND", "必须先创建对应的 Council 运行。")
+    if (
+        run.status != "queued"
+        or run.usage.model_calls > 0
+        or run.discussion_turns
+        or run.auto_summarize
+        or payload.run_id in orchestrator.live_runs
+        or payload.run_id in orchestrator.tasks
+    ):
+        from .errors import ApiError
+
+        raise ApiError(409, "HIGH_RISK_LINK_TOO_LATE", "高风险控制必须在任何模型调用开始前启用，且不能开启自动总结。")
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{payload.run_id}:create",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.create(payload, actor_id),
+        response,
+        HighRiskRun,
+        lambda _cached: high_risk_service.get(payload.run_id),
+    )
+
+
+@app.get("/api/high-risk/runs/{run_id}", response_model=HighRiskRun)
+async def get_high_risk_run(run_id: str):
+    return await high_risk_service.get(run_id)
+
+
+@app.get("/api/high-risk/runs/{run_id}/audit", response_model=list[PublicAuditEvent])
+async def get_high_risk_audit(run_id: str):
+    return await high_risk_service.audit(run_id)
+
+
+@app.put("/api/high-risk/runs/{run_id}/facts", response_model=HighRiskRun)
+async def update_high_risk_facts(
+    run_id: str,
+    payload: FactsUpdateRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:facts",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.replace_facts(run_id, payload.facts, actor_id),
+        response,
+        HighRiskRun,
+        lambda _cached: high_risk_service.get(run_id),
+    )
+
+
+@app.post("/api/high-risk/runs/{run_id}/transition", response_model=HighRiskRun)
+async def transition_high_risk_run(
+    run_id: str,
+    payload: TransitionRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:transition",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: transition_and_stop_model_work(run_id, payload, actor_id),
+        response,
+        HighRiskRun,
+        lambda _cached: high_risk_service.get(run_id),
+    )
+
+
+async def transition_and_stop_model_work(
+    run_id: str,
+    payload: TransitionRequest,
+    actor_id: str,
+) -> HighRiskRun:
+    case = await high_risk_service.transition(run_id, payload, actor_id)
+    if case.status in {"PROFESSIONAL_ESCALATION_REQUIRED", "ACTION_BLOCKED"}:
+        await orchestrator.cancel(run_id)
+    return case
+
+
+@app.post("/api/high-risk/runs/{run_id}/prepare-review", response_model=HighRiskRun)
+async def prepare_high_risk_review(
+    run_id: str,
+    payload: PrepareReviewRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:prepare-review",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.prepare_review(run_id, payload, actor_id),
+        response,
+        HighRiskRun,
+        lambda _cached: high_risk_service.get(run_id),
+    )
+
+
+@app.post("/api/high-risk/runs/{run_id}/approval-requests", response_model=ApprovalRecord)
+async def request_high_risk_approval(
+    run_id: str,
+    payload: ApprovalRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:approval-request",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.request_approval(
+            run_id, actor_id, expires_in=timedelta(minutes=payload.expires_in_minutes)
+        ),
+        response,
+        ApprovalRecord,
+        lambda cached: high_risk_service.get_approval(run_id, cached.approval_id),
+    )
+
+
+@app.get("/api/high-risk/runs/{run_id}/approvals/{approval_id}", response_model=ApprovalRecord)
+async def get_high_risk_approval(run_id: str, approval_id: str):
+    return await high_risk_service.get_approval(run_id, approval_id)
+
+
+@app.get("/api/high-risk/runs/{run_id}/approval", response_model=ApprovalRecord)
+async def get_latest_high_risk_approval(run_id: str):
+    return await high_risk_service.latest_approval(run_id)
+
+
+@app.post("/api/high-risk/runs/{run_id}/approvals/{approval_id}/decision", response_model=ApprovalRecord)
+async def decide_high_risk_approval(
+    run_id: str,
+    approval_id: str,
+    payload: ApprovalDecisionRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    reviewer_header: str | None = Header(default=None, alias="X-Council-Reviewer-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    reviewer_secret = require_reviewer_secret(reviewer_header)
+    await high_risk_service.authorize_reviewer_access(
+        run_id, actor_id, reviewer_secret, "approval_decision"
+    )
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:approval:{approval_id}:decision",
+        idempotency_key,
+        {"actor_id": actor_id, "approval_id": approval_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.decide_approval(
+            run_id, approval_id, payload, actor_id, reviewer_secret
+        ),
+        response,
+        ApprovalRecord,
+        lambda cached: high_risk_service.resolve_cached_approval_decision(
+            run_id, approval_id, payload, actor_id, reviewer_secret, cached
+        ),
+    )
+
+
+@app.post("/api/high-risk/runs/{run_id}/approvals/{approval_id}/revoke", response_model=ApprovalRecord)
+async def revoke_high_risk_approval(
+    run_id: str,
+    approval_id: str,
+    payload: RevokeApprovalRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:approval:{approval_id}:revoke",
+        idempotency_key,
+        {"actor_id": actor_id, "approval_id": approval_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.revoke_approval(run_id, approval_id, actor_id, payload.reason),
+        response,
+        ApprovalRecord,
+        lambda _cached: high_risk_service.get_approval(run_id, approval_id),
+    )
+
+
+@app.post("/api/high-risk/runs/{run_id}/complete", response_model=HighRiskRun)
+async def complete_high_risk_run(
+    run_id: str,
+    approval_id: str,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:complete",
+        idempotency_key,
+        {"actor_id": actor_id, "approval_id": approval_id},
+        lambda: high_risk_service.complete(run_id, approval_id, actor_id),
+        response,
+        HighRiskRun,
+        lambda _cached: high_risk_service.get(run_id),
+    )
+
+
+@app.post("/api/high-risk/runs/{run_id}/risk-override", response_model=HighRiskRun)
+async def override_high_risk_tier(
+    run_id: str,
+    payload: RiskOverrideRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    reviewer_header: str | None = Header(default=None, alias="X-Council-Reviewer-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    reviewer_secret = require_reviewer_secret(reviewer_header)
+    await high_risk_service.authorize_reviewer_access(
+        run_id, actor_id, reviewer_secret, "risk_override"
+    )
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:risk-override",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.override_risk(run_id, payload, actor_id, reviewer_secret),
+        response,
+        HighRiskRun,
+        lambda cached: high_risk_service.resolve_cached_risk_override(
+            run_id, payload, actor_id, reviewer_secret, cached
+        ),
+    )
+
+
+@app.post("/api/high-risk/runs/{run_id}/cancel", response_model=HighRiskRun)
+async def cancel_high_risk_run(
+    run_id: str,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+
+    async def cancel_both():
+        case = await high_risk_service.cancel(run_id, actor_id)
+        await orchestrator.cancel(run_id)
+        return case
+
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:cancel",
+        idempotency_key,
+        {"actor_id": actor_id},
+        cancel_both,
+        response,
+        HighRiskRun,
+        lambda _cached: high_risk_service.get(run_id),
+    )
 
 
 @app.get("/api/templates")
@@ -332,15 +641,16 @@ async def export_run(run_id: str, format: str = "markdown"):
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
+    high_risk = await high_risk_service.get(run_id) if await store.has_high_risk_control(run_id) else None
     if format == "markdown":
         return Response(
-            run_markdown(run),
+            run_markdown(run, high_risk),
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="council-{run.id[:8]}.md"'},
         )
     if format == "html":
         return Response(
-            run_html(run),
+            run_html(run, high_risk),
             media_type="text/html; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="council-{run.id[:8]}.html"'},
         )
@@ -351,8 +661,10 @@ async def export_run(run_id: str, format: str = "markdown"):
 async def cancel_run(
     run_id: str,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    await high_risk_service.assert_normal_action_allowed(run_id, "cancel", actor_header)
     return await execute_idempotent_run_action(
         store, f"runs:{run_id}:cancel", idempotency_key, {}, lambda: orchestrator.cancel(run_id), response
     )
@@ -363,8 +675,10 @@ async def advance_run(
     run_id: str,
     request: DiscussionAction,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    await high_risk_service.assert_normal_action_allowed(run_id, "advance", actor_header)
     return await execute_idempotent_run_action(
         store,
         f"runs:{run_id}:advance",
@@ -380,8 +694,10 @@ async def interject_run(
     run_id: str,
     request: DiscussionAction,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    await high_risk_service.assert_normal_action_allowed(run_id, "interject", actor_header)
     return await execute_idempotent_run_action(
         store,
         f"runs:{run_id}:interject",
@@ -396,8 +712,10 @@ async def interject_run(
 async def retry_run_turn(
     run_id: str,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    await high_risk_service.assert_normal_action_allowed(run_id, "retry-turn", actor_header)
     return await execute_idempotent_run_action(
         store, f"runs:{run_id}:retry-turn", idempotency_key, {}, lambda: orchestrator.retry_turn(run_id), response
     )
@@ -408,8 +726,10 @@ async def resume_run(
     run_id: str,
     limits: RunLimits,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    await high_risk_service.assert_normal_action_allowed(run_id, "resume", actor_header)
     try:
         return await execute_idempotent_run_action(
             store,
@@ -427,8 +747,10 @@ async def resume_run(
 async def summarize_run(
     run_id: str,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    await high_risk_service.assert_normal_action_allowed(run_id, "summarize", actor_header)
     return await execute_idempotent_run_action(
         store, f"runs:{run_id}:summarize", idempotency_key, {}, lambda: orchestrator.summarize(run_id), response
     )
@@ -438,8 +760,10 @@ async def summarize_run(
 async def rerun(
     run_id: str,
     response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    await high_risk_service.assert_normal_action_allowed(run_id, "rerun", actor_header)
     source = await store.get_run(run_id)
     if not source:
         raise HTTPException(404, "运行记录不存在")
@@ -501,7 +825,12 @@ async def rerun(
 
 
 @app.put("/api/runs/{run_id}/decision-review")
-async def save_decision_review(run_id: str, payload: DecisionReviewUpdate):
+async def save_decision_review(
+    run_id: str,
+    payload: DecisionReviewUpdate,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+):
+    await high_risk_service.assert_normal_action_allowed(run_id, "decision-review", actor_header)
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
@@ -514,7 +843,11 @@ async def save_decision_review(run_id: str, payload: DecisionReviewUpdate):
 
 
 @app.delete("/api/runs/{run_id}")
-async def delete_run(run_id: str):
+async def delete_run(
+    run_id: str,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+):
+    await high_risk_service.assert_normal_action_allowed(run_id, "delete", actor_header)
     if not await orchestrator.delete(run_id):
         raise HTTPException(404, "运行记录不存在")
     return {"deleted": True}

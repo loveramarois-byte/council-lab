@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, Sparkles, UserRound, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, DecisionReviewInput, Participant, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
+import { api, CouncilApiError, DecisionReviewInput, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, Participant, RequiredFact, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
@@ -31,16 +31,51 @@ export default function RunDetailPage() {
   const [reviewDraft, setReviewDraft] = useState<DecisionReviewInput>(EMPTY_REVIEW);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState("");
+  const [highRisk, setHighRisk] = useState<HighRiskRun | null>(null);
+  const [highRiskApproval, setHighRiskApproval] = useState<HighRiskApproval | null>(null);
+  const [highRiskAudit, setHighRiskAudit] = useState<HighRiskAuditEvent[]>([]);
+  const [highRiskOpen, setHighRiskOpen] = useState(false);
+  const [factDraft, setFactDraft] = useState<Record<string, string>>({});
+  const [reportDraft, setReportDraft] = useState("");
+  const [reviewerId, setReviewerId] = useState("");
+  const [reviewerKey, setReviewerKey] = useState("");
+  const [approvalReason, setApprovalReason] = useState("");
+  const [highRiskBusy, setHighRiskBusy] = useState(false);
+  const [highRiskError, setHighRiskError] = useState("");
+
+  const refreshHighRiskAudit = async (runId: string) => {
+    try { setHighRiskAudit(await api.highRiskAudit(runId)); }
+    catch {}
+  };
 
   const refresh = async (): Promise<void> => {
     if (!params.id) return;
     try {
-      setRun(await api.run(params.id));
+      const nextRun = await api.run(params.id);
+      setRun(nextRun);
+      try {
+        const nextHighRisk = await api.highRiskRun(params.id);
+        setHighRisk(nextHighRisk);
+        await refreshHighRiskAudit(params.id);
+        if (nextHighRisk.decision?.report) setReportDraft(nextHighRisk.decision.report);
+        setFactDraft((current) => Object.keys(current).length ? current : Object.fromEntries(nextHighRisk.required_facts.map((fact) => [fact.fact_id, fact.value || ""])));
+        try { setHighRiskApproval(await api.highRiskApproval(params.id)); }
+        catch (approvalError) {
+          if (approvalError instanceof CouncilApiError && approvalError.code === "APPROVAL_NOT_FOUND") setHighRiskApproval(null);
+          else throw approvalError;
+        }
+      } catch (highRiskLoadError) {
+        if (highRiskLoadError instanceof CouncilApiError && highRiskLoadError.code === "HIGH_RISK_RUN_NOT_FOUND") {
+          setHighRisk(null);
+          setHighRiskApproval(null);
+          setHighRiskAudit([]);
+        } else throw highRiskLoadError;
+      }
     } catch {
       router.push("/runs");
     }
   };
-  useEffect(() => { refresh(); }, [params.id]);
+  useEffect(() => { setHighRiskAudit([]); refresh(); }, [params.id]);
   useEffect(() => {
     if (!run || run.status !== "running") return;
     const unsubscribe = subscribeToRun(run.id, () => refresh(), undefined, refresh);
@@ -119,6 +154,80 @@ export default function RunDetailPage() {
     ? Math.max(0, Math.floor((now - Date.parse(run.updated_at)) / 1000))
     : 0;
   const showWaitingRecovery = currentRequestUsesCCSwitch && waitingSeconds >= 45 && !waitingNoticeDismissed;
+  const missingCriticalFacts = highRisk?.required_facts.filter((fact) => fact.required && fact.materiality === "critical" && !fact.value).length || 0;
+
+  const openHighRiskControl = () => {
+    if (highRisk && !reportDraft && run) {
+      setReportDraft(run.discussion_turns.map((turn) => `${turn.speaker_name}：${turn.content}`).join("\n\n"));
+    }
+    setHighRiskError("");
+    setHighRiskOpen(true);
+  };
+
+  const saveHighRiskFacts = async () => {
+    if (!highRisk || highRiskBusy) return;
+    setHighRiskBusy(true); setHighRiskError("");
+    try {
+      const facts: RequiredFact[] = highRisk.required_facts.map((fact) => ({ ...fact, value: factDraft[fact.fact_id]?.trim() || null }));
+      setHighRisk(await api.updateHighRiskFacts(highRisk.run_id, facts));
+      await refreshHighRiskAudit(highRisk.run_id);
+    } catch (err) { setHighRiskError(err instanceof Error ? err.message : "关键事实没有保存成功"); }
+    finally { setHighRiskBusy(false); }
+  };
+
+  const submitHighRiskReview = async () => {
+    if (!highRisk || highRiskBusy || !reportDraft.trim()) return;
+    setHighRiskBusy(true); setHighRiskError("");
+    try {
+      setHighRisk(await api.prepareHighRiskReview(highRisk.run_id, reportDraft.trim()));
+      const approval = await api.requestHighRiskApproval(highRisk.run_id);
+      setHighRiskApproval(approval);
+      setHighRisk(await api.highRiskRun(highRisk.run_id));
+      await refreshHighRiskAudit(highRisk.run_id);
+    } catch (err) { setHighRiskError(err instanceof Error ? err.message : "报告没有进入人工复核"); }
+    finally { setHighRiskBusy(false); }
+  };
+
+  const requestHighRiskApproval = async () => {
+    if (!highRisk || highRiskBusy) return;
+    setHighRiskBusy(true); setHighRiskError("");
+    try {
+      const approval = await api.requestHighRiskApproval(highRisk.run_id);
+      setHighRiskApproval(approval);
+      setHighRisk(await api.highRiskRun(highRisk.run_id));
+      await refreshHighRiskAudit(highRisk.run_id);
+    } catch (err) { setHighRiskError(err instanceof Error ? err.message : "审批申请没有创建成功"); }
+    finally { setHighRiskBusy(false); }
+  };
+
+  const decideHighRisk = async (decision: "approved" | "rejected") => {
+    if (!highRisk || !highRiskApproval || highRiskBusy || !reviewerId.trim() || !reviewerKey || !approvalReason.trim()) return;
+    setHighRiskBusy(true); setHighRiskError("");
+    try {
+      setHighRiskApproval(await api.decideHighRiskApproval(highRisk.run_id, highRiskApproval.approval_id, reviewerId.trim(), reviewerKey, decision, approvalReason.trim()));
+      setReviewerKey("");
+      setHighRisk(await api.highRiskRun(highRisk.run_id));
+      await refreshHighRiskAudit(highRisk.run_id);
+    } catch (err) {
+      setHighRiskError(err instanceof Error ? err.message : "审批决定没有保存成功");
+      await refresh();
+    }
+    finally { setHighRiskBusy(false); }
+  };
+
+  const completeHighRisk = async () => {
+    if (!highRisk || !highRiskApproval || highRiskBusy) return;
+    setHighRiskBusy(true); setHighRiskError("");
+    try {
+      setHighRisk(await api.completeHighRiskRun(highRisk.run_id, highRiskApproval.approval_id));
+      await refreshHighRiskAudit(highRisk.run_id);
+    }
+    catch (err) {
+      setHighRiskError(err instanceof Error ? err.message : "高风险报告没有完成");
+      await refresh();
+    }
+    finally { setHighRiskBusy(false); }
+  };
 
   const openDecisionReview = () => {
     if (!run?.final_decision) return;
@@ -232,13 +341,13 @@ export default function RunDetailPage() {
   return <div ref={pageRef} className={`council-page ${immersive ? "immersive" : ""}`}>
     <header className="council-topbar">
       <Link href="/" className="back-link"><ArrowLeft size={15} />退出圆桌</Link>
-      <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {run.mode === "quick" ? "引导" : run.mode === "rigorous" ? "深挖" : "圆桌"}模式</div>
-      <div className="council-top-actions"><button ref={immersiveTriggerRef} className="icon-button immersive-enter" type="button" aria-label="进入沉浸模式" title="进入沉浸模式" aria-pressed={immersive} onClick={enterImmersive}><Maximize2 size={16} /></button><a className="icon-button" href={runExportUrl(run.id, "markdown")} download title="下载 Markdown 报告" aria-label="下载 Markdown 报告"><Download size={15} /></a><a className="icon-button" href={runExportUrl(run.id, "html")} download title="下载 HTML 报告" aria-label="下载 HTML 报告"><FileCheck2 size={15} /></a><button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => api.cancelRun(run.id).then(setRun)} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button></div>
+      <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {highRisk ? "高风险决策支持" : run.mode === "quick" ? "引导模式" : run.mode === "rigorous" ? "深挖模式" : "圆桌模式"}</div>
+      <div className="council-top-actions"><button ref={immersiveTriggerRef} className="icon-button immersive-enter" type="button" aria-label="进入沉浸模式" title="进入沉浸模式" aria-pressed={immersive} onClick={enterImmersive}><Maximize2 size={16} /></button><a className="icon-button" href={runExportUrl(run.id, "markdown")} download title="下载 Markdown 报告" aria-label="下载 Markdown 报告"><Download size={15} /></a><a className="icon-button" href={runExportUrl(run.id, "html")} download title="下载 HTML 报告" aria-label="下载 HTML 报告"><FileCheck2 size={15} /></a><button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => { if (highRisk) void api.cancelHighRiskRun(run.id).then((value) => { setHighRisk(value); void refresh(); }); else void api.cancelRun(run.id).then(setRun); }} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button></div>
     </header>
 
     {immersive && <button ref={immersiveExitRef} className="immersive-exit icon-button" type="button" aria-label="退出沉浸模式" title="退出沉浸模式" aria-pressed={true} onClick={exitImmersive}><Minimize2 size={17} /></button>}
 
-    <main className="council-stage">
+    <main className={`council-stage ${highRisk ? "has-high-risk" : ""}`}>
       <section className="council-question">
         <span>本次议题</span>
         <h1>{run.question}</h1>
@@ -254,6 +363,13 @@ export default function RunDetailPage() {
           </div>
         </div>
       </section>
+
+      {highRisk && <section className={`high-risk-gate status-${highRisk.status.toLowerCase()}`} aria-label="高风险决策支持状态">
+        <ShieldAlert size={17} />
+        <div><strong>{highRiskStatusLabel(highRisk.status)}</strong><span>{highRisk.risk_assessment.risk_tier.toUpperCase()} · {highRisk.risk_assessment.detected_domains.map(domainLabel).join(" / ")} · {missingCriticalFacts ? `${missingCriticalFacts} 项关键事实缺失` : "关键事实已填写"}</span></div>
+        <LockKeyhole size={14} /><span>外部动作禁止</span>
+        <button type="button" className="quiet-button" onClick={openHighRiskControl}>打开控制面</button>
+      </section>}
 
       <section className={`council-dialogue ${run.source_snapshots?.length ? "with-sources" : ""}`}>
         <div className="dialogue-header">
@@ -302,7 +418,8 @@ export default function RunDetailPage() {
             <span className="debate-progress">{debateActive ? `已完成 ${agentTurnCount} / 4 席` : "四席完成，等待你的确认"}</span>
             <span />
             <button className="quiet-button" disabled={!canWrite || busy || !draft.trim()} onClick={() => act(selectedParticipant ? "question" : "interject")}>{busy ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}{awaitingFinal ? "加入最终补充" : selectedParticipant ? `问${selectedParticipant.name}` : "加入讨论"}</button>
-            {awaitingFinal && <button className="send-button" disabled={busy} onClick={finalize}>{busy ? <LoaderCircle className="spin" size={15} /> : <FileCheck2 size={15} />}生成最终答案</button>}
+            {awaitingFinal && !highRisk && <button className="send-button" disabled={busy} onClick={finalize}>{busy ? <LoaderCircle className="spin" size={15} /> : <FileCheck2 size={15} />}生成最终答案</button>}
+            {awaitingFinal && highRisk && <button className="send-button" disabled={highRiskBusy} onClick={openHighRiskControl}><LockKeyhole size={15} />进入人工复核</button>}
           </div>
           {(error || run.error) && <p className="discussion-error">{error || run.error}</p>}
         </div>}
@@ -310,6 +427,35 @@ export default function RunDetailPage() {
         {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button><span /><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
       </section>
     </main>
+    {highRisk && highRiskOpen && <div className="high-risk-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setHighRiskOpen(false); }}>
+      <section className="high-risk-dialog" role="dialog" aria-modal="true" aria-labelledby="high-risk-title">
+        <header><div><span>HIGH-RISK CONTROL</span><h2 id="high-risk-title">高风险决策支持</h2><p>{highRiskStatusLabel(highRisk.status)} · 版本 {highRisk.version}</p></div><button className="icon-button" onClick={() => setHighRiskOpen(false)} aria-label="关闭高风险控制面"><X size={16} /></button></header>
+        <div className="high-risk-scroll">
+          <section className="risk-assessment-line"><ShieldAlert size={17} /><div><strong>{highRisk.risk_assessment.risk_tier.toUpperCase()}</strong><span>{highRisk.risk_assessment.reasons.join("；")}</span></div></section>
+          <section className="required-facts-form"><header><div><strong>关键事实</strong><span>{missingCriticalFacts ? `${missingCriticalFacts} 项缺失，系统保持阻断` : "已达到事实门禁"}</span></div><button className="quiet-button" onClick={saveHighRiskFacts} disabled={highRiskBusy || ["REJECTED", "ACTION_BLOCKED", "COMPLETED", "CANCELLED"].includes(highRisk.status)}>{highRiskBusy ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />}保存事实</button></header>{highRisk.required_facts.map((fact) => <label key={fact.fact_id}><span><strong>{fact.name}</strong><small>{fact.materiality === "critical" ? "关键" : fact.materiality}</small></span><p>{fact.description}</p><textarea rows={2} maxLength={4000} value={factDraft[fact.fact_id] || ""} onChange={(event) => setFactDraft({ ...factDraft, [fact.fact_id]: event.target.value })} disabled={["REJECTED", "ACTION_BLOCKED", "COMPLETED", "CANCELLED"].includes(highRisk.status)} /></label>)}</section>
+
+          {highRisk.status === "EVIDENCE_REQUIRED" && <section className="review-report-form"><header><strong>非约束性决策支持报告</strong><span>正文保存在本地记录，安全审计只保存 SHA-256。</span></header><textarea aria-label="高风险决策支持报告" rows={7} maxLength={50000} value={reportDraft} onChange={(event) => setReportDraft(event.target.value)} /><button className="send-button" onClick={submitHighRiskReview} disabled={highRiskBusy || !reportDraft.trim()}>{highRiskBusy ? <LoaderCircle className="spin" size={15} /> : <ClipboardCheck size={15} />}提交并请求人工审批</button></section>}
+
+          {highRisk.status === "APPROVAL_REQUIRED" && highRiskApproval?.status === "pending" && <section className="approval-form"><header><strong>独立复核</strong><span>审批 {highRiskApproval.approval_id.slice(0, 8)} · {new Date(highRiskApproval.expires_at).toLocaleString()}</span></header><div><label><span>复核人 ID</span><input value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} maxLength={128} autoComplete="off" /></label><label><span>服务端复核凭据</span><input type="password" value={reviewerKey} onChange={(event) => setReviewerKey(event.target.value)} autoComplete="off" /></label></div><label><span>审批理由</span><textarea rows={2} maxLength={1000} value={approvalReason} onChange={(event) => setApprovalReason(event.target.value)} /></label><footer><button className="quiet-button danger" onClick={() => decideHighRisk("rejected")} disabled={highRiskBusy || !reviewerId.trim() || !reviewerKey || !approvalReason.trim()}>拒绝</button><button className="send-button" onClick={() => decideHighRisk("approved")} disabled={highRiskBusy || !reviewerId.trim() || !reviewerKey || !approvalReason.trim()}><LockKeyhole size={15} />批准报告</button></footer></section>}
+          {["APPROVAL_REQUIRED", "APPROVED"].includes(highRisk.status) && highRiskApproval && ["expired", "revoked"].includes(highRiskApproval.status) && <section className="approval-result blocked"><AlertTriangle size={20} /><div><strong>原审批已{highRiskApproval.status === "expired" ? "过期" : "撤销"}</strong><span>报告正文和绑定哈希未改变，可以重新申请独立审批。</span></div><button className="send-button" onClick={requestHighRiskApproval} disabled={highRiskBusy}>重新申请审批</button></section>}
+
+          {highRisk.status === "APPROVED" && highRiskApproval?.status === "approved" && <section className="approval-result approved"><CheckCircle2 size={20} /><div><strong>内容绑定审批已通过</strong><span>审批不会执行外部动作；完成后仅固化本地决策支持状态。</span></div><button className="send-button" onClick={completeHighRisk} disabled={highRiskBusy}>完成记录</button></section>}
+          {highRisk.status === "COMPLETED" && <section className="approval-result approved"><CheckCircle2 size={20} /><div><strong>高风险记录已完成</strong><span>报告、动作草案与审批哈希已绑定，审计记录保持追加写入。</span></div></section>}
+          {highRisk.status === "PROFESSIONAL_ESCALATION_REQUIRED" && <section className="approval-result blocked"><AlertTriangle size={20} /><div><strong>需要专业人员接管</strong><span>系统不会形成最终建议或执行任何动作。</span></div></section>}
+          {["REJECTED", "ACTION_BLOCKED", "CANCELLED"].includes(highRisk.status) && <section className="approval-result blocked"><AlertTriangle size={20} /><div><strong>{highRiskStatusLabel(highRisk.status)}</strong><span>当前记录不能继续进入审批或执行路径。</span></div></section>}
+          <section className="high-risk-audit" aria-label="高风险审计时间线">
+            <header><strong>审计时间线</strong><span>仅显示脱敏状态元数据</span></header>
+            {highRiskAudit.length ? <ol>{highRiskAudit.map((event) => <li key={event.event_id}>
+              <span className="audit-sequence">#{event.sequence}</span>
+              <div><strong>{auditEventLabel(event.event_type)}</strong><span>{auditTransitionLabel(event.previous_status, event.new_status)} · {auditActorLabel(event.actor_type)}</span></div>
+              <time dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleString()}</time>
+            </li>)}</ol> : <p>暂无可显示的审计事件</p>}
+          </section>
+          {highRiskError && <p className="high-risk-error" role="alert">{highRiskError}</p>}
+        </div>
+        <footer><LockKeyhole size={14} /><span>非约束性决策支持 · 关键事实缺失时停止 · P0 不执行外部动作</span></footer>
+      </section>
+    </div>}
     {reviewOpen && <div className="decision-review-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReviewOpen(false); }}>
       <section className="decision-review-dialog" role="dialog" aria-modal="true" aria-labelledby="decision-review-title">
         <header><div><span>DECISION FOLLOW-UP</span><h2 id="decision-review-title">结果回访</h2><p>把当时的判断和后来发生的事放在一起。</p></div><button className="icon-button" onClick={() => setReviewOpen(false)} aria-label="关闭结果回访"><X size={16} /></button></header>
@@ -328,6 +474,65 @@ export default function RunDetailPage() {
       </section>
     </div>}
   </div>;
+}
+
+function highRiskStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    DRAFT: "草案",
+    RISK_ASSESSMENT_REQUIRED: "等待风险评估",
+    MORE_INFORMATION_REQUIRED: "需要补充关键信息",
+    EVIDENCE_REQUIRED: "等待报告与证据复核",
+    INDEPENDENT_ANALYSIS: "独立分析",
+    CROSS_EXAMINATION: "交叉审查",
+    PROFESSIONAL_ESCALATION_REQUIRED: "需要专业人员接管",
+    READY_FOR_HUMAN_REVIEW: "可以提交人工复核",
+    APPROVAL_REQUIRED: "等待独立人工审批",
+    APPROVED: "已批准，等待固化",
+    REJECTED: "审批已拒绝",
+    ACTION_BLOCKED: "动作已阻止",
+    COMPLETED: "高风险记录已完成",
+    CANCELLED: "高风险记录已取消",
+  };
+  return labels[status] || status.replaceAll("_", " ");
+}
+
+function domainLabel(domain: string) {
+  return ({ medical: "医疗", legal: "法律", investment: "投资", compliance: "合规", production_incident: "生产事故", general_high_risk: "通用高风险" } as Record<string, string>)[domain] || domain;
+}
+
+function auditEventLabel(eventType: string) {
+  return ({
+    high_risk_created: "创建高风险记录",
+    risk_assessed: "完成风险评估",
+    required_facts_evaluated: "检查关键事实",
+    required_facts_updated: "更新关键事实",
+    review_prepared: "提交决策支持报告",
+    approval_requested: "请求独立审批",
+    approval_decided: "记录审批决定",
+    approval_expired: "审批已过期",
+    approval_revoked: "审批已撤销",
+    high_risk_completed: "完成高风险记录",
+    high_risk_cancelled: "取消高风险记录",
+    status_transitioned: "更新控制状态",
+    transition_denied: "拒绝状态变更",
+    normal_route_denied: "阻止普通流程绕过",
+    approval_decision_denied: "拒绝无效审批",
+    reviewer_authorization_denied: "拒绝未授权复核",
+    persistence_failure_blocked: "持久化失败并阻断",
+    risk_overridden: "人工调整风险等级",
+  } as Record<string, string>)[eventType] || eventType.replaceAll("_", " ");
+}
+
+function auditTransitionLabel(previousStatus?: string | null, newStatus?: string | null) {
+  if (!previousStatus && !newStatus) return "记录事件";
+  if (previousStatus === newStatus) return previousStatus ? highRiskStatusLabel(previousStatus) : "状态未变化";
+  const previous = previousStatus ? highRiskStatusLabel(previousStatus) : "无状态";
+  const next = newStatus ? highRiskStatusLabel(newStatus) : "无状态";
+  return `${previous} -> ${next}`;
+}
+
+function auditActorLabel(actorType: HighRiskAuditEvent["actor_type"]) {
+  return ({ user: "用户操作", reviewer: "独立复核", system: "系统控制", model: "模型记录", tool: "工具记录" } as Record<HighRiskAuditEvent["actor_type"], string>)[actorType];
 }
 
 function Seat({ participant, assignment, index, selected, status, onSelect }: { participant: Participant; assignment?: ResolvedAssignment; index: number; selected: boolean; status: "queued" | "active" | "completed" | "failed"; onSelect: () => void }) {

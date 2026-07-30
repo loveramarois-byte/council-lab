@@ -30,6 +30,8 @@ from .models import (
     utc_now,
 )
 from .providers import ModelBackend, build_backend
+from .risk.schemas import HighRiskCreate
+from .risk.service import HighRiskService
 from .store import Store
 from .templates import get_template
 
@@ -129,9 +131,15 @@ class Orchestrator:
         {"id": "observer", "name": "观澜", "role": "观察者", "brief": "连接各方观点、指出分歧，但不提前裁决"},
     ]
 
-    def __init__(self, store: Store, providers: dict[str, Any]):
+    def __init__(
+        self,
+        store: Store,
+        providers: dict[str, Any],
+        high_risk_service: HighRiskService | None = None,
+    ):
         self.store = store
         self.providers = providers
+        self.high_risk_service = high_risk_service
         self.tasks: dict[str, asyncio.Task[Any]] = {}
         self.cancel_events: dict[str, asyncio.Event] = {}
         self.run_locks: dict[str, asyncio.Lock] = {}
@@ -228,6 +236,7 @@ class Orchestrator:
         self,
         request: RunCreate,
         *,
+        high_risk_actor: str | None = None,
         frozen_sources: list[RunSourceSnapshot] | None = None,
         frozen_project_name: str = "",
         frozen_project_context: str | None = None,
@@ -313,7 +322,22 @@ class Orchestrator:
             template_name=template.name,
             source_snapshots=source_snapshots,
         )
-        await self.store.save_run(run)
+        if request.high_risk:
+            if not self.high_risk_service or not high_risk_actor:
+                raise ValueError("高风险运行需要服务端控制服务和明确的操作主体")
+            await self.high_risk_service.create(
+                HighRiskCreate(run_id=run_id, question=request.question),
+                high_risk_actor,
+            )
+        try:
+            await self.store.save_run(run)
+        except Exception:
+            if request.high_risk and self.high_risk_service:
+                try:
+                    await self.high_risk_service.block_due_persistence_failure(run_id)
+                except Exception:
+                    pass
+            raise
         self.live_runs[run_id] = run
         await self.store.seed_events(run_id)
         cancel = asyncio.Event()
@@ -527,6 +551,8 @@ class Orchestrator:
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
                 raise asyncio.TimeoutError
+            if self.high_risk_service:
+                await self.high_risk_service.assert_model_call_allowed(run.id)
             self._check_call_limits(run)
             attempt_profile = assignment.provider_snapshot.model_copy(update={"reasoning_effort": effort})
             backend_key = f"{assignment.role}:{assignment.provider_id}:{assignment.model}:{effort}"
@@ -989,6 +1015,8 @@ class Orchestrator:
     async def recover_incomplete_runs(self) -> list[str]:
         recovered: list[str] = []
         for run in await self.store.list_runs():
+            if await self.store.has_high_risk_control(run.id):
+                continue
             if run.status not in {"queued", "running"}:
                 continue
             self.live_runs[run.id] = run

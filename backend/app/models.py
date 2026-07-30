@@ -175,6 +175,7 @@ class RunCreate(BaseModel):
     assignment_config: AgentAssignmentsPayload | None = None
     use_saved_assignments: bool = False
     auto_summarize: bool = False
+    high_risk: bool = False
     project_id: str | None = None
     source_ids: list[str] | None = Field(default=None, max_length=20)
     include_project_history: bool = True

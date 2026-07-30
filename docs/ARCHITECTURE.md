@@ -9,6 +9,7 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 | Area | Status | Boundary |
 | --- | --- | --- |
 | Deliberation workflow | Current | 四席顺序讨论、用户确认、第五席总结、恢复与导出均为默认产品路径。 |
+| High-risk control plane | P0, non-binding | 独立状态机、关键事实门禁、人工审批和追加式审计已实现；不执行外部动作，也没有证据核验或专业身份系统。 |
 | Run event replay | Current | 事件写入业务库并使用单调序号；SSE 支持 `Last-Event-ID` 重放和独立多订阅者。 |
 | Mobile access | Current, local network only | 使用短期签名会话、失败限速、同源校验和手工撤销；普通 HTTP 仍只适用于可信私有网络。 |
 | Diagnostics | Current, metadata only | 用户手工导出的 ZIP 只含白名单运行元数据，不含对话、日志正文、凭据、令牌、模型名或主机路径。 |
@@ -26,11 +27,17 @@ Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `stru
 - `council.sqlite3` 的 `run_events` 表保存实时事件及单调序号；刷新、断线或多标签订阅不会竞争消费同一个内存队列。
 - `council.checkpoints.sqlite3` 由 LangGraph SQLite saver 保存节点状态。
 
+高风险控制面与普通 `RunRecord` 分离。`high_risk_runs` 保存风险判断、关键事实、决策摘要哈希和乐观锁版本；`high_risk_approvals` 保存内容绑定、职责分离、有效期、撤销和一次性消费状态；`high_risk_audit_events` 使用单调序号和 SQLite 触发器实现追加写入。安全敏感更新使用 `BEGIN IMMEDIATE`，状态与审计在同一事务提交，审计失败会回滚状态。审计只允许有界标量、哈希和稳定 ID，不保存问题、报告、动作正文或复核密钥。
+
+高风险 Run 的控制记录在普通 Run 入库和模型任务启动前创建，消除崩溃后留下无保护 queued Run 的窗口。普通恢复器跳过所有已关联高风险控制记录；审批过期恢复只更新审批状态并追加审计，不推进工作流或调用模型。普通总结、重试、续跑、重跑、删除、决策回访和取消入口经过统一门禁；高风险取消使用专用端点。P0 不包含 Tool executor，因此 `APPROVED` 只允许把绑定报告标为 `COMPLETED`，不会执行任何外部副作用。
+
+复核者 allowlist 来自 `COUNCIL_HIGH_RISK_REVIEWERS=reviewer_id:secret,...`。actor header 是本地归属标识，不是通用账户或登录系统；审批服务仍会验证服务端 secret、请求者绑定和职责分离。手机配对会话也不是复核身份，客户端按钮不构成授权。
+
 数据库不存放在源码树。默认使用平台用户数据目录，macOS 为 `~/Library/Application Support/Council/data/`，Linux 为 `${XDG_DATA_HOME:-~/.local/share}/council/data/`，Windows 为 `%LOCALAPPDATA%\\Council\\data\\`；测试和部署可用 `COUNCIL_DATA_DIR` 覆盖。
 
 业务记录和 checkpoint 分库，避免两个写入器争用同一个 SQLite 写锁。启动时扫描 `queued` 与 `running` Run：存在有效 checkpoint 且凭据可用时，工作流使用同一 `thread_id` 续跑；业务库已完整保存的席位会被跳过，避免 checkpoint 落后造成重复计费。缺少 checkpoint 或凭据时不回退 Mock，而是进入带原因的可恢复失败状态。`awaiting_final_input` 会保持等待，不会在重启后自行总结。
 
-业务库使用 `PRAGMA user_version` 执行顺序迁移。打开已有且版本较旧的库时，先通过 SQLite backup API 在同一数据目录的 `backups/` 创建一致性副本，再在事务中逐版本升级；失败时关闭连接、移除 WAL/SHM sidecar 并恢复副本。只保留最近 5 份 schema 迁移备份，诊断数据同时报告当前/支持版本和备份数量。该机制用于升级回滚，不替代用户自己的异机备份。
+业务库使用 `PRAGMA user_version` 执行顺序迁移，v0.9.0 的当前 schema 为 v5。打开已有且版本较旧的库时，先通过 SQLite backup API 在同一数据目录的 `backups/` 创建一致性副本，再在事务中逐版本升级；失败时关闭连接、移除 WAL/SHM sidecar 并恢复副本。只保留最近 5 份 schema 迁移备份，诊断数据同时报告当前/支持版本和备份数量。该机制用于升级回滚，不替代用户自己的异机备份。旧版本不理解 v5；需要降级时必须先停止 Council，再恢复升级前备份及其匹配的 checkpoint 文件。
 
 上下文管理将不可变的完整公开日志与每次模型调用使用的工作上下文分离。工作上下文始终优先保留原始问题、最新用户插话和最近发言；超出模式预算时，从较早内容中确定性选取最旧、中段和较新锚点并裁剪。该过程不调用模型，也不是语义摘要。默认单次上下文预算为 Quick 1800、Standard 4000、Rigorous 7000 Token。OpenAI 和 CC Switch 中已知的 OpenAI-compatible 模型使用匹配的 `tiktoken`；未知模型使用预留余量的保守 UTF-8 估算。Run 快照和界面会记录“精确”或“估算”，不会把 fallback 冒充 Provider usage。原始发言不会因裁剪而从 Run 中删除。
 

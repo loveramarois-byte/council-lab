@@ -51,6 +51,35 @@ export type AgentAssignment = {
 export type AgentAssignmentsConfig = { schema_version: number; seats: AgentAssignment[]; finalizer: AgentAssignment };
 export type ResolvedAssignment = AgentAssignment & { provider_name: string };
 export type RunLimits = { max_model_calls: number; max_tokens: number; timeout_seconds: number };
+export type RiskTier = "normal" | "elevated" | "high" | "critical";
+export type HighRiskStatus = "DRAFT" | "RISK_ASSESSMENT_REQUIRED" | "MORE_INFORMATION_REQUIRED" | "EVIDENCE_REQUIRED" | "INDEPENDENT_ANALYSIS" | "CROSS_EXAMINATION" | "PROFESSIONAL_ESCALATION_REQUIRED" | "READY_FOR_HUMAN_REVIEW" | "APPROVAL_REQUIRED" | "APPROVED" | "REJECTED" | "ACTION_BLOCKED" | "COMPLETED" | "CANCELLED";
+export type RequiredFact = { fact_id: string; name: string; description: string; required: boolean; value?: string | null; source: "user" | "document" | "tool" | "system" | "unknown"; verified: boolean; materiality: "low" | "medium" | "high" | "critical" };
+export type HighRiskRun = {
+  run_id: string;
+  status: HighRiskStatus;
+  version: number;
+  risk_assessment: { run_id: string; risk_tier: RiskTier; original_risk_tier: RiskTier; detected_domains: string[]; reasons: string[]; classifier_version: string; assessed_at: string; manually_overridden: boolean; override_actor_id?: string | null; override_reason?: string | null };
+  required_facts: RequiredFact[];
+  decision?: { status: string; report: string; report_hash: string; quality_signals: { evidence_coverage: string; source_quality: string; source_freshness: string; agent_disagreement: string; critical_information_missing: boolean }; disclaimer: string } | null;
+  requested_action_type?: string | null;
+  requested_action_payload_hash?: string | null;
+  report_hash?: string | null;
+  requested_by: string;
+  created_at: string;
+  updated_at: string;
+};
+export type HighRiskApproval = { approval_id: string; run_id: string; requested_action_type: string; requested_action_payload_hash: string; decision_report_hash: string; requested_at: string; requested_by: string; status: "pending" | "approved" | "rejected" | "expired" | "revoked"; decided_at?: string | null; decided_by?: string | null; decision_reason?: string | null; expires_at: string; consumed_at?: string | null };
+export type HighRiskAuditEvent = {
+  event_id: string;
+  sequence: number;
+  run_id: string;
+  event_type: string;
+  occurred_at: string;
+  actor_type: "user" | "reviewer" | "system" | "model" | "tool";
+  previous_status?: string | null;
+  new_status?: string | null;
+};
+export const LOCAL_HIGH_RISK_ACTOR = "local-requester";
 export type Project = {
   id: string;
   name: string;
@@ -259,7 +288,7 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   cancelRun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
@@ -271,6 +300,15 @@ export const api = {
   rerun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/rerun`, { method: "POST" }),
   saveDecisionReview: (id: string, body: DecisionReviewInput) => request<Run>(`/api/runs/${id}/decision-review`, { method: "PUT", body: JSON.stringify(body) }),
   deleteRun: (id: string) => request<{ deleted: boolean }>(`/api/runs/${id}`, { method: "DELETE" }),
+  highRiskRun: (id: string) => request<HighRiskRun>(`/api/high-risk/runs/${id}`),
+  highRiskApproval: (id: string) => request<HighRiskApproval>(`/api/high-risk/runs/${id}/approval`),
+  highRiskAudit: (id: string) => request<HighRiskAuditEvent[]>(`/api/high-risk/runs/${id}/audit`),
+  updateHighRiskFacts: (id: string, facts: RequiredFact[]) => idempotentRequest<HighRiskRun>(`/api/high-risk/runs/${id}/facts`, { method: "PUT", headers: { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR }, body: JSON.stringify({ facts }) }),
+  prepareHighRiskReview: (id: string, report: string) => idempotentRequest<HighRiskRun>(`/api/high-risk/runs/${id}/prepare-review`, { method: "POST", headers: { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR }, body: JSON.stringify({ report, requested_action_type: "decision_support_report", requested_action_payload: { effect: "read_only", delivery: "local_report" }, quality_signals: { evidence_coverage: "partial", source_quality: "unknown", source_freshness: "unknown", agent_disagreement: "material", critical_information_missing: false } }) }),
+  requestHighRiskApproval: (id: string) => idempotentRequest<HighRiskApproval>(`/api/high-risk/runs/${id}/approval-requests`, { method: "POST", headers: { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR }, body: JSON.stringify({ expires_in_minutes: 30 }) }),
+  decideHighRiskApproval: (id: string, approvalId: string, reviewerId: string, reviewerKey: string, decision: "approved" | "rejected", reason: string) => idempotentRequest<HighRiskApproval>(`/api/high-risk/runs/${id}/approvals/${approvalId}/decision`, { method: "POST", headers: { "X-Council-Actor": reviewerId, "X-Council-Reviewer-Key": reviewerKey }, body: JSON.stringify({ decision, reason }) }),
+  completeHighRiskRun: (id: string, approvalId: string) => idempotentRequest<HighRiskRun>(`/api/high-risk/runs/${id}/complete?approval_id=${encodeURIComponent(approvalId)}`, { method: "POST", headers: { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } }),
+  cancelHighRiskRun: (id: string) => idempotentRequest<HighRiskRun>(`/api/high-risk/runs/${id}/cancel`, { method: "POST", headers: { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } }),
 };
 
 export const runExportUrl = (id: string, format: "markdown" | "html") => `${API_URL}/api/runs/${id}/export?format=${format}`;

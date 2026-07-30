@@ -246,6 +246,11 @@ class Store:
         row = self.conn.execute("SELECT payload FROM runs WHERE id=?", (run_id,)).fetchone()
         return RunRecord.model_validate_json(row[0]) if row else None
 
+    async def has_high_risk_control(self, run_id: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM high_risk_runs WHERE run_id=? LIMIT 1", (run_id,)
+        ).fetchone() is not None
+
     async def list_runs(self) -> list[RunRecord]:
         rows = self.conn.execute("SELECT payload FROM runs ORDER BY created_at DESC").fetchall()
         return [RunRecord.model_validate_json(row[0]) for row in rows]

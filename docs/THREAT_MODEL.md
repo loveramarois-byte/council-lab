@@ -21,7 +21,7 @@ Provider API keys remain in the operating-system credential store and are not re
 | Actor | Assumption |
 | --- | --- |
 | Desktop operator | Trusted to start Council, display the QR code, revoke sessions, and protect the OS account. |
-| Paired phone | Trusted until its session is revoked, expires, or Council restarts. |
+| Paired phone | Trusted for ordinary Council UI access until its session is revoked, expires, or Council restarts; never implicitly trusted as a high-risk reviewer. |
 | Unpaired LAN client | May scan ports, guess tokens, forge Host/Origin headers, open many connections, or send oversized requests. |
 | Malicious website | May try CSRF, DNS rebinding, cross-origin fetches, or Referer leakage from a paired browser. |
 | Passive network observer | Can read ordinary HTTP traffic on the same network; Council cannot prevent this without HTTPS. |
@@ -37,6 +37,8 @@ The operating system, browser, router, DNS configuration, and selected Provider 
 4. A successful POST creates a random, signed, HttpOnly, SameSite=Strict browser session. Neither raw token is stored in a Cookie.
 5. Next.js validates the signed session before proxying requests. FastAPI and CC Switch remain bound to loopback.
 6. Council restart rotates the token and clears in-memory sessions. The desktop operator can revoke every mobile session without restarting.
+
+High-risk reviewer authorization is a separate server boundary. A paired browser may submit an actor label, but approval and risk-override endpoints independently require a reviewer secret configured in `COUNCIL_HIGH_RISK_REVIEWERS`. The secret is not derived from the mobile session, pairing token, or UI state.
 
 ## Implemented controls
 
@@ -81,6 +83,7 @@ These controls do not provide a general-purpose reverse proxy, distributed rate 
 
 - Ordinary HTTP cannot stop a passive same-network observer from reading discussion traffic or stealing an active session. Use only a trusted private network.
 - A compromised paired phone has the same Council UI authority as the desktop browser until revoked or expired.
+- A compromised paired phone can read high-risk records and attempt requester operations available to the paired UI, but cannot approve or lower risk without a separately configured reviewer secret. P0 is not a multi-user confidentiality boundary.
 - Global process-local throttling can be used for a short denial of pairing and does not coordinate across multiple Next.js processes.
 - Host and Origin checks reduce common CSRF and DNS-rebinding paths but do not make a hostile router, browser extension, or compromised operating system trustworthy.
 - Council does not currently identify phones by a durable device key, display individual device names, or revoke one device while retaining another.

@@ -4,9 +4,10 @@ import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import Response
+from pydantic import BaseModel
 
 from .errors import ApiError
 from .models import RunRecord
@@ -14,6 +15,7 @@ from .store import Store
 
 
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 def request_fingerprint(payload: Any) -> str:
@@ -29,6 +31,27 @@ async def execute_idempotent_run_action(
     action: Callable[[], Awaitable[RunRecord | None]],
     response: Response,
 ) -> RunRecord:
+    return await execute_idempotent_model_action(
+        store,
+        scope,
+        operation_key,
+        payload,
+        action,
+        response,
+        RunRecord,
+    )
+
+
+async def execute_idempotent_model_action(
+    store: Store,
+    scope: str,
+    operation_key: str | None,
+    payload: Any,
+    action: Callable[[], Awaitable[ModelT | None]],
+    response: Response,
+    model_type: type[ModelT],
+    cached_resolver: Callable[[ModelT], Awaitable[ModelT]] | None = None,
+) -> ModelT:
     if not operation_key:
         result = await action()
         if result is None:
@@ -48,7 +71,8 @@ async def execute_idempotent_run_action(
         raise ApiError(409, "IDEMPOTENT_OPERATION_IN_PROGRESS", "相同请求正在处理中，请稍后使用同一 Idempotency-Key 重试。")
     if claim.state == "cached" and claim.response_json:
         response.headers["Idempotency-Replayed"] = "true"
-        return RunRecord.model_validate_json(claim.response_json)
+        cached = model_type.model_validate_json(claim.response_json)
+        return await cached_resolver(cached) if cached_resolver else cached
 
     try:
         result = await action()

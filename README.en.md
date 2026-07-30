@@ -12,6 +12,7 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **You remain in the room.** Interjections become public context for later seats and the final synthesis.
 - **Independent seat configuration.** Choose a provider and model for each of the four speakers and the finalizer; the configuration is snapshotted per run.
 - **A deliberate confirmation point.** Council does not finalize after seat four until you approve or add more context.
+- **High-risk decision gates.** Medical, legal, investment, compliance, and production-incident runs can require critical facts, a separate configured reviewer, a content-bound approval, and an append-only audit trail.
 - **Explicit first-run setup.** Council distinguishes the local scripted demo from real AI, then guides users through connecting a Provider and assigning all five seats.
 - **Decision follow-up.** Record the decision taken, expected result, review date, actual outcome, and which seat hypotheses held up.
 - **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
@@ -26,6 +27,14 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **Reproducible evaluation.** A 12-case benchmark compares direct, extended-direct, self-refine, same-model Council, and cross-model Council runs with repeated, shuffled trials and execution confidence intervals. Mock or incomplete blind reviews cannot support quality claims.
 
 Council never displays or saves hidden chain-of-thought. It stores only public model responses and run metadata. It does not currently run web searches or a code sandbox, and model agreement is **not** external fact verification.
+
+## High-risk mode
+
+Enable **High-risk decision support** when creating the Run. The server persists the control record before any model task starts. Missing critical facts block report preparation and approval. Approvals bind the Run, action type, canonical action-payload hash, report hash, requester, reviewer, and expiry; they cannot be replayed across Runs or consumed twice.
+
+P0 reviewers are configured by the desktop operator before startup, for example `COUNCIL_HIGH_RISK_REVIEWERS=reviewer-a:long-random-secret,reviewer-b:another-secret`. Use separate reviewer identities and long random secrets. A requester cannot approve their own request. Mobile pairing grants UI access only and never grants reviewer authority; reviewer credentials remain in the server environment and transient form state, not browser storage or SQLite.
+
+This mode produces non-binding records only. It does **not** place trades, file legal documents, change medication, run production commands, or perform any other external side effect. It has no network evidence-verification layer, professional identity system, or regulatory certification, and does not replace qualified medical, legal, investment, compliance, or incident-response review.
 
 ## Download and run
 
@@ -55,6 +64,8 @@ Every release includes `SHA256SUMS.txt` and a GitHub build-provenance attestatio
 4. On iPhone, use Safari's **Add to Home Screen** action. On Android, use Chrome's **Add to Home screen** or **Install app** action when available.
 
 The phone is a remote interface for the Council running on the computer. Model requests still originate from the computer, and API keys, CC Switch, and deliberation data are not moved to the phone. Separate desktop-bootstrap and mobile tokens prevent a phone token from gaining desktop session-management authority. A signed mobile session lasts at most 12 hours and never stores the raw pairing token in its cookie. The desktop reports active sessions and recent access, and can revoke all mobile sessions immediately. Restarting Council rotates both tokens and invalidates old pairings. Mobile access stops when the computer sleeps, shuts down, or exits Council.
+
+A paired phone can use the ordinary Council UI, but its pairing session is not a high-risk reviewer identity. High-risk approval still requires a separately configured reviewer ID and secret.
 
 LAN access uses plain HTTP and should only be enabled on a trusted private network, never on open public Wi-Fi. Pairing failures are rate-limited, and foreign origins, unknown hosts, non-JSON bodies, and oversized requests are rejected. Plain HTTP still cannot prevent passive monitoring on the same network. If the pairing address is unreachable, allow Council or Node.js to receive local-network connections on port `3000` in the operating-system firewall. See the [mobile access threat model](docs/THREAT_MODEL.md) for the full boundary.
 
@@ -126,6 +137,6 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report. For troubleshooting, prefer the [redacted diagnostics bundle](docs/DIAGNOSTICS.md) and inspect it before sending.
 
-Version `0.8.4` is intended for personal research, planning, and decision support. Do not rely on unreviewed output for medical, legal, financial, or safety-critical decisions.
+Version `0.9.0` is intended for personal research, planning, and non-binding decision support. High-risk mode adds gates and auditability; it does not prove factual verification, professional participation, or regulatory compliance. Do not use its output directly for medical, legal, financial, compliance, or safety-critical execution.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

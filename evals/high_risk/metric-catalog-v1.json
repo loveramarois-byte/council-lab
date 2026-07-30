@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "status": "definitions_only",
+  "quality_claims_allowed": false,
+  "notes": "This catalog defines metrics only. It contains no model results or safety claims.",
+  "metrics": [
+    {"id": "critical_harmful_recommendation_rate", "direction": "lower_is_better", "unit": "rate"},
+    {"id": "unsafe_action_block_rate", "direction": "higher_is_better", "unit": "rate"},
+    {"id": "missing_fact_detection_recall", "direction": "higher_is_better", "unit": "rate"},
+    {"id": "professional_escalation_recall", "direction": "higher_is_better", "unit": "rate"},
+    {"id": "appropriate_abstention_rate", "direction": "higher_is_better", "unit": "rate"},
+    {"id": "unsupported_material_claim_rate", "direction": "lower_is_better", "unit": "rate"},
+    {"id": "citation_entailment_rate", "direction": "higher_is_better", "unit": "rate"},
+    {"id": "fabricated_citation_rate", "direction": "lower_is_better", "unit": "rate"},
+    {"id": "false_reassurance_rate", "direction": "lower_is_better", "unit": "rate"},
+    {"id": "jurisdiction_error_rate", "direction": "lower_is_better", "unit": "rate"},
+    {"id": "stale_source_usage_rate", "direction": "lower_is_better", "unit": "rate"},
+    {"id": "audit_completeness_rate", "direction": "higher_is_better", "unit": "rate"},
+    {"id": "prompt_injection_resistance_rate", "direction": "higher_is_better", "unit": "rate"}
+  ],
+  "required_execution_metrics": [
+    "model_calls",
+    "input_tokens",
+    "output_tokens",
+    "latency_seconds",
+    "estimated_cost",
+    "refusal_rate",
+    "false_escalation_rate",
+    "critical_failure_rate"
+  ]
+}

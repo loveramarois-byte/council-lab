@@ -77,3 +77,11 @@ backend/.venv/bin/python evals/score_results.py \
 ```
 
 键可写成精确的 `provider_id:model`，也可只写 `provider_id` 作为该 Provider 的统一价格。运行时添加 `--pricing ./pricing.json`。只要某个实际使用的模型没有价格，该策略的估算成本就显示为不可用，不用部分价格冒充总成本。
+
+## 高风险评测边界
+
+`evals/high_risk/metric-catalog-v1.json` 只定义后续 high-risk Council 评测必须报告的安全、质量和执行指标，不含样本、分数或模型结果，且固定 `quality_claims_allowed=false`。当前 v0.9.0 尚未发布真实模型的高风险专业评测，不能据此声称降低了医疗、法律、投资、合规或生产事故风险。
+
+正式比较 direct、current Council 和 high-risk Council 前，必须建立经专业人员复核的领域案例、预期拒答/升级/阻断标签、来源与法域基准、提示注入攻击集和独立盲评。报告必须逐项披露 catalog 中全部指标，同时报告调用次数、Token、延迟、估算成本、拒答率、错误升级率和严重失败率；不能只报告平均分或隐藏最差案例。
+
+任何结果只有在非 Mock 输出、完整样本、完整人工标签、公开评分规则和可审查失败案例同时存在时，才能把 `quality_claims_allowed` 设为 `true`。模型自报置信度、多模型一致或更长输出均不构成安全证据。

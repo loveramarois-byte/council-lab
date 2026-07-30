@@ -3,9 +3,17 @@ from __future__ import annotations
 from html import escape
 
 from .models import RunRecord
+from .risk.schemas import HighRiskRun
 
 
-def run_markdown(run: RunRecord) -> str:
+def _high_risk_summary(case: HighRiskRun) -> tuple[int, int, str]:
+    completed = sum(1 for fact in case.required_facts if fact.value)
+    total = len(case.required_facts)
+    domains = "、".join(case.risk_assessment.detected_domains) or "未分类"
+    return completed, total, domains
+
+
+def run_markdown(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
     lines = [
         f"# {run.question}",
         "",
@@ -18,6 +26,19 @@ def run_markdown(run: RunRecord) -> str:
         f"- Token：{run.usage.input_tokens + run.usage.output_tokens}",
         "",
     ]
+    if high_risk:
+        completed, total, domains = _high_risk_summary(high_risk)
+        lines.extend([
+            "## 高风险决策支持状态",
+            "",
+            "> 非约束性决策支持；不代表事实已核验、专业人员已参与或任何监管合规。不得直接用于医疗、法律、投资、合规或生产执行。",
+            "",
+            f"- 控制状态：{high_risk.status}",
+            f"- 风险等级：{high_risk.risk_assessment.risk_tier}",
+            f"- 检测领域：{domains}",
+            f"- 关键事实：{completed}/{total} 已填写",
+            "",
+        ])
     if run.source_snapshots:
         lines.extend(["## 资料快照", ""])
         for index, source in enumerate(run.source_snapshots, 1):
@@ -65,7 +86,7 @@ def run_markdown(run: RunRecord) -> str:
     return "\n".join(lines)
 
 
-def run_html(run: RunRecord) -> str:
+def run_html(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
     transcript = "".join(
         f"<article><h3>{escape(turn.speaker_name)} <small>{escape(turn.role_label)}</small></h3>"
         f"<p>{escape(turn.content).replace(chr(10), '<br>')}</p></article>"
@@ -81,6 +102,18 @@ def run_html(run: RunRecord) -> str:
         if run.final_decision
         else ""
     )
+    high_risk_section = ""
+    if high_risk:
+        completed, total, domains = _high_risk_summary(high_risk)
+        high_risk_section = (
+            "<section class='high-risk'><h2>高风险决策支持状态</h2>"
+            "<p><strong>非约束性决策支持；不代表事实已核验、专业人员已参与或任何监管合规。"
+            "不得直接用于医疗、法律、投资、合规或生产执行。</strong></p>"
+            f"<ul><li>控制状态：{escape(high_risk.status)}</li>"
+            f"<li>风险等级：{escape(high_risk.risk_assessment.risk_tier)}</li>"
+            f"<li>检测领域：{escape(domains)}</li>"
+            f"<li>关键事实：{completed}/{total} 已填写</li></ul></section>"
+        )
     review = ""
     if run.decision_review:
         item = run.decision_review
@@ -101,7 +134,7 @@ def run_html(run: RunRecord) -> str:
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(run.question)} · Council</title><style>
     body{{max-width:860px;margin:48px auto;padding:0 24px;color:#292724;font:15px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;background:#f7f3ee}}
-    header,.answer,article,.sources,.review{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:0 0 9px}}small,header p,.sources span{{color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
+    header,.answer,article,.sources,.review,.high-risk{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:0 0 9px}}small,header p,.sources span{{color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
 </style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}</p></header>
-    {f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
+    {high_risk_section}{f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
     <section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""

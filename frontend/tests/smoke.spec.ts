@@ -85,6 +85,78 @@ test("创建请求断线后使用同一幂等键重试", async ({ page }) => {
   expect(keys[1]).toBe(keys[0]);
 });
 
+test("高风险开关由同一个创建请求原子启用服务端控制", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  let createPayload: Record<string, unknown> | null = null;
+  let actorHeader = "";
+  await page.route("**/api/runs", (route) => {
+    createPayload = route.request().postDataJSON();
+    actorHeader = route.request().headers()["x-council-actor"] || "";
+    return route.fulfill({ json: { id: "high-risk-create-fixture" } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByText("高风险决策支持", { exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: /高风险决策支持/ })).toBeChecked();
+  await page.getByPlaceholder("写下需要四席共同审议的问题").fill("这项医疗决定缺少哪些关键事实？");
+  await page.getByRole("button", { name: /进入圆桌/ }).click();
+  await page.waitForURL("**/runs/high-risk-create-fixture");
+
+  expect(createPayload).toMatchObject({ high_risk: true });
+  expect(createPayload).not.toHaveProperty("auto_summarize");
+  expect(actorHeader).toBe("local-requester");
+});
+
+test("高风险控制面在手机端显示关键事实门禁", async ({ page }) => {
+  const now = new Date().toISOString();
+  const run = {
+    id: "high-risk-fixture", question: "医疗决策需要复核", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "high",
+    status: "awaiting_final_input", created_at: now, updated_at: now, analysis: null, candidates: [], critiques: [], verifications: [], revisions: [], scores: [], final_decision: null,
+    usage: { model_calls: 4, tool_calls: 0, input_tokens: 100, output_tokens: 200, estimated_cost: null, duration_ms: 1000 }, degraded: false, protocol: "mock", workflow_engine: "langgraph", checkpoint_count: 4,
+    context_snapshot: { strategy: "deterministic_context_clipping", token_budget: 4000, estimated_tokens: 300, included_turns: 4, total_turns: 4, compacted: false, summary: "" },
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, discussion_turns: [], participant_roles: [
+      { id: "analyst", name: "析理", role: "拆解者", brief: "拆解" }, { id: "challenger", name: "诘问", role: "挑战者", brief: "反例" },
+      { id: "builder", name: "构策", role: "方案师", brief: "方案" }, { id: "observer", name: "观澜", role: "观察者", brief: "分歧" },
+    ], seat_assignments: [], finalizer_assignment: null, current_speaker_index: 4, discussion_round: 1, awaiting_user: true, auto_summarize: false, recoverable: false, limit_reason: null,
+  };
+  const fact = { fact_id: "medical_context", name: "医疗背景", description: "年龄、症状时间线、病史、用药和过敏。", required: true, value: null, source: "unknown", verified: false, materiality: "critical" };
+  const highRisk = { run_id: run.id, status: "MORE_INFORMATION_REQUIRED", version: 1, risk_assessment: { run_id: run.id, risk_tier: "high", original_risk_tier: "high", detected_domains: ["medical"], reasons: ["检测到高风险领域：medical"], classifier_version: "high-risk-rules-v1", assessed_at: now, manually_overridden: false }, required_facts: [fact], decision: null, requested_by: "local-requester", created_at: now, updated_at: now };
+  const audit = [{ event_id: "audit-1", sequence: 1, run_id: run.id, event_type: "risk_assessed", occurred_at: now, actor_type: "system", previous_status: "RISK_ASSESSMENT_REQUIRED", new_status: "MORE_INFORMATION_REQUIRED" }];
+  let savedFacts: Array<Record<string, unknown>> = [];
+  let auditRequests = 0;
+  await page.route("**/api/runs/high-risk-fixture", (route) => route.fulfill({ json: run }));
+  await page.route("**/api/high-risk/runs/high-risk-fixture/approval", (route) => route.fulfill({ status: 404, json: { error: { code: "APPROVAL_NOT_FOUND", message: "不存在" } } }));
+  await page.route("**/api/high-risk/runs/high-risk-fixture/audit", (route) => {
+    auditRequests += 1;
+    return auditRequests === 1
+      ? route.fulfill({ json: audit })
+      : route.fulfill({ status: 503, json: { error: { code: "AUDIT_TEMPORARILY_UNAVAILABLE", message: "暂时不可用" } } });
+  });
+  await page.route("**/api/high-risk/runs/high-risk-fixture/facts", (route) => {
+    savedFacts = route.request().postDataJSON().facts;
+    return route.fulfill({ json: { ...highRisk, status: "EVIDENCE_REQUIRED", version: 2, required_facts: savedFacts } });
+  });
+  await page.route("**/api/high-risk/runs/high-risk-fixture", (route) => route.fulfill({ json: highRisk }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/runs/high-risk-fixture");
+  await expect(page.getByText("需要补充关键信息").first()).toBeVisible();
+  await page.getByRole("button", { name: "打开控制面" }).click();
+  await expect(page.getByRole("heading", { name: "高风险决策支持" })).toBeVisible();
+  const auditTimeline = page.getByRole("region", { name: "高风险审计时间线" });
+  await expect(auditTimeline).toContainText("完成风险评估");
+  await page.locator(".required-facts-form label").filter({ hasText: "医疗背景" }).locator("textarea").fill("成年人；症状持续两天；无已知过敏。 ");
+  await page.getByRole("button", { name: "保存事实" }).click();
+  expect(savedFacts[0].value).toBe("成年人；症状持续两天；无已知过敏。");
+  await expect(page.getByText("等待报告与证据复核").first()).toBeVisible();
+  await expect(page.locator(".high-risk-error")).toHaveCount(0);
+  const viewport = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
+  expect(viewport.width).toBeLessThanOrEqual(viewport.viewportWidth);
+});
+
 test("已有真实 Provider 时引导全 Mock 五席进入席位配置", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider, readyProvider] }));

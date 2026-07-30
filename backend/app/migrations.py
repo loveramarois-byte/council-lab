@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -24,6 +24,16 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX IF NOT EXISTS idx_idempotent_operations_updated ON idempotent_operations(updated_at)",
     ),
     4: (),
+    5: (
+        "CREATE TABLE IF NOT EXISTS high_risk_runs (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, version INTEGER NOT NULL, assessment_json TEXT NOT NULL, facts_json TEXT NOT NULL, decision_json TEXT, action_type TEXT, action_payload_hash TEXT, report_hash TEXT, requested_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_high_risk_runs_status_updated ON high_risk_runs(status, updated_at)",
+        "CREATE TABLE IF NOT EXISTS high_risk_approvals (approval_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, action_type TEXT NOT NULL, action_payload_hash TEXT NOT NULL, report_hash TEXT NOT NULL, requested_at TEXT NOT NULL, requested_by TEXT NOT NULL, status TEXT NOT NULL, decided_at TEXT, decided_by TEXT, decision_reason TEXT, expires_at TEXT NOT NULL, consumed_at TEXT)",
+        "CREATE INDEX IF NOT EXISTS idx_high_risk_approvals_run_status ON high_risk_approvals(run_id, status, expires_at)",
+        "CREATE TABLE IF NOT EXISTS high_risk_audit_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, actor_type TEXT NOT NULL, actor_id TEXT, previous_status TEXT, new_status TEXT, policy_version TEXT, model_provider TEXT, model_name TEXT, prompt_template_version TEXT, request_hash TEXT, response_hash TEXT, metadata_json TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_high_risk_audit_run_sequence ON high_risk_audit_events(run_id, sequence)",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_audit_no_update BEFORE UPDATE ON high_risk_audit_events BEGIN SELECT RAISE(ABORT, 'high-risk audit events are append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_audit_no_delete BEFORE DELETE ON high_risk_audit_events BEGIN SELECT RAISE(ABORT, 'high-risk audit events are append-only'); END",
+    ),
 }
 
 

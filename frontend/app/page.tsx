@@ -16,6 +16,7 @@ export default function HomePage() {
   const router = useRouter();
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState("standard");
+  const [highRisk, setHighRisk] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [assignments, setAssignments] = useState<AgentAssignmentsConfig | null>(null);
   const [templates, setTemplates] = useState<DeliberationTemplate[]>([]);
@@ -90,6 +91,7 @@ export default function HomePage() {
         mode,
         use_saved_assignments: true,
         template_id: templateId,
+        ...(highRisk ? { high_risk: true } : {}),
       });
       router.push(`/runs/${run.id}`);
     } catch (err) {
@@ -133,7 +135,7 @@ export default function HomePage() {
         <div className="composer-section">
           <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
           <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} rows={5} />
-          <div className="composer-footer"><span className="source-summary">四席依次讨论 · 你可全程参与</span><button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={submit}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
+          <div className="composer-footer"><label className={`risk-mode-toggle ${highRisk ? "active" : ""}`}><input type="checkbox" checked={highRisk} onChange={(event) => setHighRisk(event.target.checked)} /><span className={`toggle ${highRisk ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label><button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={submit}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
           {error && <p className="form-error" role="alert">{error}</p>}
         </div>
       </>}
