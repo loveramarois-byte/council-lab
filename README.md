@@ -172,6 +172,7 @@ Quick / Standard / Rigorous 是 Council 的工作流档位，不自动等同于�
 ## 数据与安全
 
 - API Key 不进入 Council SQLite、日志或前端存储；桌面录入后写入 macOS Keychain、Windows Credential Locker 或 Linux Secret Service。
+- 浏览器只访问 Next.js 同源代理；FastAPI 除健康检查外的全部 API 都要求启动器生成的服务端内部令牌，并拒绝恶意 Origin、跨站 Fetch Metadata 和异常 Host。CORS 不作为 CSRF 防线。
 - 审议记录默认位于 `~/Library/Application Support/Council/data/`（macOS）或 `%LOCALAPPDATA%\Council\data\`（Windows）。
 - 已有业务库发生 schema 升级时会先在数据目录的 `backups/` 保存最近 5 份迁移前备份；这不是用户内容的完整长期备份策略。
 - v0.9.0 将业务 schema 升级到 v5，并新增高风险状态、审批和追加式审计表；降级到旧版本前必须恢复自动生成的迁移前备份，旧程序不会理解 v5 数据。
@@ -203,7 +204,7 @@ docs/          架构、设计决策、评测与集成说明
 
 ## 项目状态
 
-当前版本为 `0.9.0`，适合个人研究、方案讨论和非约束性多视角决策辅助。高风险模式提供门禁与审计，不代表事实已核验、专业人员已参与或任何监管合规；请勿将输出直接用于医疗、法律、金融、合规或安全关键执行。
+当前版本为 `0.9.1`，适合个人研究、方案讨论和非约束性多视角决策辅助。高风险模式提供门禁与审计，不代表事实已核验、专业人员已参与或任何监管合规；请勿将输出直接用于医疗、法律、金融、合规或安全关键执行。
 
 欢迎提交 Issue 和 Pull Request。开始前请阅读 [贡献指南](CONTRIBUTING.md)、[行为规范](CODE_OF_CONDUCT.md) 和 [安全政策](SECURITY.md)。
 
