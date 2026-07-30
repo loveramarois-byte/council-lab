@@ -81,10 +81,15 @@ def test_release_notes_include_version_changes_and_installation(tmp_path):
 
     assert result.returncode == 0, result.stderr
     notes = output.read_text(encoding="utf-8")
-    assert f"Council v{(ROOT / 'VERSION').read_text(encoding='utf-8').strip()} 更新内容" in notes
-    assert "统一请求边界" in notes
-    assert "服务端内部令牌" in notes
-    assert "恶意网页" in notes
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    section_start = changelog.index(f"## [{version}]")
+    section_body_start = changelog.index("\n", section_start) + 1
+    section_end = changelog.find("\n## [", section_body_start)
+    expected_body = changelog[section_body_start : section_end if section_end >= 0 else None].strip()
+
+    assert f"Council v{version} 更新内容" in notes
+    assert expected_body in notes
     assert "## 安装与升级" in notes
 
 
