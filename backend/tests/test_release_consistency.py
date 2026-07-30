@@ -82,8 +82,9 @@ def test_release_notes_include_version_changes_and_installation(tmp_path):
     assert result.returncode == 0, result.stderr
     notes = output.read_text(encoding="utf-8")
     assert f"Council v{(ROOT / 'VERSION').read_text(encoding='utf-8').strip()} 更新内容" in notes
-    assert "沉浸模式" in notes
-    assert "无法显示“下载并安装”" in notes
+    assert "高风险决策支持模式" in notes
+    assert "不执行任何外部副作用" in notes
+    assert "审批只能消费一次" in notes
     assert "## 安装与升级" in notes
 
 
