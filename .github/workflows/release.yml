@@ -65,6 +65,8 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install build dependencies
         run: python -m pip install -r backend/requirements.lock "pyinstaller>=6.11,<7"
+      - name: Test macOS launcher ownership guards
+        run: python -m pytest backend/tests/test_release_consistency.py -k macos_launcher
       - name: Build self-contained macOS app
         env:
           PYTHON_BIN: python
@@ -82,9 +84,40 @@ jobs:
             "$stopper" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
+          version="$(tr -d '[:space:]' < VERSION)"
+          stale_version="0.0.0"
+          app_root="$(cd "$resources/../.." && pwd -P)"
+          stale_runtime="macos:$(printf '%s\0%s' "$app_root" "$stale_version" | shasum -a 256 | awk '{print substr($1, 1, 24)}')"
+          export COUNCIL_PACKAGED=1
+          export COUNCIL_INSTALL_ROOT="$app_root"
+          export COUNCIL_VERSION="$stale_version"
+          export COUNCIL_RUNTIME_ID="$stale_runtime"
+          export COUNCIL_REMOTE_TOKEN="stale-mobile-token"
+          export COUNCIL_DESKTOP_TOKEN="stale-desktop-token"
+          "$resources/backend/council-backend/council-backend" >>"$RUNNER_TEMP/stale-backend.log" 2>&1 &
+          stale_backend=$!
+          pushd "$resources/web" >/dev/null
+          HOSTNAME=127.0.0.1 PORT=3000 NODE_ENV=production "$resources/runtime/node" server.js >>"$RUNNER_TEMP/stale-frontend.log" 2>&1 &
+          stale_frontend=$!
+          popd >/dev/null
+          mkdir -p "$COUNCIL_LOG_DIR"
+          printf 'backend %s\nfrontend %s\n' "$stale_backend" "$stale_frontend" > "$COUNCIL_LOG_DIR/council-bundled.pids"
+          stale_healthy=0
+          for attempt in {1..80}; do
+            backend_stale="$(curl -fsS http://127.0.0.1:8001/api/health 2>/dev/null | python -c 'import json,sys; print(json.load(sys.stdin).get("runtime_id", ""))' 2>/dev/null || true)"
+            frontend_stale="$(curl -fsS http://127.0.0.1:3000/mobile-access/health 2>/dev/null | python -c 'import json,sys; print(json.load(sys.stdin).get("runtime_id", ""))' 2>/dev/null || true)"
+            if [[ "$backend_stale" == "$stale_runtime" && "$frontend_stale" == "$stale_runtime" ]]; then stale_healthy=1; break; fi
+            sleep 0.25
+          done
+          test "$stale_healthy" = 1
           "$launcher"
-          curl -fsS http://127.0.0.1:8001/api/health >/dev/null
-          test "$(curl -fsS http://127.0.0.1:8001/api/update/status | python -c 'import json,sys; print(json.load(sys.stdin)["current_version"])')" = "$(tr -d '[:space:]' < VERSION)"
+          ! kill -0 "$stale_backend" 2>/dev/null
+          ! kill -0 "$stale_frontend" 2>/dev/null
+          backend_runtime="$(curl -fsS http://127.0.0.1:8001/api/health | python -c 'import json,sys; print(json.load(sys.stdin)["runtime_id"])')"
+          frontend_runtime="$(curl -fsS http://127.0.0.1:3000/mobile-access/health | python -c 'import json,sys; print(json.load(sys.stdin)["runtime_id"])')"
+          [[ "$backend_runtime" == macos:* ]]
+          test "$backend_runtime" = "$frontend_runtime"
+          test "$(curl -fsS http://127.0.0.1:8001/api/update/status | python -c 'import json,sys; print(json.load(sys.stdin)["current_version"])')" = "$version"
           curl -fsS http://127.0.0.1:3000/mobile-access/health | grep -q council-mobile-access
           node scripts/check_frontend_assets.mjs http://127.0.0.1:3000/pair
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
@@ -210,7 +243,41 @@ jobs:
           $stopper = Join-Path $package "runtime\stop-council.ps1"
           $env:COUNCIL_DATA_DIR = Join-Path $env:RUNNER_TEMP "launcher-data"
           $env:COUNCIL_LOG_DIR = Join-Path $env:RUNNER_TEMP "launcher-logs"
+          $env:COUNCIL_PACKAGED = "1"
+          $env:COUNCIL_INSTALL_ROOT = $package
+          $env:COUNCIL_VERSION = "0.0.0"
+          $resolvedPackage = (Resolve-Path $package).Path
+          $hasher = [System.Security.Cryptography.SHA256]::Create()
+          try {
+            $runtimeSeed = "$resolvedPackage$([char]0)$($env:COUNCIL_VERSION)"
+            $runtimeHash = [BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($runtimeSeed))).Replace("-", "").ToLowerInvariant()
+          } finally { $hasher.Dispose() }
+          $staleRuntime = "windows:$($runtimeHash.Substring(0, 24))"
+          $env:COUNCIL_RUNTIME_ID = $staleRuntime
+          $env:COUNCIL_REMOTE_TOKEN = "stale-mobile-token"
+          $env:COUNCIL_DESKTOP_TOKEN = "stale-desktop-token"
+          $env:HOSTNAME = "127.0.0.1"
+          $env:PORT = "3000"
+          $env:NODE_ENV = "production"
+          $staleBackend = Start-Process -FilePath (Join-Path $package "backend\council-backend\council-backend.exe") -WorkingDirectory $package -WindowStyle Hidden -PassThru
+          $staleFrontend = Start-Process -FilePath (Join-Path $package "runtime\node.exe") -ArgumentList @("server.js") -WorkingDirectory (Join-Path $package "web") -WindowStyle Hidden -PassThru
+          $staleHealthy = $false
+          for ($attempt = 0; $attempt -lt 80; $attempt++) {
+            try {
+              $staleHealth = Invoke-RestMethod http://127.0.0.1:8001/api/health -TimeoutSec 2
+              $staleWeb = Invoke-RestMethod http://127.0.0.1:3000/mobile-access/health -TimeoutSec 2
+              if ($staleHealth.runtime_id -eq $staleRuntime -and $staleWeb.runtime_id -eq $staleRuntime) { $staleHealthy = $true; break }
+            } catch {}
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not $staleHealthy) { throw "Stale runtime fixture did not become healthy" }
           & $launcher -NoBrowser
+          if (Get-Process -Id $staleBackend.Id, $staleFrontend.Id -ErrorAction SilentlyContinue) { throw "Launcher did not replace stale Council processes" }
+          $backendHealth = Invoke-RestMethod http://127.0.0.1:8001/api/health
+          $frontendHealth = Invoke-RestMethod http://127.0.0.1:3000/mobile-access/health
+          if ($backendHealth.runtime_id -eq $staleRuntime -or $backendHealth.runtime_id -ne $frontendHealth.runtime_id -or -not $backendHealth.runtime_id.StartsWith("windows:")) {
+            throw "Launcher did not establish one matching packaged runtime identity"
+          }
           $updateStatus = Invoke-RestMethod http://127.0.0.1:8001/api/update/status
           if ($updateStatus.current_version -ne $version) { throw "Packaged updater reports the wrong current version" }
           $pidFile = Join-Path $env:COUNCIL_LOG_DIR "council-bundled-pids.json"
@@ -286,6 +353,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: council-*
@@ -304,14 +372,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="macOS：下载 macOS ZIP，解压后双击 Council.app。Windows：下载 Windows ZIP，完整解压后双击 Start Council.cmd。手机端：电脑启动后打开“设置 → 手机连接”，在同一可信 Wi-Fi 下扫码配对。两个包均内置运行环境，不需要安装 Python 或 Node.js。当前开源构建未做 Apple notarization 或 Windows 商业代码签名，请仅从本仓库 Release 下载。"
+          python scripts/build_release_notes.py --output artifacts/RELEASE_NOTES.md
           if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" artifacts/*.zip artifacts/SHA256SUMS.txt --clobber --repo "${GITHUB_REPOSITORY}"
-            gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "Council ${GITHUB_REF_NAME}" --notes "$notes"
+            gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "Council ${GITHUB_REF_NAME}" --notes-file artifacts/RELEASE_NOTES.md
           else
             gh release create "${GITHUB_REF_NAME}" artifacts/*.zip artifacts/SHA256SUMS.txt \
               --repo "${GITHUB_REPOSITORY}" \
               --title "Council ${GITHUB_REF_NAME}" \
               --generate-notes \
-              --notes "$notes"
+              --notes-file artifacts/RELEASE_NOTES.md
           fi

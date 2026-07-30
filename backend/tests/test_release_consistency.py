@@ -1,7 +1,10 @@
 import json
+import socket
 import shutil
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -9,6 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_release_consistency.py"
+RELEASE_NOTES_SCRIPT = ROOT / "scripts" / "build_release_notes.py"
 REQUIRED_FILES = (
     "VERSION",
     "frontend/package.json",
@@ -58,6 +62,149 @@ def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_bu
 def test_release_workflow_requests_packaged_javascript_and_css():
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert workflow.count("check_frontend_assets.mjs") >= 2
+    assert '[[ "$backend_runtime" == macos:* ]]' in workflow
+    assert 'if ($staleHealth.runtime_id -eq $staleRuntime' in workflow
+    assert 'Launcher did not replace stale Council processes' in workflow
+    assert "python -m pytest backend/tests/test_release_consistency.py -k macos_launcher" in workflow
+    assert "build_release_notes.py --output artifacts/RELEASE_NOTES.md" in workflow
+    assert workflow.count("--notes-file artifacts/RELEASE_NOTES.md") == 2
+
+
+def test_release_notes_include_version_changes_and_installation(tmp_path):
+    output = tmp_path / "RELEASE_NOTES.md"
+    result = subprocess.run(
+        [sys.executable, str(RELEASE_NOTES_SCRIPT), "--root", str(ROOT), "--output", str(output)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    notes = output.read_text(encoding="utf-8")
+    assert f"Council v{(ROOT / 'VERSION').read_text(encoding='utf-8').strip()} 更新内容" in notes
+    assert "沉浸模式" in notes
+    assert "无法显示“下载并安装”" in notes
+    assert "## 安装与升级" in notes
+
+
+def test_packaged_launchers_only_reuse_services_from_the_same_installation():
+    mac_launcher = (ROOT / "desktop/start-bundled.sh").read_text(encoding="utf-8")
+    windows_launcher = (ROOT / "desktop/start-bundled.ps1").read_text(encoding="utf-8")
+    backend = (ROOT / "backend/app/main.py").read_text(encoding="utf-8")
+    frontend_health = (ROOT / "frontend/app/mobile-access/health/route.ts").read_text(encoding="utf-8")
+
+    for source in (mac_launcher, windows_launcher, backend, frontend_health):
+        assert "COUNCIL_RUNTIME_ID" in source or "runtime_identity" in source
+    assert "service_is_current" in mac_launcher
+    assert "stop_existing_council_service" in mac_launcher
+    assert "listeners_before" in mac_launcher
+    assert "process_is_council" in mac_launcher
+    assert "\"$APP_ROOT\" \"$COUNCIL_VERSION\"" in mac_launcher
+    assert "$Health.runtime_id -eq $env:COUNCIL_RUNTIME_ID" in windows_launcher
+    assert "Stop-ExistingCouncilService" in windows_launcher
+    assert "$ProcessIdsBefore -contains $ProcessId" in windows_launcher
+    assert "Test-CouncilProcessOwnership" in windows_launcher
+    assert '$RuntimeSeed = "$PackageRoot$([char]0)$($env:COUNCIL_VERSION)"' in windows_launcher
+
+
+def _free_port() -> int:
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        return int(server.getsockname()[1])
+
+
+def _health_server(port: int, service: str, runtime_id: str, cwd: Path | None = None) -> subprocess.Popen[str]:
+    source = """
+import http.server
+import json
+import sys
+
+port = int(sys.argv[1])
+payload = json.dumps({"status": "ok", "service": sys.argv[2], "runtime_id": sys.argv[3]}, separators=(",", ":")).encode()
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_):
+        pass
+
+http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+"""
+    process = subprocess.Popen([sys.executable, "-c", source, str(port), service, runtime_id], text=True, cwd=cwd)
+    for _ in range(50):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.1).close()
+            return process
+        except OSError:
+            time.sleep(0.02)
+    process.terminate()
+    process.wait(timeout=2)
+    raise AssertionError("health fixture did not start")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="exercises the macOS launcher with system lsof and zsh")
+def test_macos_launcher_reuses_only_current_install_and_replaces_stale_council(tmp_path):
+    launcher = (ROOT / "desktop/start-bundled.sh").read_text(encoding="utf-8")
+    helpers = launcher[launcher.index("service_is_current()") : launcher.index("if [[ ! -x")]
+    helper_script = tmp_path / "launcher-helpers.zsh"
+    helper_script.write_text(
+        f"set -u\nCOUNCIL_RUNTIME_ID=current-install\n{helpers}",
+        encoding="utf-8",
+    )
+
+    current_port = _free_port()
+    current = _health_server(current_port, "council-lab", "current-install")
+    try:
+        matched = subprocess.run(
+            ["/bin/zsh", "-c", 'source "$1"; service_is_current "$2" council-lab', "test", str(helper_script), f"http://127.0.0.1:{current_port}/health"],
+            check=False,
+        )
+        assert matched.returncode == 0
+        assert current.poll() is None
+    finally:
+        current.terminate()
+        current.wait(timeout=2)
+
+    stale_port = _free_port()
+    frontend_dir = tmp_path / "frontend"
+    (frontend_dir / "app").mkdir(parents=True)
+    (frontend_dir / "package.json").write_text('{"name":"council-lab-web"}\n', encoding="utf-8")
+    (frontend_dir / "next.config.ts").write_text("export default {};\n", encoding="utf-8")
+    (frontend_dir / "app/layout.tsx").write_text("export default function Layout() {}\n", encoding="utf-8")
+    stale = _health_server(stale_port, "council-mobile-access", "old-install", cwd=frontend_dir)
+    stopped = subprocess.run(
+        ["/bin/zsh", "-c", 'source "$1"; stop_existing_council_service "$2" "$3" council-mobile-access', "test", str(helper_script), str(stale_port), f"http://127.0.0.1:{stale_port}/health"],
+        check=False,
+    )
+    assert stopped.returncode == 0
+    stale.wait(timeout=2)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="exercises the macOS launcher with system lsof and zsh")
+def test_macos_launcher_never_stops_a_foreign_service_spoofing_council_health(tmp_path):
+    launcher = (ROOT / "desktop/start-bundled.sh").read_text(encoding="utf-8")
+    helpers = launcher[launcher.index("service_is_current()") : launcher.index("if [[ ! -x")]
+    helper_script = tmp_path / "launcher-helpers.zsh"
+    helper_script.write_text(
+        f"set -u\nCOUNCIL_RUNTIME_ID=current-install\n{helpers}",
+        encoding="utf-8",
+    )
+    port = _free_port()
+    foreign = _health_server(port, "council-lab", "foreign")
+    try:
+        result = subprocess.run(
+            ["/bin/zsh", "-c", 'source "$1"; stop_existing_council_service "$2" "$3" council-lab', "test", str(helper_script), str(port), f"http://127.0.0.1:{port}/health"],
+            check=False,
+        )
+        assert result.returncode != 0
+        assert foreign.poll() is None
+    finally:
+        foreign.terminate()
+        foreign.wait(timeout=2)
 
 
 def copy_release_files(tmp_path: Path) -> None:
