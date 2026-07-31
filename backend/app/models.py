@@ -180,6 +180,7 @@ class RunCreate(BaseModel):
     source_ids: list[str] | None = Field(default=None, max_length=20)
     include_project_history: bool = True
     template_id: str = "open_discussion"
+    selected_memory_ids: list[str] = Field(default_factory=list, max_length=20)
     limits: RunLimits = Field(default_factory=RunLimits)
 
 
@@ -331,6 +332,22 @@ class DecisionReviewUpdate(BaseModel):
 
 class DecisionReview(DecisionReviewUpdate):
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RunMemorySnapshotItem(BaseModel):
+    memory_id: str
+    source_run_id: str
+    type: Literal[
+        "decision",
+        "assumption",
+        "risk",
+        "unresolved_question",
+        "action",
+        "outcome",
+        "superseded_decision",
+    ]
+    content: str
+    verification_status: str
 
 
 class DeliberationTemplate(BaseModel):
@@ -616,4 +633,5 @@ class RunRecord(BaseModel):
     template_id: str = "open_discussion"
     template_name: str = "开放讨论"
     source_snapshots: list[RunSourceSnapshot] = Field(default_factory=list)
+    memory_snapshot: list[RunMemorySnapshotItem] = Field(default_factory=list)
     decision_review: DecisionReview | None = None

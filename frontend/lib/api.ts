@@ -106,6 +106,13 @@ export type ProjectSource = {
   created_at: string;
 };
 export type RunSourceSnapshot = Omit<ProjectSource, "project_id" | "media_type" | "size_bytes" | "created_at">;
+export type MemoryType = "decision" | "assumption" | "risk" | "unresolved_question" | "action" | "outcome" | "superseded_decision";
+export type RunMemorySnapshotItem = { memory_id: string; source_run_id: string; type: MemoryType; content: string; verification_status: string };
+export type MemoryProposal = { id: string; workspace_id: string; source_run_id: string; type: MemoryType; content: string; rationale: string; related_entity_ids: string[]; created_at: string };
+export type MemoryProposalView = { proposal: MemoryProposal; status: "pending" | "approved" | "rejected"; memory_id?: string | null; reviewed_at?: string | null };
+export type ApprovedMemory = { id: string; workspace_id: string; source_run_id: string; proposal_id: string; type: MemoryType; content: string; verification_status: string; valid_from: string; valid_until?: string | null; supersedes_memory_id?: string | null; created_at: string };
+export type MemoryView = { memory: ApprovedMemory; active: boolean; deleted: boolean; last_action: "approved" | "rejected" | "disabled" | "enabled" | "deleted"; last_action_at: string };
+export type MemoryPreview = { workspace_id: string; selected_memory_ids: string[]; included: RunMemorySnapshotItem[]; excluded_memory_ids: string[]; rendered_context: string };
 export type DeliberationTemplate = { id: string; name: string; description: string; prompt_hint: string; system_guidance: string };
 export type SeatOutcomeReview = { role: "analyst" | "challenger" | "builder" | "observer"; status: "pending" | "supported" | "mixed" | "contradicted"; note: string };
 export type DecisionReview = { selected_decision: string; expected_result: string; review_date?: string | null; actual_result: string; outcome_status: "pending" | "successful" | "partial" | "unsuccessful" | "unclear"; seat_outcomes: SeatOutcomeReview[]; updated_at: string };
@@ -185,6 +192,7 @@ export type Run = {
   template_id?: string;
   template_name?: string;
   source_snapshots?: RunSourceSnapshot[];
+  memory_snapshot?: RunMemorySnapshotItem[];
   decision_review?: DecisionReview | null;
 };
 
@@ -359,13 +367,20 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; selected_memory_ids?: string[]; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   decisionBrief: (id: string) => request<DecisionBrief>(`/api/runs/${id}/decision-brief`),
   runLineage: (id: string) => request<RunForkLineage>(`/api/runs/${id}/lineage`),
   compareRuns: (left: string, right: string) => request<DecisionBriefComparison>(`/api/runs/compare?left=${encodeURIComponent(left)}&right=${encodeURIComponent(right)}`),
   forkRun: (id: string, body: { checkpoint: ForkCheckpoint; reason: string; prompt_append?: string; mode?: Run["mode"]; auto_summarize?: boolean; limits?: RunLimits }) => idempotentRequest<Run>(`/api/runs/${id}/fork`, { method: "POST", headers: { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR }, body: JSON.stringify(body) }),
+  memory: () => request<MemoryView[]>("/api/memory"),
+  memoryPreview: (selected_memory_ids: string[]) => request<MemoryPreview>("/api/memory/preview", { method: "POST", body: JSON.stringify({ selected_memory_ids }) }),
+  memoryProposals: (runId: string) => request<MemoryProposalView[]>(`/api/runs/${runId}/memory-proposals`),
+  createMemoryProposals: (runId: string) => request<MemoryProposalView[]>(`/api/runs/${runId}/memory-proposals`, { method: "POST" }),
+  approveMemoryProposal: (proposalId: string, content?: string) => request<MemoryView>(`/api/memory/proposals/${proposalId}/approve`, { method: "POST", body: JSON.stringify({ ...(content ? { content } : {}) }) }),
+  rejectMemoryProposal: (proposalId: string) => request<MemoryProposalView>(`/api/memory/proposals/${proposalId}/reject`, { method: "POST" }),
+  changeMemoryState: (memoryId: string, action: "disable" | "enable" | "delete") => request<MemoryView>(`/api/memory/${memoryId}/${action}`, { method: "POST" }),
   cancelRun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
   advanceRun: (id: string, body: { action: "continue" | "interject" | "question"; message?: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/advance`, { method: "POST", body: JSON.stringify(body) }),
   interjectRun: (id: string, body: { action: "interject" | "question"; message: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/interject`, { method: "POST", body: JSON.stringify(body) }),

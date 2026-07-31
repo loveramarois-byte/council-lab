@@ -324,6 +324,9 @@ class Orchestrator:
     ) -> RunRecord:
         seats, finalizer = self._resolve_config(request)
         analysis = analyze_question(request.question, request.mode, request.limits.max_tokens)
+        memory_preview = await self.store.preview_memories(request.selected_memory_ids)
+        if memory_preview.excluded_memory_ids:
+            raise ValueError("部分所选记忆不存在、已停用、已删除或已过期，请重新预览")
         active_participants = self.PARTICIPANTS[: analysis.recommended_agents]
         project = None
         source_snapshots: list[RunSourceSnapshot] = []
@@ -377,6 +380,11 @@ class Orchestrator:
             project_context = "\n\n".join(context_parts)[:12_000]
         elif request.source_ids:
             raise ValueError("选择资料前必须先选择资料空间")
+        if memory_preview.rendered_context:
+            memory_section = "用户为本次 Run 明确选择的已批准记忆：\n" + memory_preview.rendered_context
+            project_context = "\n\n".join(
+                item for item in (project_context, memory_section) if item
+            )[:12_000]
         template = get_template(request.template_id)
         run_id = str(uuid.uuid4())
         primary = seats[0]
@@ -406,6 +414,7 @@ class Orchestrator:
             template_id=template.id,
             template_name=template.name,
             source_snapshots=source_snapshots,
+            memory_snapshot=[item.model_copy(deep=True) for item in memory_preview.included],
         )
         fork: RunFork | None = None
         if fork_source is not None or fork_request is not None:
@@ -470,7 +479,10 @@ class Orchestrator:
             )
         try:
             if fork is None:
-                await self.store.save_run(run)
+                if run.memory_snapshot:
+                    await self.store.save_run_with_memory_snapshot(run)
+                else:
+                    await self.store.save_run(run)
             else:
                 await self.store.save_forked_run(run, fork)
         except Exception:

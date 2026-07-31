@@ -21,6 +21,7 @@ from .errors import install_error_handling
 from .idempotency import execute_idempotent_model_action, execute_idempotent_run_action
 from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
 from .decision_lifecycle import DecisionBriefComparison, RunForkCreate, RunForkLineage, compare_briefs
+from .decision_memory import MemoryPreview, MemoryPreviewRequest, MemoryProposalDecision, MemoryProposalView, MemoryView, build_memory_proposals
 from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionBrief, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
@@ -56,6 +57,7 @@ assignments_need_persist = bool(
 
 RunIdPath = Annotated[str, ApiPath(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
 RunIdQuery = Annotated[str, Query(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
+MemoryIdPath = Annotated[str, ApiPath(min_length=3, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$")]
 
 
 @asynccontextmanager
@@ -682,6 +684,73 @@ async def get_run_lineage(run_id: RunIdPath):
     if not await store.get_run(run_id):
         raise HTTPException(404, "运行记录不存在")
     return await store.get_run_lineage(run_id)
+
+
+@app.post("/api/runs/{run_id}/memory-proposals", response_model=list[MemoryProposalView])
+async def create_run_memory_proposals(run_id: RunIdPath):
+    run = await store.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "运行记录不存在")
+    if run.status != "completed":
+        raise HTTPException(409, "Run 完成并生成结构化简报后才能提出长期记忆")
+    brief = await store.get_decision_brief(run_id)
+    if not brief:
+        raise HTTPException(409, "当前 Run 没有结构化简报")
+    await store.create_memory_proposals(build_memory_proposals(brief))
+    return await store.list_memory_proposals(run_id)
+
+
+@app.get("/api/runs/{run_id}/memory-proposals", response_model=list[MemoryProposalView])
+async def list_run_memory_proposals(run_id: RunIdPath):
+    if not await store.get_run(run_id):
+        raise HTTPException(404, "运行记录不存在")
+    return await store.list_memory_proposals(run_id)
+
+
+@app.get("/api/runs/{run_id}/memory-snapshot")
+async def get_run_memory_snapshot(run_id: RunIdPath):
+    run = await store.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "运行记录不存在")
+    return {"run_id": run_id, "items": await store.get_run_memory_snapshot(run_id)}
+
+
+@app.get("/api/memory", response_model=list[MemoryView])
+async def list_approved_memory():
+    return await store.list_memories()
+
+
+@app.post("/api/memory/preview", response_model=MemoryPreview)
+async def preview_approved_memory(payload: MemoryPreviewRequest):
+    return await store.preview_memories(payload.selected_memory_ids)
+
+
+@app.post("/api/memory/proposals/{proposal_id}/approve", response_model=MemoryView)
+async def approve_memory_proposal(proposal_id: MemoryIdPath, payload: MemoryProposalDecision):
+    try:
+        return await store.approve_memory_proposal(proposal_id, payload)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/memory/proposals/{proposal_id}/reject", response_model=MemoryProposalView)
+async def reject_memory_proposal(proposal_id: MemoryIdPath):
+    try:
+        return await store.reject_memory_proposal(proposal_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/memory/{memory_id}/{action}", response_model=MemoryView)
+async def change_memory_state(
+    memory_id: MemoryIdPath,
+    action: Annotated[str, ApiPath(pattern=r"^(disable|enable|delete)$")],
+):
+    action_name = {"disable": "disabled", "enable": "enabled", "delete": "deleted"}[action]
+    try:
+        return await store.set_memory_action(memory_id, action_name)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/runs/{run_id}/fork")

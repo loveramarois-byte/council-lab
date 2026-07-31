@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -43,6 +43,21 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE TABLE IF NOT EXISTS run_forks (id TEXT PRIMARY KEY, parent_run_id TEXT NOT NULL, child_run_id TEXT NOT NULL UNIQUE, checkpoint TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(parent_run_id) REFERENCES runs(id), FOREIGN KEY(child_run_id) REFERENCES runs(id))",
         "CREATE INDEX IF NOT EXISTS idx_run_forks_parent_created ON run_forks(parent_run_id, created_at)",
         "CREATE TRIGGER IF NOT EXISTS run_forks_no_update BEFORE UPDATE ON run_forks BEGIN SELECT RAISE(ABORT, 'run forks are append-only'); END",
+    ),
+    8: (
+        "CREATE TABLE IF NOT EXISTS memory_proposals (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, source_run_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(source_run_id) REFERENCES runs(id))",
+        "CREATE INDEX IF NOT EXISTS idx_memory_proposals_run_created ON memory_proposals(source_run_id, created_at)",
+        "CREATE TRIGGER IF NOT EXISTS memory_proposals_no_update BEFORE UPDATE ON memory_proposals BEGIN SELECT RAISE(ABORT, 'memory proposals are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS project_memories (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, source_run_id TEXT NOT NULL, proposal_id TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(source_run_id) REFERENCES runs(id), FOREIGN KEY(proposal_id) REFERENCES memory_proposals(id))",
+        "CREATE INDEX IF NOT EXISTS idx_project_memories_workspace_created ON project_memories(workspace_id, created_at)",
+        "CREATE TRIGGER IF NOT EXISTS project_memories_no_update BEFORE UPDATE ON project_memories BEGIN SELECT RAISE(ABORT, 'approved memories are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS memory_actions (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, workspace_id TEXT NOT NULL, proposal_id TEXT, memory_id TEXT, action TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_memory_actions_proposal_sequence ON memory_actions(proposal_id, sequence)",
+        "CREATE INDEX IF NOT EXISTS idx_memory_actions_memory_sequence ON memory_actions(memory_id, sequence)",
+        "CREATE TRIGGER IF NOT EXISTS memory_actions_no_update BEFORE UPDATE ON memory_actions BEGIN SELECT RAISE(ABORT, 'memory actions are append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS memory_actions_no_delete BEFORE DELETE ON memory_actions BEGIN SELECT RAISE(ABORT, 'memory actions are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS run_memory_snapshots (run_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id))",
+        "CREATE TRIGGER IF NOT EXISTS run_memory_snapshots_no_update BEFORE UPDATE ON run_memory_snapshots BEGIN SELECT RAISE(ABORT, 'run memory snapshots are immutable'); END",
     ),
 }
 

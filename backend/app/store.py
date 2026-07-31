@@ -11,8 +11,18 @@ from pathlib import Path
 from typing import Any
 
 from .decision_lifecycle import RunFork, RunForkLineage
+from .decision_memory import (
+    ApprovedMemory,
+    MemoryAction,
+    MemoryPreview,
+    MemoryProposal,
+    MemoryProposalDecision,
+    MemoryProposalView,
+    MemoryView,
+    render_memory_context,
+)
 from .migrations import SCHEMA_VERSION, apply_migrations, schema_version
-from .models import AgentAssignmentsConfig, DecisionBrief, ProjectRecord, ProjectSource, ProviderProfile, RunEvent, RunRecord
+from .models import AgentAssignmentsConfig, DecisionBrief, ProjectRecord, ProjectSource, ProviderProfile, RunEvent, RunMemorySnapshotItem, RunRecord, utc_now
 
 
 @dataclass(frozen=True)
@@ -186,6 +196,263 @@ class Store:
         async with self._lock:
             self.conn.execute("INSERT OR REPLACE INTO runs(id,payload,created_at) VALUES(?,?,?)", (run.id, run.model_dump_json(), run.created_at.isoformat()))
             self.conn.commit()
+
+    async def save_run_with_memory_snapshot(self, run: RunRecord) -> None:
+        """Atomically create a Run and the immutable memory actually injected into it."""
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(
+                    "INSERT INTO runs(id,payload,created_at) VALUES(?,?,?)",
+                    (run.id, run.model_dump_json(), run.created_at.isoformat()),
+                )
+                self.conn.execute(
+                    "INSERT INTO run_memory_snapshots(run_id,payload_json,created_at) VALUES(?,?,?)",
+                    (
+                        run.id,
+                        json.dumps(
+                            [item.model_dump(mode="json") for item in run.memory_snapshot],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        run.created_at.isoformat(),
+                    ),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def get_run_memory_snapshot(self, run_id: str) -> list[RunMemorySnapshotItem]:
+        row = self.conn.execute(
+            "SELECT payload_json FROM run_memory_snapshots WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if not row:
+            return []
+        return [RunMemorySnapshotItem.model_validate(item) for item in json.loads(row[0])]
+
+    async def create_memory_proposals(self, proposals: list[MemoryProposal]) -> list[MemoryProposal]:
+        if not proposals:
+            return []
+        source_run_id = proposals[0].source_run_id
+        if any(item.source_run_id != source_run_id for item in proposals):
+            raise ValueError("memory proposals must share one source Run")
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self.conn.execute(
+                    "SELECT payload_json FROM memory_proposals WHERE source_run_id=? ORDER BY created_at,id",
+                    (source_run_id,),
+                ).fetchall()
+                if existing:
+                    self.conn.commit()
+                    return [MemoryProposal.model_validate_json(row[0]) for row in existing]
+                if not self.conn.execute("SELECT 1 FROM runs WHERE id=?", (source_run_id,)).fetchone():
+                    raise ValueError("source Run does not exist")
+                for item in proposals:
+                    self.conn.execute(
+                        "INSERT INTO memory_proposals(id,workspace_id,source_run_id,payload_json,created_at) VALUES(?,?,?,?,?)",
+                        (item.id, item.workspace_id, item.source_run_id, item.model_dump_json(), item.created_at.isoformat()),
+                    )
+                self.conn.commit()
+                return proposals
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    def _proposal_view(self, proposal: MemoryProposal) -> MemoryProposalView:
+        row = self.conn.execute(
+            "SELECT action,memory_id,created_at FROM memory_actions WHERE proposal_id=? "
+            "AND action IN ('approved','rejected') ORDER BY sequence DESC LIMIT 1",
+            (proposal.id,),
+        ).fetchone()
+        if not row:
+            return MemoryProposalView(proposal=proposal, status="pending")
+        return MemoryProposalView(
+            proposal=proposal,
+            status=row[0],
+            memory_id=row[1],
+            reviewed_at=datetime.fromisoformat(row[2]),
+        )
+
+    async def list_memory_proposals(self, source_run_id: str) -> list[MemoryProposalView]:
+        rows = self.conn.execute(
+            "SELECT payload_json FROM memory_proposals WHERE source_run_id=? ORDER BY created_at,id",
+            (source_run_id,),
+        ).fetchall()
+        return [self._proposal_view(MemoryProposal.model_validate_json(row[0])) for row in rows]
+
+    async def approve_memory_proposal(
+        self, proposal_id: str, decision: MemoryProposalDecision
+    ) -> MemoryView:
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.conn.execute(
+                    "SELECT payload_json FROM memory_proposals WHERE id=?", (proposal_id,)
+                ).fetchone()
+                if not row:
+                    raise ValueError("记忆候选不存在")
+                proposal = MemoryProposal.model_validate_json(row[0])
+                latest = self.conn.execute(
+                    "SELECT action,memory_id FROM memory_actions WHERE proposal_id=? "
+                    "AND action IN ('approved','rejected') ORDER BY sequence DESC LIMIT 1",
+                    (proposal_id,),
+                ).fetchone()
+                if latest and latest[0] == "rejected":
+                    raise ValueError("已拒绝的候选不能再次批准")
+                if latest and latest[0] == "approved":
+                    existing = self.conn.execute(
+                        "SELECT payload_json FROM project_memories WHERE id=?", (latest[1],)
+                    ).fetchone()
+                    if not existing:
+                        raise RuntimeError("批准记录缺少对应记忆")
+                    memory = ApprovedMemory.model_validate_json(existing[0])
+                    action = self._latest_memory_action(memory.id)
+                    self.conn.commit()
+                    return self._memory_view(memory, action)
+                memory = ApprovedMemory(
+                    workspace_id=proposal.workspace_id,
+                    source_run_id=proposal.source_run_id,
+                    proposal_id=proposal.id,
+                    type=proposal.type,
+                    content=(decision.content or proposal.content).strip(),
+                )
+                action = MemoryAction(
+                    workspace_id=proposal.workspace_id,
+                    proposal_id=proposal.id,
+                    memory_id=memory.id,
+                    action="approved",
+                )
+                self.conn.execute(
+                    "INSERT INTO project_memories(id,workspace_id,source_run_id,proposal_id,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (memory.id, memory.workspace_id, memory.source_run_id, memory.proposal_id, memory.model_dump_json(), memory.created_at.isoformat()),
+                )
+                self._insert_memory_action(action)
+                self.conn.commit()
+                return self._memory_view(memory, action)
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def reject_memory_proposal(self, proposal_id: str) -> MemoryProposalView:
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.conn.execute(
+                    "SELECT payload_json FROM memory_proposals WHERE id=?", (proposal_id,)
+                ).fetchone()
+                if not row:
+                    raise ValueError("记忆候选不存在")
+                proposal = MemoryProposal.model_validate_json(row[0])
+                view = self._proposal_view(proposal)
+                if view.status == "approved":
+                    raise ValueError("已批准的候选不能改为拒绝，可停用对应记忆")
+                if view.status == "pending":
+                    action = MemoryAction(
+                        workspace_id=proposal.workspace_id,
+                        proposal_id=proposal.id,
+                        action="rejected",
+                    )
+                    self._insert_memory_action(action)
+                self.conn.commit()
+                return self._proposal_view(proposal)
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    def _insert_memory_action(self, action: MemoryAction) -> None:
+        self.conn.execute(
+            "INSERT INTO memory_actions(id,workspace_id,proposal_id,memory_id,action,payload_json,created_at) VALUES(?,?,?,?,?,?,?)",
+            (action.id, action.workspace_id, action.proposal_id, action.memory_id, action.action, action.model_dump_json(), action.created_at.isoformat()),
+        )
+
+    def _latest_memory_action(self, memory_id: str) -> MemoryAction:
+        row = self.conn.execute(
+            "SELECT payload_json FROM memory_actions WHERE memory_id=? ORDER BY sequence DESC LIMIT 1",
+            (memory_id,),
+        ).fetchone()
+        if not row:
+            raise RuntimeError("memory is missing its approval action")
+        return MemoryAction.model_validate_json(row[0])
+
+    @staticmethod
+    def _memory_view(memory: ApprovedMemory, action: MemoryAction) -> MemoryView:
+        deleted = action.action == "deleted"
+        active = action.action in {"approved", "enabled"} and not deleted
+        if memory.valid_until and memory.valid_until <= utc_now():
+            active = False
+        return MemoryView(
+            memory=memory,
+            active=active,
+            deleted=deleted,
+            last_action=action.action,
+            last_action_at=action.created_at,
+        )
+
+    async def list_memories(self, workspace_id: str = "local-default") -> list[MemoryView]:
+        rows = self.conn.execute(
+            "SELECT payload_json FROM project_memories WHERE workspace_id=? ORDER BY created_at DESC",
+            (workspace_id,),
+        ).fetchall()
+        memories = [ApprovedMemory.model_validate_json(row[0]) for row in rows]
+        return [self._memory_view(item, self._latest_memory_action(item.id)) for item in memories]
+
+    async def set_memory_action(self, memory_id: str, action_name: str) -> MemoryView:
+        if action_name not in {"disabled", "enabled", "deleted"}:
+            raise ValueError("不支持的记忆操作")
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.conn.execute(
+                    "SELECT payload_json FROM project_memories WHERE id=?", (memory_id,)
+                ).fetchone()
+                if not row:
+                    raise ValueError("记忆不存在")
+                memory = ApprovedMemory.model_validate_json(row[0])
+                latest = self._latest_memory_action(memory_id)
+                if latest.action == "deleted" and action_name != "deleted":
+                    raise ValueError("已删除的记忆不能重新启用")
+                if latest.action != action_name:
+                    action = MemoryAction(
+                        workspace_id=memory.workspace_id,
+                        proposal_id=memory.proposal_id,
+                        memory_id=memory.id,
+                        action=action_name,
+                    )
+                    self._insert_memory_action(action)
+                    latest = action
+                self.conn.commit()
+                return self._memory_view(memory, latest)
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def preview_memories(self, selected_memory_ids: list[str]) -> MemoryPreview:
+        views = {item.memory.id: item for item in await self.list_memories()}
+        included: list[RunMemorySnapshotItem] = []
+        excluded: list[str] = []
+        for memory_id in selected_memory_ids:
+            view = views.get(memory_id)
+            if not view or not view.active:
+                excluded.append(memory_id)
+                continue
+            item = view.memory
+            included.append(
+                RunMemorySnapshotItem(
+                    memory_id=item.id,
+                    source_run_id=item.source_run_id,
+                    type=item.type,
+                    content=item.content,
+                    verification_status=item.verification_status,
+                )
+            )
+        return MemoryPreview(
+            selected_memory_ids=selected_memory_ids,
+            included=included,
+            excluded_memory_ids=excluded,
+            rendered_context=render_memory_context(included),
+        )
 
     async def save_forked_run(self, run: RunRecord, fork: RunFork) -> None:
         """Atomically create a child Run and its immutable lineage record."""
@@ -390,6 +657,7 @@ class Store:
         async with self._lock:
             self.conn.execute("DELETE FROM decision_briefs WHERE run_id=?", (run_id,))
             self.conn.execute("DELETE FROM run_forks WHERE parent_run_id=? OR child_run_id=?", (run_id, run_id))
+            self.conn.execute("DELETE FROM run_memory_snapshots WHERE run_id=?", (run_id,))
             cursor = self.conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
             self.conn.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
             self.conn.commit()
@@ -484,7 +752,11 @@ class Store:
         async with self._lock:
             counts = {
                 table: int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                for table in ("runs", "projects", "project_sources", "run_events", "decision_briefs", "run_forks", "provider_profiles")
+                for table in (
+                    "runs", "projects", "project_sources", "run_events", "decision_briefs",
+                    "run_forks", "memory_proposals", "project_memories", "memory_actions",
+                    "run_memory_snapshots", "provider_profiles",
+                )
             }
             integrity = str(self.conn.execute("PRAGMA quick_check").fetchone()[0])
             journal_mode = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0])

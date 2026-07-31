@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun } from "../../../lib/api";
+import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, MemoryProposalView, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun } from "../../../lib/api";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
@@ -30,6 +30,11 @@ export default function RunDetailPage() {
   const [forkPrompt, setForkPrompt] = useState("");
   const [forkBusy, setForkBusy] = useState(false);
   const [forkError, setForkError] = useState("");
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryProposals, setMemoryProposals] = useState<MemoryProposalView[]>([]);
+  const [memoryDrafts, setMemoryDrafts] = useState<Record<string, string>>({});
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [memoryError, setMemoryError] = useState("");
   const [immersive, setImmersive] = useState(false);
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<string | null>(null);
@@ -77,6 +82,11 @@ export default function RunDetailPage() {
             catch { setComparison(null); }
           } else setComparison(null);
         } catch { setLineage({ children: [] }); setComparison(null); }
+        try {
+          const proposals = await api.memoryProposals(params.id);
+          setMemoryProposals(proposals);
+          setMemoryDrafts((current) => ({ ...Object.fromEntries(proposals.map((item) => [item.proposal.id, item.proposal.content])), ...current }));
+        } catch { setMemoryProposals([]); }
       } else { setDecisionBrief(null); setComparison(null); }
       if (highRiskProbeRef.current.runId !== params.id) {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
@@ -323,6 +333,27 @@ export default function RunDetailPage() {
     } finally { setForkBusy(false); }
   };
 
+  const openMemory = async () => {
+    if (!run) return;
+    setMemoryOpen(true); setMemoryBusy(true); setMemoryError("");
+    try {
+      const proposals = memoryProposals.length ? memoryProposals : await api.createMemoryProposals(run.id);
+      setMemoryProposals(proposals);
+      setMemoryDrafts(Object.fromEntries(proposals.map((item) => [item.proposal.id, item.proposal.content])));
+    } catch (err) { setMemoryError(err instanceof Error ? err.message : "无法生成记忆候选"); }
+    finally { setMemoryBusy(false); }
+  };
+
+  const decideMemory = async (proposalId: string, decision: "approve" | "reject") => {
+    setMemoryBusy(true); setMemoryError("");
+    try {
+      if (decision === "approve") await api.approveMemoryProposal(proposalId, memoryDrafts[proposalId]?.trim());
+      else await api.rejectMemoryProposal(proposalId);
+      if (run) setMemoryProposals(await api.memoryProposals(run.id));
+    } catch (err) { setMemoryError(err instanceof Error ? err.message : "记忆候选处理失败"); }
+    finally { setMemoryBusy(false); }
+  };
+
   const act = async (action: "interject" | "question") => {
     if (!run || busy || !canWrite || !draft.trim()) return;
     setBusy(true); setError("");
@@ -440,6 +471,7 @@ export default function RunDetailPage() {
         </div>
 
         {Boolean(run.source_snapshots?.length) && <div className="source-strip" aria-label="本次资料快照"><strong>资料快照</strong>{run.source_snapshots!.map((source, index) => <span key={source.id} title={`${source.url || source.filename || "本地文字"}\nSHA-256 ${source.sha256}`}><b>[S{index + 1}]</b>{source.title}</span>)}</div>}
+        {Boolean(run.memory_snapshot?.length) && <div className="source-strip memory-snapshot-strip" aria-label="本次已批准记忆快照"><strong>已批准记忆</strong>{run.memory_snapshot!.map((item) => <span key={item.memory_id} title={`来源 Run ${item.source_run_id}`}><b>{item.type}</b>{item.content}</span>)}</div>}
 
         <div className="dialogue-scroll" ref={transcriptRef} aria-live="polite">
           <article className="opening-question"><span>你提出</span><p>{run.question}</p></article>
@@ -490,7 +522,7 @@ export default function RunDetailPage() {
           {(error || run.error) && <p className="discussion-error">{error || run.error}</p>}
         </div>}
 
-        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button>{lineage.parent && <Link className="quiet-button" href={`/runs/${lineage.parent.parent_run_id}`}><GitBranch size={15} />父 Run</Link>}{lineage.children.length > 0 && <span className="fork-child-count">{lineage.children.length} 个分支</span>}<span /><button className="quiet-button" onClick={() => { setForkError(""); setForkOpen(true); }}><GitBranch size={15} />创建情景分叉</button><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
+        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button><button className="quiet-button" onClick={openMemory}><Save size={15} />沉淀记忆</button>{lineage.parent && <Link className="quiet-button" href={`/runs/${lineage.parent.parent_run_id}`}><GitBranch size={15} />父 Run</Link>}{lineage.children.length > 0 && <span className="fork-child-count">{lineage.children.length} 个分支</span>}<span /><button className="quiet-button" onClick={() => { setForkError(""); setForkOpen(true); }}><GitBranch size={15} />创建情景分叉</button><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
       </section>
     </main>
     {highRisk && highRiskOpen && <div className="high-risk-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setHighRiskOpen(false); }}>
@@ -548,6 +580,13 @@ export default function RunDetailPage() {
           <label className="review-field review-wide"><span>新增情景约束（可选）</span><textarea aria-label="新增情景约束" rows={4} maxLength={6000} value={forkPrompt} onChange={(event) => setForkPrompt(event.target.value)} placeholder="只写变化，不用重复原问题" /></label>
         </div>
         <footer>{forkError ? <span className="review-error">{forkError}</span> : <span>{highRisk ? "高风险分叉会创建全新的控制记录，旧审批不会继承。" : "复用内容会明确标记，不计入新 Run 的模型用量。"}</span>}<button className="send-button" onClick={createFork} disabled={forkBusy || forkReason.trim().length < 3}>{forkBusy ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}创建新 Run</button></footer>
+      </section>
+    </div>}
+    {memoryOpen && <div className="decision-review-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMemoryOpen(false); }}>
+      <section className="decision-review-dialog memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-title">
+        <header><div><span>USER-APPROVED MEMORY</span><h2 id="memory-title">沉淀长期记忆</h2><p>系统只提出候选；未经你逐条批准的内容永远不会跨 Run 注入。</p></div><button className="icon-button" onClick={() => setMemoryOpen(false)} aria-label="关闭长期记忆"><X size={16} /></button></header>
+        <div className="memory-proposal-list">{memoryBusy && memoryProposals.length === 0 ? <p>正在生成候选…</p> : memoryProposals.map((item) => <article key={item.proposal.id} data-status={item.status}><header><span>{item.proposal.type}</span><small>{item.status === "pending" ? "待你决定" : item.status === "approved" ? "已批准" : "已拒绝"}</small></header><textarea aria-label={`记忆候选 ${item.proposal.type}`} rows={3} maxLength={3000} value={memoryDrafts[item.proposal.id] ?? item.proposal.content} disabled={item.status !== "pending" || memoryBusy} onChange={(event) => setMemoryDrafts({ ...memoryDrafts, [item.proposal.id]: event.target.value })} /><p>{item.proposal.rationale}</p>{item.status === "pending" && <footer><button className="quiet-button danger" disabled={memoryBusy} onClick={() => decideMemory(item.proposal.id, "reject")}>拒绝</button><button className="send-button" disabled={memoryBusy || !(memoryDrafts[item.proposal.id] || "").trim()} onClick={() => decideMemory(item.proposal.id, "approve")}>批准此条</button></footer>}</article>)}</div>
+        <footer>{memoryError ? <span className="review-error">{memoryError}</span> : <span>批准记录与后续停用、删除操作都保留追加式审计轨迹。</span>}</footer>
       </section>
     </div>}
   </div>;

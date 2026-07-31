@@ -4,7 +4,7 @@ import Link from "next/link";
 import { ArrowUp, Bot, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Settings2, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AgentAssignmentsConfig, api, DeliberationTemplate, providerIsReady, Provider } from "../lib/api";
+import { AgentAssignmentsConfig, api, DeliberationTemplate, MemoryPreview, MemoryView, providerIsReady, Provider } from "../lib/api";
 
 const modes = [
   { id: "quick", label: "引导", detail: "4 席 · 1.8k 上下文", icon: Zap },
@@ -21,6 +21,9 @@ export default function HomePage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [assignments, setAssignments] = useState<AgentAssignmentsConfig | null>(null);
   const [templates, setTemplates] = useState<DeliberationTemplate[]>([]);
+  const [memories, setMemories] = useState<MemoryView[]>([]);
+  const [selectedMemoryIds, setSelectedMemoryIds] = useState<string[]>([]);
+  const [memoryPreview, setMemoryPreview] = useState<MemoryPreview | null>(null);
   const [templateId, setTemplateId] = useState("open_discussion");
   const [demoAcknowledged, setDemoAcknowledged] = useState(false);
   const [configState, setConfigState] = useState<"loading" | "ready" | "error">("loading");
@@ -32,10 +35,11 @@ export default function HomePage() {
     setConfigState("loading");
     setLoadError("");
     try {
-      const [items, config, templateItems] = await Promise.all([api.providers(), api.assignments(), api.templates()]);
+      const [items, config, templateItems, memoryItems] = await Promise.all([api.providers(), api.assignments(), api.templates(), api.memory().catch(() => [])]);
       setProviders(items);
       setAssignments(config);
       setTemplates(templateItems);
+      setMemories(memoryItems.filter((item) => item.active && !item.deleted));
       setDemoAcknowledged(false);
       setConfigState("ready");
     } catch (nextError) {
@@ -45,6 +49,11 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => { void loadConfiguration(); }, [loadConfiguration]);
+  useEffect(() => {
+    let cancelled = false;
+    void api.memoryPreview(selectedMemoryIds).then((value) => { if (!cancelled) setMemoryPreview(value); }).catch(() => { if (!cancelled) setMemoryPreview(null); });
+    return () => { cancelled = true; };
+  }, [selectedMemoryIds]);
 
   const selectedMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode]);
   const selectedTemplate = templates.find((item) => item.id === templateId);
@@ -92,6 +101,7 @@ export default function HomePage() {
         mode,
         use_saved_assignments: true,
         template_id: templateId,
+        ...(selectedMemoryIds.length ? { selected_memory_ids: selectedMemoryIds } : {}),
         ...(autoSummarize && !highRisk ? { auto_summarize: true } : {}),
         ...(highRisk ? { high_risk: true } : {}),
       });
@@ -137,6 +147,7 @@ export default function HomePage() {
         <div className="composer-section">
           <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
           <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} rows={5} />
+          {memories.length > 0 && <section className="memory-picker" aria-label="本次使用的已批准记忆"><header><div><strong>本次可用的已批准记忆</strong><small>默认不注入，只有你明确勾选的内容才会进入本次 Run。</small></div><span>{selectedMemoryIds.length} / {memories.length}</span></header><div>{memories.map((item) => <label key={item.memory.id}><input type="checkbox" checked={selectedMemoryIds.includes(item.memory.id)} onChange={(event) => setSelectedMemoryIds((current) => event.target.checked ? [...current, item.memory.id] : current.filter((id) => id !== item.memory.id))} /><span><strong>{item.memory.type}</strong>{item.memory.content}</span></label>)}</div>{memoryPreview && selectedMemoryIds.length > 0 && <details><summary>查看实际注入快照</summary><pre>{memoryPreview.rendered_context || "所选记忆当前不可用，不会注入。"}</pre></details>}</section>}
           <div className="composer-footer"><label className={`risk-mode-toggle ${highRisk ? "active" : ""}`}><input type="checkbox" checked={highRisk} onChange={(event) => { const checked = event.target.checked; setHighRisk(checked); if (checked) setAutoSummarize(false); }} /><span className={`toggle ${highRisk ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label>{!highRisk && <label className={`risk-mode-toggle ${autoSummarize ? "active" : ""}`}><input type="checkbox" checked={autoSummarize} onChange={(event) => setAutoSummarize(event.target.checked)} /><span className={`toggle ${autoSummarize ? "on" : ""}`} /><span><strong>自动总结</strong><small>{autoSummarize ? "讨论席结束后直接生成答案" : "默认等待你的确认"}</small></span></label>}<button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={submit}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
           {error && <p className="form-error" role="alert">{error}</p>}
         </div>
