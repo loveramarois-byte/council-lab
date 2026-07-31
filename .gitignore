@@ -39,3 +39,4 @@ desktop/Council.app/
 .DS_Store
 .idea/
 .vscode/
+.gstack/
