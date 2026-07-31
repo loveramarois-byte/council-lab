@@ -70,6 +70,9 @@ def test_release_workflow_requests_packaged_javascript_and_css():
     assert "python -m pytest backend/tests/test_release_consistency.py -k macos_launcher" in workflow
     assert "build_release_notes.py --output artifacts/RELEASE_NOTES.md" in workflow
     assert workflow.count("--notes-file artifacts/RELEASE_NOTES.md") == 2
+    assert workflow.count("web/public/sw.js") >= 1
+    assert workflow.count('web\\public\\sw.js') >= 1
+    assert workflow.count("http://127.0.0.1:3000/sw.js") >= 2
 
 
 def test_release_smoke_preserves_internal_api_authentication_on_both_platforms():

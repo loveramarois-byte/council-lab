@@ -19,7 +19,7 @@ export default function RunDetailPage() {
   const fullscreenOwnedRef = useRef(false);
   const immersiveDesiredRef = useRef(false);
   const immersiveRequestRef = useRef(0);
-  const highRiskProbeRef = useRef<{ runId: string; result: "unknown" | "present" | "absent" }>({ runId: "", result: "unknown" });
+  const highRiskProbeRef = useRef<{ runId: string; result: "unknown" | "pending" | "present" | "absent" }>({ runId: "", result: "unknown" });
   const [run, setRun] = useState<Run | null>(null);
   const [immersive, setImmersive] = useState(false);
   const [draft, setDraft] = useState("");
@@ -58,7 +58,7 @@ export default function RunDetailPage() {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
       }
       const shouldLoadHighRisk = nextRun.high_risk_control === true
-        || (nextRun.high_risk_control == null && highRiskProbeRef.current.result !== "absent");
+        || (nextRun.high_risk_control == null && ["unknown", "present"].includes(highRiskProbeRef.current.result));
       if (!shouldLoadHighRisk) {
         setHighRisk(null);
         setHighRiskApproval(null);
@@ -66,6 +66,9 @@ export default function RunDetailPage() {
         return;
       }
       try {
+        if (nextRun.high_risk_control == null && highRiskProbeRef.current.result === "unknown") {
+          highRiskProbeRef.current.result = "pending";
+        }
         const nextHighRisk = await api.highRiskRun(params.id);
         highRiskProbeRef.current.result = "present";
         setHighRisk(nextHighRisk);

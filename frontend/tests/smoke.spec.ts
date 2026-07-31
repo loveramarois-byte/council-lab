@@ -1134,6 +1134,31 @@ test("普通审议不再探测高风险控制接口", async ({ page }) => {
   expect(highRiskRequests).toBe(0);
 });
 
+test("旧普通审议的兼容探测在轮询期间只发送一次", async ({ page }) => {
+  const now = new Date().toISOString();
+  const legacyRun = {
+    id: "legacy-standard-fixture", question: "旧普通审议兼容读取", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "low",
+    status: "running", created_at: now, updated_at: now, analysis: null, candidates: [], critiques: [], verifications: [], revisions: [], scores: [], final_decision: null,
+    usage: { model_calls: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, estimated_cost: null, duration_ms: 0 }, degraded: false, protocol: "mock", discussion_turns: [], participant_roles: [], current_speaker_index: 0, discussion_round: 1, awaiting_user: false,
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, seat_assignments: [], finalizer_assignment: null, auto_summarize: false, recoverable: false,
+  };
+  let highRiskRequests = 0;
+  let finishProbe: (() => void) | undefined;
+  const probeGate = new Promise<void>((resolve) => { finishProbe = resolve; });
+  await page.route("**/api/runs/legacy-standard-fixture", (route) => route.fulfill({ json: legacyRun }));
+  await page.route("**/api/high-risk/runs/legacy-standard-fixture", async (route) => {
+    highRiskRequests += 1;
+    await probeGate;
+    return route.fulfill({ status: 404, json: { error: { code: "HIGH_RISK_RUN_NOT_FOUND", message: "不存在" } } });
+  });
+
+  await page.goto("/runs/legacy-standard-fixture");
+  await expect.poll(() => highRiskRequests).toBe(1);
+  await page.waitForTimeout(2_700);
+  expect(highRiskRequests).toBe(1);
+  finishProbe?.();
+});
+
 test("Service Worker 脚本存在且不造成注册错误", async ({ page }) => {
   const consoleErrors: string[] = [];
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
@@ -1149,6 +1174,14 @@ test("Service Worker 脚本存在且不造成注册错误", async ({ page }) => 
   await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
+  const activeScript = await page.evaluate(async () => (await navigator.serviceWorker.ready).active?.scriptURL || "");
+  expect(activeScript).toMatch(/\/sw\.js$/);
+  const cachedPaths = await page.evaluate(async () => {
+    const requests = (await Promise.all((await caches.keys()).map((key) => caches.open(key).then((cache) => cache.keys())))).flat();
+    return requests.map((request) => new URL(request.url).pathname);
+  });
+  expect(cachedPaths.length).toBeGreaterThan(0);
+  expect(cachedPaths.every((path) => path === "/manifest.webmanifest" || path.startsWith("/icons/"))).toBeTruthy();
   expect(consoleErrors.filter((message) => message.includes("bad HTTP response") || message.includes("sw.js"))).toEqual([]);
 });
 
