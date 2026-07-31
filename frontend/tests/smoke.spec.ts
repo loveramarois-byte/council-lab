@@ -146,8 +146,8 @@ test("高风险控制面在手机端显示关键事实门禁", async ({ page }) 
       { id: "builder", name: "构策", role: "方案师", brief: "方案" }, { id: "observer", name: "观澜", role: "观察者", brief: "分歧" },
     ], seat_assignments: [], finalizer_assignment: null, current_speaker_index: 4, discussion_round: 1, awaiting_user: true, auto_summarize: false, recoverable: false, limit_reason: null,
   };
-  const fact = { fact_id: "medical_context", name: "医疗背景", description: "年龄、症状时间线、病史、用药和过敏。", required: true, value: null, source: "unknown", verified: false, materiality: "critical" };
-  const highRisk = { run_id: run.id, status: "MORE_INFORMATION_REQUIRED", version: 1, risk_assessment: { run_id: run.id, risk_tier: "high", original_risk_tier: "high", detected_domains: ["medical"], reasons: ["检测到高风险领域：medical"], classifier_version: "high-risk-rules-v1", assessed_at: now, manually_overridden: false }, required_facts: [fact], decision: null, requested_by: "local-requester", created_at: now, updated_at: now };
+  const fact = { fact_id: "medical_context", name: "医疗背景", description: "年龄、症状时间线、病史、用药和过敏。", required: true, value: null, source: "unknown", verified: false, verification_status: "unverified", materiality: "critical" };
+  const highRisk = { run_id: run.id, status: "MORE_INFORMATION_REQUIRED", version: 1, risk_assessment: { run_id: run.id, risk_tier: "high", original_risk_tier: "high", detected_domains: ["medical"], reasons: ["检测到高风险领域：medical"], classifier_version: "high-risk-rules-v2", confidence: 0.75, requires_user_confirmation: true, assessed_at: now, manually_overridden: false }, required_facts: [fact], evidence_records: [], professional_reviews: [], assurance: { evidence_complete: false, evidence_current: false, evidence_conflict: false, professional_review_complete: false, medical_red_flag: false, blocking_reasons: ["关键事实未填写：医疗背景", "缺少证据：医疗背景"] }, decision: null, requested_by: "local-requester", created_at: now, updated_at: now };
   const audit = [{ event_id: "audit-1", sequence: 1, run_id: run.id, event_type: "risk_assessed", occurred_at: now, actor_type: "system", previous_status: "RISK_ASSESSMENT_REQUIRED", new_status: "MORE_INFORMATION_REQUIRED" }];
   let savedFacts: Array<Record<string, unknown>> = [];
   let auditRequests = 0;
@@ -173,12 +173,60 @@ test("高风险控制面在手机端显示关键事实门禁", async ({ page }) 
   const auditTimeline = page.getByRole("region", { name: "高风险审计时间线" });
   await expect(auditTimeline).toContainText("完成风险评估");
   await page.locator(".required-facts-form label").filter({ hasText: "医疗背景" }).locator("textarea").fill("成年人；症状持续两天；无已知过敏。 ");
-  await page.getByRole("button", { name: "保存事实" }).click();
+  await page.getByRole("button", { name: "保存事实", exact: true }).click();
   expect(savedFacts[0].value).toBe("成年人；症状持续两天；无已知过敏。");
   await expect(page.getByText("等待报告与证据复核").first()).toBeVisible();
   await expect(page.locator(".high-risk-error")).toHaveCount(0);
   const viewport = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
   expect(viewport.width).toBeLessThanOrEqual(viewport.viewportWidth);
+});
+
+test("高风险证据必须追加后由独立专业角色核验", async ({ page }) => {
+  const now = new Date().toISOString();
+  const run = {
+    id: "high-risk-assurance-fixture", question: "投资适当性复核", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "high", high_risk_control: true,
+    status: "awaiting_final_input", created_at: now, updated_at: now, analysis: null, candidates: [], critiques: [], verifications: [], revisions: [], scores: [], final_decision: null,
+    usage: { model_calls: 4, tool_calls: 0, input_tokens: 100, output_tokens: 200, estimated_cost: null, duration_ms: 1000 }, degraded: false, protocol: "mock", workflow_engine: "langgraph", checkpoint_count: 4,
+    context_snapshot: { strategy: "deterministic_context_clipping", token_budget: 4000, estimated_tokens: 300, included_turns: 4, total_turns: 4, compacted: false, summary: "" },
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, discussion_turns: [], participant_roles: [
+      { id: "analyst", name: "析理", role: "拆解者", brief: "拆解" }, { id: "challenger", name: "诘问", role: "挑战者", brief: "反例" },
+      { id: "builder", name: "构策", role: "方案师", brief: "方案" }, { id: "observer", name: "观澜", role: "观察者", brief: "分歧" },
+    ], seat_assignments: [], finalizer_assignment: null, current_speaker_index: 4, discussion_round: 1, awaiting_user: true, auto_summarize: false, recoverable: false, limit_reason: null,
+  };
+  const fact = { fact_id: "investment_constraints", name: "投资约束", description: "期限、流动性和损失承受力。", required: true, value: "期限五年；最大可承受损失 10%", source: "user", verified: false, verification_status: "unverified", materiality: "critical", source_title: null as string | null, source_timestamp: null as string | null };
+  const baseAssessment = { run_id: run.id, risk_tier: "high", original_risk_tier: "high", detected_domains: ["investment"], reasons: ["检测到高风险领域：investment"], classifier_version: "high-risk-rules-v2", confidence: 0.75, requires_user_confirmation: true, assessed_at: now, manually_overridden: false };
+  let current = { run_id: run.id, status: "EVIDENCE_REQUIRED", version: 2, risk_assessment: baseAssessment, required_facts: [fact], evidence_records: [] as Array<Record<string, unknown>>, professional_reviews: [], assurance: { evidence_complete: false, evidence_current: false, evidence_conflict: false, professional_review_complete: false, medical_red_flag: false, blocking_reasons: ["缺少证据：投资约束"] }, decision: null, requested_by: "local-requester", created_at: now, updated_at: now };
+  let evidencePayload: Record<string, unknown> = {};
+  let verificationPayload: Record<string, unknown> = {};
+  await page.route("**/api/runs/high-risk-assurance-fixture", (route) => route.fulfill({ json: run }));
+  await page.route("**/api/high-risk/runs/high-risk-assurance-fixture/approval", (route) => route.fulfill({ status: 404, json: { error: { code: "APPROVAL_NOT_FOUND", message: "不存在" } } }));
+  await page.route("**/api/high-risk/runs/high-risk-assurance-fixture/audit", (route) => route.fulfill({ json: [] }));
+  await page.route("**/api/high-risk/runs/high-risk-assurance-fixture/evidence", async (route) => {
+    evidencePayload = route.request().postDataJSON();
+    const evidence = { evidence_id: "evidence-1", run_id: run.id, fact_id: fact.fact_id, fact_value_hash: "a".repeat(64), domain: "investment", source_type: "manual", source_title: String(evidencePayload.source_title), source_ref: String(evidencePayload.source_ref), source_timestamp: String(evidencePayload.source_timestamp), submitted_by: "local-requester", submitted_at: now, verification_status: "pending" };
+    current = { ...current, version: 3, evidence_records: [evidence], required_facts: [{ ...fact, verification_status: "pending", source_title: evidence.source_title, source_timestamp: evidence.source_timestamp }], assurance: { ...current.assurance, blocking_reasons: ["证据未有效核验：投资约束（pending）"] } };
+    return route.fulfill({ json: evidence });
+  });
+  await page.route("**/api/high-risk/runs/high-risk-assurance-fixture/evidence/evidence-1/verification", async (route) => {
+    verificationPayload = route.request().postDataJSON();
+    current = { ...current, version: 4, evidence_records: [{ ...current.evidence_records[0], verification_status: "verified", verified_by: "reviewer-b", verified_at: now }], required_facts: [{ ...fact, verified: true, verification_status: "verified", source_title: "Investment policy", source_timestamp: now }], assurance: { ...current.assurance, evidence_complete: true, evidence_current: true, blocking_reasons: [] } };
+    return route.fulfill({ json: { verification_id: "verification-1", evidence_id: "evidence-1", run_id: run.id, status: "verified", method: "independent_source_review", reviewer_id: "reviewer-b", reviewer_role: "licensed_adviser", domain: "investment", note: "ok", verified_at: now } });
+  });
+  await page.route("**/api/high-risk/runs/high-risk-assurance-fixture", (route) => route.fulfill({ json: current }));
+
+  await page.goto("/runs/high-risk-assurance-fixture");
+  await page.getByRole("button", { name: "打开控制面" }).click();
+  await page.getByLabel("投资约束来源标题").fill("Investment policy");
+  await page.getByLabel("投资约束来源引用").fill("manual://policy-v3");
+  await page.getByRole("button", { name: "追加证据" }).click();
+  expect(evidencePayload).toMatchObject({ fact_id: "investment_constraints", source_type: "manual", source_title: "Investment policy" });
+  await page.getByText("等待独立核验").waitFor();
+  await page.locator(".professional-identity-form input").nth(0).fill("reviewer-b");
+  await page.locator(".professional-identity-form input").nth(1).fill("reviewer-secret-b");
+  await page.locator(".professional-identity-form input").nth(2).fill("licensed_adviser");
+  await page.getByRole("button", { name: "核验此证据" }).click();
+  expect(verificationPayload).toMatchObject({ status: "verified", reviewer_role: "licensed_adviser", domain: "investment" });
+  await expect(page.getByText("已核验").first()).toBeVisible();
 });
 
 test("已有真实 Provider 时引导全 Mock 五席进入席位配置", async ({ page }) => {

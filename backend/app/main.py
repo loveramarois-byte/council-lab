@@ -28,7 +28,7 @@ from .orchestrator import Orchestrator
 from .paths import database_path
 from .provider_catalog import BUILTIN_PROVIDER_IDS, builtin_providers
 from .providers import build_backend, discover_ccswitch_models, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
-from .risk.schemas import ApprovalDecisionRequest, ApprovalRecord, ApprovalRequest, FactsUpdateRequest, HighRiskCreate, HighRiskRun, PrepareReviewRequest, PublicAuditEvent, RevokeApprovalRequest, RiskOverrideRequest, TransitionRequest
+from .risk.schemas import ApprovalDecisionRequest, ApprovalRecord, ApprovalRequest, EvidenceCreateRequest, EvidenceRecord, EvidenceVerificationRecord, EvidenceVerificationRequest, FactsUpdateRequest, HighRiskCreate, HighRiskRun, PrepareReviewRequest, ProfessionalReviewRecord, ProfessionalReviewRequest, PublicAuditEvent, RevokeApprovalRequest, RiskOverrideRequest, TransitionRequest
 from .risk.service import HighRiskService
 from .reports import run_html, run_markdown
 from .request_boundary import load_internal_api_token, token_identifier
@@ -292,6 +292,59 @@ async def update_high_risk_facts(
     )
 
 
+@app.post("/api/high-risk/runs/{run_id}/evidence", response_model=EvidenceRecord)
+async def add_high_risk_evidence(
+    run_id: str,
+    payload: EvidenceCreateRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:evidence:{payload.fact_id}",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.add_evidence(run_id, payload, actor_id),
+        response,
+        EvidenceRecord,
+        lambda cached: high_risk_service.get_evidence(run_id, cached.evidence_id),
+    )
+
+
+@app.post(
+    "/api/high-risk/runs/{run_id}/evidence/{evidence_id}/verification",
+    response_model=EvidenceVerificationRecord,
+)
+async def verify_high_risk_evidence(
+    run_id: str,
+    evidence_id: str,
+    payload: EvidenceVerificationRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    reviewer_header: str | None = Header(default=None, alias="X-Council-Reviewer-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    reviewer_secret = require_reviewer_secret(reviewer_header)
+    await high_risk_service.authorize_reviewer_access(
+        run_id, actor_id, reviewer_secret, "evidence_verification"
+    )
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:evidence:{evidence_id}:verification",
+        idempotency_key,
+        {"actor_id": actor_id, "evidence_id": evidence_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.verify_evidence(
+            run_id, evidence_id, payload, actor_id, reviewer_secret
+        ),
+        response,
+        EvidenceVerificationRecord,
+        lambda cached: high_risk_service.get_evidence_verification(run_id, cached.verification_id),
+    )
+
+
 @app.post("/api/high-risk/runs/{run_id}/transition", response_model=HighRiskRun)
 async def transition_high_risk_run(
     run_id: str,
@@ -342,6 +395,37 @@ async def prepare_high_risk_review(
         response,
         HighRiskRun,
         lambda _cached: high_risk_service.get(run_id),
+    )
+
+
+@app.post(
+    "/api/high-risk/runs/{run_id}/professional-reviews",
+    response_model=ProfessionalReviewRecord,
+)
+async def submit_high_risk_professional_review(
+    run_id: str,
+    payload: ProfessionalReviewRequest,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    reviewer_header: str | None = Header(default=None, alias="X-Council-Reviewer-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    actor_id = require_actor(actor_header)
+    reviewer_secret = require_reviewer_secret(reviewer_header)
+    await high_risk_service.authorize_reviewer_access(
+        run_id, actor_id, reviewer_secret, "professional_review"
+    )
+    return await execute_idempotent_model_action(
+        store,
+        f"high-risk:{run_id}:professional-review:{payload.domain}",
+        idempotency_key,
+        {"actor_id": actor_id, **payload.model_dump(mode="json")},
+        lambda: high_risk_service.submit_professional_review(
+            run_id, payload, actor_id, reviewer_secret
+        ),
+        response,
+        ProfessionalReviewRecord,
+        lambda cached: high_risk_service.get_professional_review(run_id, cached.review_id),
     )
 
 

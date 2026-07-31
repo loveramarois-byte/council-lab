@@ -12,7 +12,7 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **You remain in the room.** Interjections become public context for later seats and the final synthesis.
 - **Independent seat configuration.** Choose a provider and model for each of the four speakers and the finalizer; the configuration is snapshotted per run.
 - **A deliberate confirmation point.** Council does not finalize after seat four until you approve or add more context.
-- **High-risk decision gates.** Medical, legal, investment, compliance, and production-incident runs can require critical facts, a separate configured reviewer, a content-bound approval, and an append-only audit trail.
+- **High-risk decision gates.** Medical, legal, investment, compliance, and production-incident runs require time-bounded evidence, independent verification, domain-matched professional review, a separate final approver, and append-only audit records.
 - **Explicit first-run setup.** Council distinguishes the local scripted demo from real AI, then guides users through connecting a Provider and assigning all five seats.
 - **Decision follow-up.** Record the decision taken, expected result, review date, actual outcome, and which seat hypotheses held up.
 - **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
@@ -30,7 +30,9 @@ Council never displays or saves hidden chain-of-thought. It stores only public m
 
 ## High-risk mode
 
-Enable **High-risk decision support** when creating the Run. The server persists the control record before any model task starts. Missing critical facts block report preparation and approval. Approvals bind the Run, action type, canonical action-payload hash, report hash, requester, reviewer, and expiry; they cannot be replayed across Runs or consumed twice.
+Enable **High-risk decision support** when creating the Run. The server persists the control record before any model task starts. Each critical fact must be bound to source provenance, timestamp, expiry, and an independently verified evidence record. A domain-matched professional must review the evidence snapshot and report before a different configured reviewer can grant final approval. Expired or conflicting evidence, medical red flags, role mismatch, or missing professional coverage fail closed.
+
+Professional roles are reviewer attestations. Council validates reviewer secrets, domain-role policy, evidence snapshots, and report hashes; it does not verify licenses or execute prescriptions, trades, legal filings, compliance releases, or production changes.
 
 P0 reviewers are configured by the desktop operator before startup, for example `COUNCIL_HIGH_RISK_REVIEWERS=reviewer-a:long-random-secret,reviewer-b:another-secret`. Use separate reviewer identities and long random secrets. A requester cannot approve their own request. Mobile pairing grants UI access only and never grants reviewer authority; reviewer credentials remain in the server environment and transient form state, not browser storage or SQLite.
 
@@ -137,6 +139,6 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Browsers use the same-origin Next.js proxy only; every FastAPI route except health requires a launcher-generated server token and rejects foreign origins, cross-site fetch metadata, and unknown hosts. CORS is not treated as CSRF protection. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report. For troubleshooting, prefer the [redacted diagnostics bundle](docs/DIAGNOSTICS.md) and inspect it before sending.
 
-Version `0.12.0` is intended for personal research, planning, and non-binding decision support. High-risk mode adds gates and auditability; it does not prove factual verification, professional participation, or regulatory compliance. Do not use its output directly for medical, legal, financial, compliance, or safety-critical execution.
+Version `0.13.0` is intended for personal research, planning, and non-binding decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

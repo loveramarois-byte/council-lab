@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -80,6 +80,21 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "DROP TRIGGER IF EXISTS claim_outcomes_no_delete",
     ),
     11: (),
+    12: (
+        "CREATE TABLE IF NOT EXISTS high_risk_evidence_records (evidence_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, fact_id TEXT NOT NULL, fact_value_hash TEXT NOT NULL, domain TEXT NOT NULL, source_type TEXT NOT NULL, source_title TEXT NOT NULL, source_ref TEXT NOT NULL, source_version TEXT, source_timestamp TEXT NOT NULL, expires_at TEXT, content_sha256 TEXT, submitted_by TEXT NOT NULL, submitted_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_high_risk_evidence_run_fact ON high_risk_evidence_records(run_id, fact_id, submitted_at)",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_evidence_no_update BEFORE UPDATE ON high_risk_evidence_records BEGIN SELECT RAISE(ABORT, 'high-risk evidence records are append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_evidence_no_delete BEFORE DELETE ON high_risk_evidence_records BEGIN SELECT RAISE(ABORT, 'high-risk evidence records are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS high_risk_evidence_verifications (sequence INTEGER PRIMARY KEY AUTOINCREMENT, verification_id TEXT NOT NULL UNIQUE, evidence_id TEXT NOT NULL, run_id TEXT NOT NULL, status TEXT NOT NULL, method TEXT NOT NULL, reviewer_id TEXT NOT NULL, reviewer_role TEXT NOT NULL, domain TEXT NOT NULL, note TEXT NOT NULL, verified_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_high_risk_evidence_verification ON high_risk_evidence_verifications(evidence_id, sequence)",
+        "CREATE INDEX IF NOT EXISTS idx_high_risk_evidence_verification_run ON high_risk_evidence_verifications(run_id, sequence)",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_evidence_verification_no_update BEFORE UPDATE ON high_risk_evidence_verifications BEGIN SELECT RAISE(ABORT, 'high-risk evidence verifications are append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_evidence_verification_no_delete BEFORE DELETE ON high_risk_evidence_verifications BEGIN SELECT RAISE(ABORT, 'high-risk evidence verifications are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS high_risk_professional_reviews (sequence INTEGER PRIMARY KEY AUTOINCREMENT, review_id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL, reviewer_id TEXT NOT NULL, reviewer_role TEXT NOT NULL, domain TEXT NOT NULL, scope TEXT NOT NULL, attestation TEXT NOT NULL, decision TEXT NOT NULL, evidence_snapshot_hash TEXT NOT NULL, report_hash TEXT NOT NULL, reviewed_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS idx_high_risk_professional_review_run ON high_risk_professional_reviews(run_id, sequence)",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_professional_review_no_update BEFORE UPDATE ON high_risk_professional_reviews BEGIN SELECT RAISE(ABORT, 'high-risk professional reviews are append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS high_risk_professional_review_no_delete BEFORE DELETE ON high_risk_professional_reviews BEGIN SELECT RAISE(ABORT, 'high-risk professional reviews are append-only'); END",
+    ),
 }
 
 

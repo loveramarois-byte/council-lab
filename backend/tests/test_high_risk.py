@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import httpx
+from pydantic import ValidationError
 
 from conftest import TEST_INTERNAL_API_TOKEN
 from app.errors import ApiError
@@ -16,8 +17,11 @@ from app.risk.classifier import assess_risk
 from app.risk.schemas import (
     ApprovalDecisionRequest,
     ApprovalRecord,
+    EvidenceCreateRequest,
+    EvidenceVerificationRequest,
     HighRiskCreate,
     PrepareReviewRequest,
+    ProfessionalReviewRequest,
     RequiredFact,
     RiskOverrideRequest,
     TransitionRequest,
@@ -50,6 +54,73 @@ def complete_facts(case) -> list[RequiredFact]:
     ]
 
 
+REVIEW_ROLE_BY_DOMAIN = {
+    "medical": "physician",
+    "legal": "lawyer",
+    "investment": "licensed_adviser",
+    "compliance": "compliance_officer",
+    "production_incident": "incident_commander",
+    "general_high_risk": "domain_professional",
+}
+
+
+async def verify_all_required_evidence(service: HighRiskService, case):
+    current = await service.get(case.run_id)
+    for fact in current.required_facts:
+        domain = next(
+            domain
+            for domain in current.risk_assessment.detected_domains
+            if fact.fact_id.startswith(domain.split("_")[0])
+            or (domain == "production_incident" and fact.fact_id.startswith("incident_"))
+            or (domain == "general_high_risk" and fact.fact_id == "decision_context")
+        )
+        evidence = await service.add_evidence(
+            current.run_id,
+            EvidenceCreateRequest(
+                fact_id=fact.fact_id,
+                source_type="manual",
+                source_title=f"Test source for {fact.fact_id}",
+                source_ref=f"test://{current.run_id}/{fact.fact_id}",
+                source_timestamp=utc_now(),
+                expires_at=utc_now() + timedelta(hours=2),
+            ),
+            "requester-a",
+        )
+        await service.verify_evidence(
+            current.run_id,
+            evidence.evidence_id,
+            EvidenceVerificationRequest(
+                status="verified",
+                method="independent test review",
+                reviewer_role=REVIEW_ROLE_BY_DOMAIN[domain],
+                domain=domain,
+                note="verified fixture evidence",
+            ),
+            "reviewer-b",
+            "reviewer-secret-b",
+        )
+    return await service.get(current.run_id)
+
+
+async def approve_all_professional_domains(service: HighRiskService, case):
+    current = await service.get(case.run_id)
+    for domain in current.risk_assessment.detected_domains:
+        await service.submit_professional_review(
+            current.run_id,
+            ProfessionalReviewRequest(
+                reviewer_role=REVIEW_ROLE_BY_DOMAIN[domain],
+                domain=domain,
+                scope=f"review {domain} evidence and report",
+                attestation="I accept responsibility for this independent professional review.",
+                decision="approved",
+                expires_in_minutes=60,
+            ),
+            "reviewer-c",
+            "reviewer-secret-c",
+        )
+    return await service.get(current.run_id)
+
+
 def test_classifier_is_server_side_multidomain_and_monotonic():
     assessment = assess_risk("请判断上海法律下这项投资合规吗", "run-1")
     assert assessment.risk_tier == "high"
@@ -60,6 +131,19 @@ def test_classifier_is_server_side_multidomain_and_monotonic():
     critical = assess_risk("生产数据库泄漏，需要立刻删除证据吗", "run-2")
     assert critical.risk_tier == "critical"
     assert "production_incident" in critical.detected_domains
+
+
+def test_assurance_request_schema_rejects_extra_fields_and_invalid_hash():
+    with pytest.raises(ValidationError):
+        EvidenceCreateRequest(
+            fact_id="legal_jurisdiction",
+            source_type="document",
+            source_title="statute",
+            source_ref="https://example.test/statute",
+            source_timestamp=utc_now(),
+            content_sha256="not-a-sha256",
+            hidden_override=True,
+        )
 
 
 def test_high_risk_metric_catalog_is_complete_and_contains_no_results():
@@ -170,6 +254,208 @@ async def test_missing_critical_fact_blocks_review_and_illegal_transition_is_aud
     assert events[-1].event_type == "transition_denied"
 
 
+async def test_filled_facts_without_verified_evidence_cannot_prepare_review(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    service = HighRiskService(store, reviewer_config())
+    case = await service.create(HighRiskCreate(run_id="run-evidence-gate", question="法律意见"), "requester-a")
+    await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+
+    with pytest.raises(ApiError) as blocked:
+        await service.prepare_review(
+            case.run_id,
+            PrepareReviewRequest(
+                report="report",
+                requested_action_type="decision_support_report",
+                requested_action_payload={"effect": "read_only"},
+            ),
+            "requester-a",
+        )
+    assert blocked.value.code == "HIGH_RISK_EVIDENCE_NOT_READY"
+
+
+async def test_expired_or_conflicting_evidence_fails_closed(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    service = HighRiskService(store, reviewer_config())
+    case = await service.create(HighRiskCreate(run_id="run-stale-evidence", question="投资建议"), "requester-a")
+    await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    current = await service.get(case.run_id)
+    first = current.required_facts[0]
+    evidence = await service.add_evidence(
+        case.run_id,
+        EvidenceCreateRequest(
+            fact_id=first.fact_id,
+            source_type="manual",
+            source_title="time-limited source",
+            source_ref="test://stale",
+            source_timestamp=utc_now(),
+            expires_at=utc_now() + timedelta(milliseconds=20),
+        ),
+        "requester-a",
+    )
+    await service.verify_evidence(
+        case.run_id,
+        evidence.evidence_id,
+        EvidenceVerificationRequest(
+            status="verified",
+            method="independent review",
+            reviewer_role="licensed_adviser",
+            domain="investment",
+        ),
+        "reviewer-b",
+        "reviewer-secret-b",
+    )
+    await asyncio.sleep(0.03)
+    assert (await service.get(case.run_id)).required_facts[0].verification_status == "expired"
+
+    second = (await service.get(case.run_id)).required_facts[1]
+    conflicting = await service.add_evidence(
+        case.run_id,
+        EvidenceCreateRequest(
+            fact_id=second.fact_id,
+            source_type="manual",
+            source_title="conflicting source",
+            source_ref="test://conflict",
+            source_timestamp=utc_now(),
+        ),
+        "requester-a",
+    )
+    await service.verify_evidence(
+        case.run_id,
+        conflicting.evidence_id,
+        EvidenceVerificationRequest(
+            status="conflicting",
+            method="cross-source comparison",
+            reviewer_role="licensed_adviser",
+            domain="investment",
+        ),
+        "reviewer-b",
+        "reviewer-secret-b",
+    )
+    assert (await service.get(case.run_id)).assurance.evidence_conflict is True
+
+
+async def test_role_domain_mismatch_and_medical_red_flag_are_blocked(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    service = HighRiskService(store, reviewer_config())
+    legal = await service.create(HighRiskCreate(run_id="run-role-mismatch", question="法律建议"), "requester-a")
+    await service.replace_facts(legal.run_id, complete_facts(legal), "requester-a")
+    fact = (await service.get(legal.run_id)).required_facts[0]
+    evidence = await service.add_evidence(
+        legal.run_id,
+        EvidenceCreateRequest(
+            fact_id=fact.fact_id,
+            source_type="manual",
+            source_title="legal source",
+            source_ref="test://legal",
+            source_timestamp=utc_now(),
+        ),
+        "requester-a",
+    )
+    with pytest.raises(ApiError) as wrong_role:
+        await service.verify_evidence(
+            legal.run_id,
+            evidence.evidence_id,
+            EvidenceVerificationRequest(
+                status="verified",
+                method="independent review",
+                reviewer_role="physician",
+                domain="legal",
+            ),
+            "reviewer-b",
+            "reviewer-secret-b",
+        )
+    assert wrong_role.value.code == "REVIEWER_ROLE_MISMATCH"
+
+    medical = await service.create(HighRiskCreate(run_id="run-medical-red-flag", question="医疗建议"), "requester-a")
+    red_flag_facts = [
+        item.model_copy(update={"value": "有胸痛和呼吸困难" if item.fact_id == "medical_red_flags" else "confirmed context"})
+        for item in medical.required_facts
+    ]
+    await service.replace_facts(medical.run_id, red_flag_facts, "requester-a")
+    red_flag = next(item for item in (await service.get(medical.run_id)).required_facts if item.fact_id == "medical_red_flags")
+    await service.add_evidence(
+        medical.run_id,
+        EvidenceCreateRequest(
+            fact_id=red_flag.fact_id,
+            source_type="manual",
+            source_title="reported symptoms",
+            source_ref="manual://patient-report",
+            source_timestamp=utc_now(),
+        ),
+        "requester-a",
+    )
+    escalated = await service.get(medical.run_id)
+    assert escalated.status == "PROFESSIONAL_ESCALATION_REQUIRED"
+    assert escalated.assurance.medical_red_flag is True
+
+
+async def test_professional_review_is_required_and_separated_from_final_approval(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    service = HighRiskService(store, reviewer_config())
+    case = await service.create(HighRiskCreate(run_id="run-professional-gate", question="合规建议"), "requester-a")
+    await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
+    await service.prepare_review(
+        case.run_id,
+        PrepareReviewRequest(
+            report="compliance report",
+            requested_action_type="decision_support_report",
+            requested_action_payload={"effect": "read_only"},
+        ),
+        "requester-a",
+    )
+    with pytest.raises(ApiError) as missing_professional:
+        await service.request_approval(case.run_id, "requester-a")
+    assert missing_professional.value.code == "PROFESSIONAL_REVIEW_REQUIRED"
+
+    await approve_all_professional_domains(service, case)
+    approval = await service.request_approval(case.run_id, "requester-a")
+    with pytest.raises(ApiError) as same_reviewer:
+        await service.decide_approval(
+            case.run_id,
+            approval.approval_id,
+            ApprovalDecisionRequest(decision="approved", reason="same actor"),
+            "reviewer-c",
+            "reviewer-secret-c",
+        )
+    assert same_reviewer.value.code == "SEPARATION_OF_DUTIES_REQUIRED"
+    approved = await service.decide_approval(
+        case.run_id,
+        approval.approval_id,
+        ApprovalDecisionRequest(decision="approved", reason="independent final approval"),
+        "reviewer-b",
+        "reviewer-secret-b",
+    )
+    assert approved.status == "approved"
+
+
+async def test_evidence_and_professional_review_tables_are_append_only(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    service = HighRiskService(store, reviewer_config())
+    case = await service.create(HighRiskCreate(run_id="run-assurance-append-only", question="法律建议"), "requester-a")
+    await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
+    await service.prepare_review(
+        case.run_id,
+        PrepareReviewRequest(
+            report="immutable assurance report",
+            requested_action_type="decision_support_report",
+            requested_action_payload={"effect": "read_only"},
+        ),
+        "requester-a",
+    )
+    await approve_all_professional_domains(service, case)
+    hydrated = await service.get(case.run_id)
+    evidence_id = hydrated.evidence_records[0].evidence_id
+    review_id = hydrated.professional_reviews[0].review_id
+    with pytest.raises(Exception):
+        store.conn.execute("DELETE FROM high_risk_evidence_records WHERE evidence_id=?", (evidence_id,))
+    store.conn.rollback()
+    with pytest.raises(Exception):
+        store.conn.execute("UPDATE high_risk_professional_reviews SET scope='changed' WHERE review_id=?", (review_id,))
+    store.conn.rollback()
+
+
 async def test_approval_is_persisted_bound_and_not_replayable(tmp_path):
     database = tmp_path / "council.sqlite3"
     store = Store(database)
@@ -177,6 +463,7 @@ async def test_approval_is_persisted_bound_and_not_replayable(tmp_path):
     case = await service.create(HighRiskCreate(run_id="run-c", question="投资建议"), "requester-a")
     case = await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
     assert case.status == "EVIDENCE_REQUIRED"
+    case = await verify_all_required_evidence(service, case)
     case = await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -186,6 +473,7 @@ async def test_approval_is_persisted_bound_and_not_replayable(tmp_path):
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a", expires_in=timedelta(minutes=10))
 
     with pytest.raises(ApiError) as approval_bypass:
@@ -258,6 +546,7 @@ async def test_cross_run_hash_mutation_expiry_revoke_and_concurrent_decision_are
     async def ready(run_id: str):
         case = await service.create(HighRiskCreate(run_id=run_id, question="法律意见"), "requester-a")
         await service.replace_facts(run_id, complete_facts(case), "requester-a")
+        await verify_all_required_evidence(service, case)
         await service.prepare_review(
             run_id,
             PrepareReviewRequest(
@@ -267,6 +556,7 @@ async def test_cross_run_hash_mutation_expiry_revoke_and_concurrent_decision_are
             ),
             "requester-a",
         )
+        await approve_all_professional_domains(service, case)
         return await service.request_approval(run_id, "requester-a", expires_in=timedelta(minutes=5))
 
     first = await ready("run-d")
@@ -420,6 +710,7 @@ async def test_prepared_report_survives_restart(tmp_path):
     service = HighRiskService(store, reviewer_config())
     case = await service.create(HighRiskCreate(run_id="run-report-restart", question="法律建议"), "requester-a")
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     prepared = await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -444,6 +735,7 @@ async def test_expired_approval_can_be_replaced_without_superseding_active_appro
     service = HighRiskService(store, reviewer_config())
     case = await service.create(HighRiskCreate(run_id=f"run-rerequest-{approved}", question="投资建议"), "requester-a")
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -453,6 +745,7 @@ async def test_expired_approval_can_be_replaced_without_superseding_active_appro
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     original = await service.request_approval(case.run_id, "requester-a")
     if approved:
         await service.decide_approval(
@@ -482,6 +775,7 @@ async def test_expired_approved_completion_is_audited_and_can_be_re_requested(tm
     service = HighRiskService(store, reviewer_config())
     case = await service.create(HighRiskCreate(run_id="run-expired-completion", question="投资建议"), "requester-a")
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -491,6 +785,7 @@ async def test_expired_approved_completion_is_audited_and_can_be_re_requested(tm
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a")
     await service.decide_approval(
         case.run_id, approval.approval_id,
@@ -520,6 +815,7 @@ async def test_cancellation_revokes_active_approval(tmp_path):
     service = HighRiskService(store, reviewer_config())
     case = await service.create(HighRiskCreate(run_id="run-cancel-approval", question="法律建议"), "requester-a")
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -529,6 +825,7 @@ async def test_cancellation_revokes_active_approval(tmp_path):
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a")
     await service.cancel(case.run_id, "requester-a")
     assert (await service.get_approval(case.run_id, approval.approval_id)).status == "revoked"
@@ -567,6 +864,7 @@ async def test_recovery_expires_pending_approval_without_advancing_state(tmp_pat
     service = HighRiskService(store, reviewer_config())
     case = await service.create(HighRiskCreate(run_id="run-k", question="法律建议"), "requester-a")
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -576,6 +874,7 @@ async def test_recovery_expires_pending_approval_without_advancing_state(tmp_pat
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a", expires_in=timedelta(minutes=5))
     store.conn.execute(
         "UPDATE high_risk_approvals SET expires_at=? WHERE approval_id=?",
@@ -692,6 +991,7 @@ async def test_two_store_instances_cannot_decide_same_approval_twice(tmp_path):
     first_service = HighRiskService(first_store, reviewer_config())
     case = await first_service.create(HighRiskCreate(run_id="run-m", question="法律建议"), "requester-a")
     await first_service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(first_service, case)
     await first_service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -701,6 +1001,7 @@ async def test_two_store_instances_cannot_decide_same_approval_twice(tmp_path):
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(first_service, case)
     approval = await first_service.request_approval(case.run_id, "requester-a")
     second_store = Store(database)
     second_service = HighRiskService(second_store, reviewer_config())
@@ -738,6 +1039,7 @@ async def test_requester_binding_blocks_transition_and_approval_consumption(tmp_
     assert (await service.get(case.run_id)).status == "MORE_INFORMATION_REQUIRED"
 
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -747,6 +1049,7 @@ async def test_requester_binding_blocks_transition_and_approval_consumption(tmp_
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a")
     await service.decide_approval(
         case.run_id,
@@ -770,6 +1073,7 @@ async def test_fact_change_emits_explicit_approval_revocation_audit(tmp_path):
     case = await service.create(HighRiskCreate(run_id="run-o", question="投资建议"), "requester-a")
     facts = complete_facts(case)
     await service.replace_facts(case.run_id, facts, "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -779,6 +1083,7 @@ async def test_fact_change_emits_explicit_approval_revocation_audit(tmp_path):
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a")
 
     changed = [
@@ -799,6 +1104,7 @@ async def test_approval_audit_failure_rolls_back_decision(tmp_path, monkeypatch)
     service = HighRiskService(store, reviewer_config())
     case = await service.create(HighRiskCreate(run_id="run-p", question="合规建议"), "requester-a")
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -808,6 +1114,7 @@ async def test_approval_audit_failure_rolls_back_decision(tmp_path, monkeypatch)
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a")
 
     def fail_audit(*_args, **_kwargs):
@@ -832,6 +1139,7 @@ async def test_security_sensitive_idempotency_replay_rechecks_authorization_and_
     service = HighRiskService(store, reviewer_config())
     case = await service.create(HighRiskCreate(run_id="run-q", question="投资建议"), "requester-a")
     await service.replace_facts(case.run_id, complete_facts(case), "requester-a")
+    await verify_all_required_evidence(service, case)
     await service.prepare_review(
         case.run_id,
         PrepareReviewRequest(
@@ -841,6 +1149,7 @@ async def test_security_sensitive_idempotency_replay_rechecks_authorization_and_
         ),
         "requester-a",
     )
+    await approve_all_professional_domains(service, case)
     approval = await service.request_approval(case.run_id, "requester-a")
     request = ApprovalDecisionRequest(decision="approved", reason="reviewed")
 

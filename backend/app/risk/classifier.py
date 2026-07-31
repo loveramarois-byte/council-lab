@@ -3,7 +3,7 @@ from __future__ import annotations
 from .schemas import RequiredFact, RiskAssessment
 
 
-CLASSIFIER_VERSION = "high-risk-rules-v1"
+CLASSIFIER_VERSION = "high-risk-rules-v2"
 
 DOMAIN_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("medical", ("医疗", "诊断", "症状", "用药", "药物", "急救", "medical", "diagnosis", "medication")),
@@ -47,12 +47,19 @@ DOMAIN_FACTS: dict[str, tuple[tuple[str, str, str], ...]] = {
 
 def assess_risk(question: str, run_id: str) -> RiskAssessment:
     lower = question.casefold()
-    domains = [domain for domain, markers in DOMAIN_RULES if any(marker in lower for marker in markers)]
+    matched = {
+        domain: [marker for marker in markers if marker in lower]
+        for domain, markers in DOMAIN_RULES
+    }
+    domains = [domain for domain, markers in matched.items() if markers]
     if not domains:
         domains = ["general_high_risk"]
     critical = any(marker in lower for marker in CRITICAL_MARKERS)
     tier = "critical" if critical else "high"
-    reasons = [f"检测到高风险领域：{domain}" for domain in domains]
+    reasons = [
+        f"检测到高风险领域：{domain}（规则命中 {len(matched.get(domain, []))} 项）"
+        for domain in domains
+    ]
     if critical:
         reasons.append("检测到紧急、重大或不可逆影响信号")
     return RiskAssessment(
@@ -62,6 +69,8 @@ def assess_risk(question: str, run_id: str) -> RiskAssessment:
         detected_domains=domains,
         reasons=reasons,
         classifier_version=CLASSIFIER_VERSION,
+        confidence=min(0.95, 0.55 + sum(len(matched.get(domain, [])) for domain in domains) * 0.1),
+        requires_user_confirmation=True,
     )
 
 
@@ -83,3 +92,10 @@ def required_facts_for(assessment: RiskAssessment) -> list[RequiredFact]:
                 )
             )
     return facts
+
+
+def domain_for_fact_id(fact_id: str) -> str | None:
+    for domain, definitions in DOMAIN_FACTS.items():
+        if any(candidate_id == fact_id for candidate_id, _name, _description in definitions):
+            return domain
+    return None

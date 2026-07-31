@@ -485,6 +485,28 @@ body:has(.council-page) .sidebar-rule, body:has(.council-page) .provider-presenc
 .approval-result strong { font-size: 12px; }.approval-result span { margin-top: 2px; color: var(--muted); font-size: 10px; }
 .approval-result.approved { border-color: #acd0bc; background: #f2faf5; color: #277052; }.approval-result.blocked { border-color: #e3bdc1; background: #fff5f6; color: #a8333e; }
 .high-risk-error { margin: 12px 0 0; color: #a8333e; font-size: 10px; }
+.assurance-summary { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.assurance-summary > header, .professional-identity-form > header, .professional-review-form > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.assurance-summary > header strong, .professional-identity-form > header strong, .professional-review-form > header strong { font-size: 12px; }
+.assurance-summary > header span, .professional-identity-form > header span, .professional-review-form > header span { color: var(--muted); font-size: 9px; }
+.assurance-summary > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.assurance-summary > div span { padding: 3px 7px; border-radius: 999px; background: #f6e5e6; color: #96343d; font-size: 9px; }
+.assurance-summary > div span[data-ready="true"] { background: #e2f1e8; color: #236547; }
+.assurance-summary ul { margin: 9px 0 0; padding-left: 17px; color: #96343d; font-size: 9px; }
+.fact-evidence-card { margin-top: 9px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,.35); }
+.fact-evidence-card > label { display: block; }
+.evidence-status { display: grid; gap: 2px; margin-top: 7px; padding: 7px 8px; border-left: 3px solid #b98d55; background: #f7f0e6; }
+.evidence-status[data-status="verified"] { border-color: #438262; background: #eef7f1; }
+.evidence-status[data-status="rejected"], .evidence-status[data-status="conflicting"], .evidence-status[data-status="expired"] { border-color: #ad3f49; background: #fff1f2; }
+.evidence-status strong { font-size: 9px; }.evidence-status span { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.evidence-form { display: grid; grid-template-columns: 110px minmax(130px, 1fr) minmax(180px, 2fr); gap: 6px; margin-top: 8px; }
+.evidence-form input, .evidence-form select, .professional-identity-form input, .professional-identity-form select { min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--foreground); font: 9px var(--sans); }
+.evidence-form label, .professional-identity-form label, .professional-review-form label { display: grid; gap: 4px; color: var(--muted); font-size: 9px; }
+.evidence-form label input { width: 100%; }
+.professional-identity-form, .professional-review-form { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
+.professional-identity-form > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 9px; }
+.professional-review-form textarea { width: 100%; padding: 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--foreground); font: 10px/1.45 var(--sans); resize: vertical; }
+.professional-review-form > label { margin-top: 9px; }.professional-review-form > footer { display: flex; justify-content: flex-end; gap: 7px; margin-top: 9px; }
 .high-risk-audit { margin-top: 15px; border-top: 1px solid var(--border-strong); padding-top: 13px; }
 .high-risk-audit > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .high-risk-audit > header strong { font-size: 12px; }.high-risk-audit > header span { color: var(--muted); font-size: 9px; }
@@ -509,6 +531,7 @@ body:has(.council-page) .sidebar-rule, body:has(.council-page) .provider-presenc
   .approval-form > div { grid-template-columns: 1fr; gap: 0; }
   .high-risk-audit li { grid-template-columns: 32px minmax(0, 1fr); padding: 7px 0; }
   .high-risk-audit time { grid-column: 2; }
+  .evidence-form, .professional-identity-form > div { grid-template-columns: 1fr; }
 }
 
 body:has(.council-page) .sidebar { background: #efede7; border-color: var(--border); }

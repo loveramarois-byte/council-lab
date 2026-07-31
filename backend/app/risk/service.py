@@ -10,16 +10,24 @@ from typing import Any, Mapping
 from app.errors import ApiError
 from app.store import Store
 
-from .classifier import assess_risk, required_facts_for
+from .classifier import assess_risk, domain_for_fact_id, required_facts_for
+from .policy import evidence_is_current, medical_red_flag, role_is_allowed
 from .schemas import (
     ApprovalDecisionRequest,
     ApprovalRecord,
     AuditEvent,
     DecisionQualitySignals,
+    EvidenceCreateRequest,
+    EvidenceRecord,
+    EvidenceVerificationRecord,
+    EvidenceVerificationRequest,
+    HighRiskAssuranceStatus,
     HighRiskCreate,
     HighRiskDecision,
     HighRiskRun,
     PrepareReviewRequest,
+    ProfessionalReviewRecord,
+    ProfessionalReviewRequest,
     RequiredFact,
     RiskOverrideRequest,
     TransitionRequest,
@@ -29,7 +37,7 @@ from .schemas import (
 from .state_machine import TERMINAL_STATUSES, can_transition
 
 
-POLICY_VERSION = "high-risk-p0-v1"
+POLICY_VERSION = "high-risk-assurance-v2"
 RISK_ORDER = {"normal": 0, "elevated": 1, "high": 2, "critical": 3}
 SAFE_NORMAL_ACTIONS = frozenset({"get", "list", "events", "export"})
 DISCUSSION_STATUSES = frozenset(
@@ -71,6 +79,13 @@ def _safe_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         "decision",
         "version",
         "approval_count",
+        "evidence_id",
+        "evidence_count",
+        "verification_status",
+        "professional_review_id",
+        "review_domain",
+        "reviewer_role",
+        "medical_red_flag",
     }
     result: dict[str, Any] = {}
     for key, value in (metadata or {}).items():
@@ -165,6 +180,145 @@ class HighRiskService:
         )
 
     @staticmethod
+    def _evidence_from_row(connection, row: tuple[Any, ...]) -> EvidenceRecord:
+        latest = connection.execute(
+            "SELECT status,method,reviewer_id,verified_at FROM high_risk_evidence_verifications WHERE evidence_id=? ORDER BY sequence DESC LIMIT 1",
+            (row[0],),
+        ).fetchone()
+        expires_at = _parse_datetime(row[10]) if row[10] else None
+        status = latest[0] if latest else "pending"
+        if expires_at and expires_at <= utc_now():
+            status = "expired"
+        return EvidenceRecord(
+            evidence_id=row[0], run_id=row[1], fact_id=row[2], fact_value_hash=row[3], domain=row[4],
+            source_type=row[5], source_title=row[6], source_ref=row[7], source_version=row[8],
+            source_timestamp=_parse_datetime(row[9]), expires_at=expires_at,
+            content_sha256=row[11], submitted_by=row[12], submitted_at=_parse_datetime(row[13]),
+            verification_status=status,
+            verification_method=latest[1] if latest else None,
+            verified_by=latest[2] if latest else None,
+            verified_at=_parse_datetime(latest[3]) if latest else None,
+        )
+
+    @staticmethod
+    def _select_evidence(connection, run_id: str) -> list[EvidenceRecord]:
+        rows = connection.execute(
+            "SELECT evidence_id,run_id,fact_id,fact_value_hash,domain,source_type,source_title,source_ref,source_version,source_timestamp,expires_at,content_sha256,submitted_by,submitted_at FROM high_risk_evidence_records WHERE run_id=? ORDER BY submitted_at,evidence_id",
+            (run_id,),
+        ).fetchall()
+        return [HighRiskService._evidence_from_row(connection, row) for row in rows]
+
+    @staticmethod
+    def _professional_review_from_row(row: tuple[Any, ...]) -> ProfessionalReviewRecord:
+        return ProfessionalReviewRecord(
+            review_id=row[0], run_id=row[1], reviewer_id=row[2], reviewer_role=row[3],
+            domain=row[4], scope=row[5], attestation=row[6], decision=row[7],
+            evidence_snapshot_hash=row[8], report_hash=row[9],
+            reviewed_at=_parse_datetime(row[10]), expires_at=_parse_datetime(row[11]),
+        )
+
+    @staticmethod
+    def _select_professional_reviews(connection, run_id: str) -> list[ProfessionalReviewRecord]:
+        rows = connection.execute(
+            "SELECT review_id,run_id,reviewer_id,reviewer_role,domain,scope,attestation,decision,evidence_snapshot_hash,report_hash,reviewed_at,expires_at FROM high_risk_professional_reviews WHERE run_id=? ORDER BY sequence",
+            (run_id,),
+        ).fetchall()
+        return [HighRiskService._professional_review_from_row(row) for row in rows]
+
+    @staticmethod
+    def _evidence_snapshot_hash(case: HighRiskRun) -> str:
+        return canonical_hash([
+            {
+                "evidence_id": item.evidence_id,
+                "fact_id": item.fact_id,
+                "fact_value_hash": item.fact_value_hash,
+                "status": item.verification_status,
+                "content_sha256": item.content_sha256,
+                "source_timestamp": item.source_timestamp,
+                "expires_at": item.expires_at,
+            }
+            for item in case.evidence_records
+        ])
+
+    @staticmethod
+    def _hydrate_assurance(case: HighRiskRun) -> HighRiskRun:
+        latest_by_fact: dict[str, EvidenceRecord] = {}
+        for evidence in case.evidence_records:
+            fact = next((item for item in case.required_facts if item.fact_id == evidence.fact_id), None)
+            if fact and fact.value and evidence.fact_value_hash == canonical_hash(fact.value):
+                latest_by_fact[evidence.fact_id] = evidence
+        hydrated_facts: list[RequiredFact] = []
+        reasons: list[str] = []
+        evidence_conflict = False
+        evidence_current = True
+        for fact in case.required_facts:
+            evidence = latest_by_fact.get(fact.fact_id)
+            if not fact.value:
+                reasons.append(f"关键事实未填写：{fact.name}")
+            if not evidence:
+                if fact.required:
+                    reasons.append(f"缺少证据：{fact.name}")
+                hydrated_facts.append(fact.model_copy(update={"verified": False, "verification_status": "unverified"}))
+                evidence_current = False
+                continue
+            current = evidence_is_current(evidence)
+            evidence_current = evidence_current and current
+            if evidence.verification_status in {"rejected", "conflicting"}:
+                evidence_conflict = True
+            status = evidence.verification_status if current else "expired"
+            if status != "verified" and fact.required:
+                reasons.append(f"证据未有效核验：{fact.name}（{status}）")
+            hydrated_facts.append(
+                fact.model_copy(update={
+                    "source": "user" if evidence.source_type == "manual" else evidence.source_type,
+                    "source_ref": evidence.source_ref,
+                    "source_title": evidence.source_title,
+                    "source_version": evidence.source_version,
+                    "source_timestamp": evidence.source_timestamp,
+                    "expires_at": evidence.expires_at,
+                    "verification_method": evidence.verification_method,
+                    "verified_by": evidence.verified_by,
+                    "verified_at": evidence.verified_at,
+                    "verification_status": status,
+                    "verified": status == "verified",
+                })
+            )
+        case.required_facts = hydrated_facts
+        red_flag = medical_red_flag(case)
+        if red_flag:
+            reasons.append("医疗紧急红旗需要线下急救或专业人员接管")
+        evidence_complete = not any(
+            fact.required and (not fact.value or fact.verification_status != "verified")
+            for fact in case.required_facts
+        )
+        snapshot_hash = HighRiskService._evidence_snapshot_hash(case)
+        now = utc_now()
+        latest_reviews: dict[str, ProfessionalReviewRecord] = {}
+        for review in case.professional_reviews:
+            if (
+                review.expires_at > now
+                and review.report_hash == (case.report_hash or "")
+                and review.evidence_snapshot_hash == snapshot_hash
+            ):
+                latest_reviews[review.domain] = review
+        required_domains = set(case.risk_assessment.detected_domains)
+        professional_complete = bool(case.report_hash) and all(
+            domain in latest_reviews and latest_reviews[domain].decision == "approved"
+            for domain in required_domains
+        )
+        if case.report_hash and not professional_complete:
+            reasons.append("专业复核未覆盖全部高风险领域或已过期")
+        case.assurance = HighRiskAssuranceStatus(
+            evidence_complete=evidence_complete,
+            evidence_current=evidence_current,
+            evidence_conflict=evidence_conflict,
+            professional_review_complete=professional_complete,
+            medical_red_flag=red_flag,
+            blocking_reasons=list(dict.fromkeys(reasons)),
+        )
+        return case
+
+    @staticmethod
     def _approval_from_row(row: tuple[Any, ...]) -> ApprovalRecord:
         return ApprovalRecord(
             approval_id=row[0],
@@ -188,7 +342,12 @@ class HighRiskService:
             "SELECT run_id,status,version,assessment_json,facts_json,decision_json,action_type,action_payload_hash,report_hash,requested_by,created_at,updated_at FROM high_risk_runs WHERE run_id=?",
             (run_id,),
         ).fetchone()
-        return HighRiskService._case_from_row(row) if row else None
+        if not row:
+            return None
+        case = HighRiskService._case_from_row(row)
+        case.evidence_records = HighRiskService._select_evidence(connection, run_id)
+        case.professional_reviews = HighRiskService._select_professional_reviews(connection, run_id)
+        return HighRiskService._hydrate_assurance(case)
 
     @staticmethod
     def _select_approval(connection, run_id: str, approval_id: str) -> ApprovalRecord | None:
@@ -240,6 +399,29 @@ class HighRiskService:
             for fact in case.required_facts
             if fact.required and fact.materiality == "critical" and not fact.value
         ]
+
+    @staticmethod
+    def _require_evidence_ready(case: HighRiskRun) -> None:
+        if case.assurance.medical_red_flag:
+            raise ApiError(
+                409,
+                "MEDICAL_RED_FLAG_ESCALATION_REQUIRED",
+                "检测到医疗紧急红旗，系统不能形成可执行结论；请立即联系当地急救或具备资质的医疗人员。",
+            )
+        if case.assurance.evidence_conflict:
+            raise ApiError(409, "HIGH_RISK_EVIDENCE_CONFLICT", "证据存在冲突或被复核人否定，必须先解决冲突。")
+        if not case.assurance.evidence_complete or not case.assurance.evidence_current:
+            raise ApiError(409, "HIGH_RISK_EVIDENCE_NOT_READY", "每项关键事实都必须有当前有效且经授权人员核验的证据。")
+
+    @staticmethod
+    def _require_professional_review_ready(case: HighRiskRun) -> None:
+        HighRiskService._require_evidence_ready(case)
+        if not case.assurance.professional_review_complete:
+            raise ApiError(
+                409,
+                "PROFESSIONAL_REVIEW_REQUIRED",
+                "医疗、法律、投资或合规领域的专业复核尚未覆盖全部领域，或复核已过期。",
+            )
 
     @staticmethod
     def _update_case(connection, case: HighRiskRun, expected_version: int) -> HighRiskRun:
@@ -349,6 +531,35 @@ class HighRiskService:
             raise ApiError(404, "HIGH_RISK_RUN_NOT_FOUND", "高风险运行记录不存在。")
         return case
 
+    async def get_evidence(self, run_id: str, evidence_id: str) -> EvidenceRecord:
+        case = await self.get(run_id)
+        evidence = next((item for item in case.evidence_records if item.evidence_id == evidence_id), None)
+        if not evidence:
+            raise ApiError(404, "EVIDENCE_NOT_FOUND", "证据记录不存在。")
+        return evidence
+
+    async def get_professional_review(self, run_id: str, review_id: str) -> ProfessionalReviewRecord:
+        case = await self.get(run_id)
+        review = next((item for item in case.professional_reviews if item.review_id == review_id), None)
+        if not review:
+            raise ApiError(404, "PROFESSIONAL_REVIEW_NOT_FOUND", "专业复核记录不存在。")
+        return review
+
+    async def get_evidence_verification(
+        self, run_id: str, verification_id: str
+    ) -> EvidenceVerificationRecord:
+        row = self.store.conn.execute(
+            "SELECT verification_id,evidence_id,run_id,status,method,reviewer_id,reviewer_role,domain,note,verified_at FROM high_risk_evidence_verifications WHERE run_id=? AND verification_id=?",
+            (run_id, verification_id),
+        ).fetchone()
+        if not row:
+            raise ApiError(404, "EVIDENCE_VERIFICATION_NOT_FOUND", "证据核验记录不存在。")
+        return EvidenceVerificationRecord(
+            verification_id=row[0], evidence_id=row[1], run_id=row[2], status=row[3],
+            method=row[4], reviewer_id=row[5], reviewer_role=row[6], domain=row[7],
+            note=row[8], verified_at=_parse_datetime(row[9]),
+        )
+
     async def audit(self, run_id: str) -> list[AuditEvent]:
         if not self._select_case(self.store.conn, run_id):
             raise ApiError(404, "HIGH_RISK_RUN_NOT_FOUND", "高风险运行记录不存在。")
@@ -439,6 +650,15 @@ class HighRiskService:
                                 "value": incoming.value,
                                 "source": "user" if incoming.value else "unknown",
                                 "verified": False,
+                                "source_ref": None,
+                                "source_title": None,
+                                "source_version": None,
+                                "source_timestamp": None,
+                                "expires_at": None,
+                                "verification_method": None,
+                                "verified_by": None,
+                                "verified_at": None,
+                                "verification_status": "unverified",
                             }
                         )
                     )
@@ -482,6 +702,228 @@ class HighRiskService:
                 connection.rollback()
                 raise
 
+    async def add_evidence(
+        self, run_id: str, request: EvidenceCreateRequest, actor_id: str
+    ) -> EvidenceRecord:
+        async with self.store._lock:
+            connection = self.store.conn
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                case = self._select_case(connection, run_id)
+                if not case:
+                    raise ApiError(404, "HIGH_RISK_RUN_NOT_FOUND", "高风险运行记录不存在。")
+                self._require_requester(actor_id, case.requested_by)
+                if case.status in TERMINAL_STATUSES:
+                    raise ApiError(409, "HIGH_RISK_RUN_TERMINAL", "终态高风险记录不能追加证据。")
+                fact = next((item for item in case.required_facts if item.fact_id == request.fact_id), None)
+                if not fact:
+                    raise ApiError(400, "EVIDENCE_FACT_UNKNOWN", "证据必须绑定当前服务端要求的关键事实。")
+                if not fact.value:
+                    raise ApiError(409, "EVIDENCE_FACT_VALUE_MISSING", "请先填写关键事实，再为该值提交证据。")
+                domain = domain_for_fact_id(fact.fact_id) or "general_high_risk"
+                if domain not in case.risk_assessment.detected_domains:
+                    raise ApiError(400, "EVIDENCE_DOMAIN_MISMATCH", "证据领域与当前高风险评估不匹配。")
+                now = utc_now()
+                source_timestamp = _parse_datetime(request.source_timestamp)
+                expires_at = _parse_datetime(request.expires_at) if request.expires_at else None
+                if source_timestamp > now + timedelta(minutes=5):
+                    raise ApiError(400, "EVIDENCE_TIMESTAMP_IN_FUTURE", "证据时间不能晚于当前时间。")
+                if expires_at and expires_at <= now:
+                    raise ApiError(400, "EVIDENCE_ALREADY_EXPIRED", "不能提交已经过期的证据。")
+                if expires_at and expires_at <= source_timestamp:
+                    raise ApiError(400, "EVIDENCE_EXPIRY_INVALID", "证据有效期必须晚于证据时间。")
+                if request.source_type in {"document", "tool"} and not request.content_sha256:
+                    raise ApiError(400, "EVIDENCE_HASH_REQUIRED", "文档或工具证据必须提供内容 SHA-256。")
+                evidence_id = str(uuid.uuid4())
+                connection.execute(
+                    "INSERT INTO high_risk_evidence_records(evidence_id,run_id,fact_id,fact_value_hash,domain,source_type,source_title,source_ref,source_version,source_timestamp,expires_at,content_sha256,submitted_by,submitted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        evidence_id, run_id, fact.fact_id, canonical_hash(fact.value), domain,
+                        request.source_type, request.source_title, request.source_ref,
+                        request.source_version, source_timestamp.isoformat(),
+                        expires_at.isoformat() if expires_at else None,
+                        request.content_sha256, actor_id, now.isoformat(),
+                    ),
+                )
+                previous = case.status
+                if medical_red_flag(case):
+                    case.status = "PROFESSIONAL_ESCALATION_REQUIRED"
+                elif case.status not in {"MORE_INFORMATION_REQUIRED", "PROFESSIONAL_ESCALATION_REQUIRED"}:
+                    case.status = "EVIDENCE_REQUIRED"
+                case.decision = None
+                case.requested_action_type = None
+                case.requested_action_payload_hash = None
+                case.report_hash = None
+                connection.execute(
+                    "UPDATE high_risk_approvals SET status='revoked',decided_at=?,decided_by=?,decision_reason=? WHERE run_id=? AND status IN ('pending','approved')",
+                    (now.isoformat(), actor_id, "evidence changed", run_id),
+                )
+                case = self._update_case(connection, case, case.version)
+                self._insert_audit(
+                    connection, run_id, "evidence_added", "user", actor_id,
+                    previous_status=previous, new_status=case.status,
+                    request_hash=canonical_hash(request.model_dump(mode="json")),
+                    metadata={
+                        "evidence_id": evidence_id,
+                        "fact_count": 1,
+                        "verification_status": "pending",
+                        "review_domain": domain,
+                        "version": case.version,
+                    },
+                )
+                result = next(
+                    item for item in self._select_evidence(connection, run_id) if item.evidence_id == evidence_id
+                )
+                connection.commit()
+                return result
+            except Exception:
+                connection.rollback()
+                raise
+
+    async def verify_evidence(
+        self,
+        run_id: str,
+        evidence_id: str,
+        request: EvidenceVerificationRequest,
+        actor_id: str,
+        reviewer_secret: str,
+    ) -> EvidenceVerificationRecord:
+        async with self.store._lock:
+            connection = self.store.conn
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                case = self._select_case(connection, run_id)
+                self._authorize_reviewer(actor_id, reviewer_secret)
+                if not case:
+                    raise ApiError(404, "HIGH_RISK_RUN_NOT_FOUND", "高风险运行记录不存在。")
+                if case.status in TERMINAL_STATUSES:
+                    raise ApiError(409, "HIGH_RISK_RUN_TERMINAL", "终态高风险记录不能追加证据核验。")
+                if not self.allow_self_approval and hmac.compare_digest(actor_id, case.requested_by):
+                    raise ApiError(403, "SELF_REVIEW_FORBIDDEN", "请求者不能核验自己提交的高风险证据。")
+                evidence = next((item for item in case.evidence_records if item.evidence_id == evidence_id), None)
+                if not evidence:
+                    raise ApiError(404, "EVIDENCE_NOT_FOUND", "证据记录不存在。")
+                fact = next((item for item in case.required_facts if item.fact_id == evidence.fact_id), None)
+                if not fact or not fact.value or canonical_hash(fact.value) != evidence.fact_value_hash:
+                    raise ApiError(409, "EVIDENCE_BINDING_MISMATCH", "证据绑定的关键事实已经变化，必须提交新证据。")
+                if request.status == "verified" and not evidence_is_current(evidence):
+                    raise ApiError(409, "EVIDENCE_EXPIRED", "过期证据不能标记为已核验。")
+                if request.domain != evidence.domain or request.domain not in case.risk_assessment.detected_domains:
+                    raise ApiError(400, "REVIEW_DOMAIN_MISMATCH", "复核领域与证据或风险评估不匹配。")
+                if not role_is_allowed(request.domain, request.reviewer_role):
+                    raise ApiError(403, "REVIEWER_ROLE_MISMATCH", "该专业角色不能复核当前领域。")
+                now = utc_now()
+                verification = EvidenceVerificationRecord(
+                    verification_id=str(uuid.uuid4()), evidence_id=evidence_id, run_id=run_id,
+                    status=request.status, method=request.method, reviewer_id=actor_id,
+                    reviewer_role=request.reviewer_role, domain=request.domain,
+                    note=request.note, verified_at=now,
+                )
+                connection.execute(
+                    "INSERT INTO high_risk_evidence_verifications(verification_id,evidence_id,run_id,status,method,reviewer_id,reviewer_role,domain,note,verified_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        verification.verification_id, evidence_id, run_id, verification.status,
+                        verification.method, actor_id, verification.reviewer_role,
+                        verification.domain, verification.note, now.isoformat(),
+                    ),
+                )
+                previous = case.status
+                if case.status not in {"MORE_INFORMATION_REQUIRED", "PROFESSIONAL_ESCALATION_REQUIRED"}:
+                    case.status = "EVIDENCE_REQUIRED"
+                case = self._update_case(connection, case, case.version)
+                self._insert_audit(
+                    connection, run_id, "evidence_verified", "reviewer", actor_id,
+                    previous_status=previous, new_status=case.status,
+                    request_hash=canonical_hash({"evidence_id": evidence_id, **request.model_dump(mode="json")}),
+                    metadata={
+                        "evidence_id": evidence_id,
+                        "verification_status": request.status,
+                        "review_domain": request.domain,
+                        "reviewer_role": request.reviewer_role,
+                        "version": case.version,
+                    },
+                )
+                connection.commit()
+                return verification
+            except Exception:
+                connection.rollback()
+                raise
+
+    async def submit_professional_review(
+        self,
+        run_id: str,
+        request: ProfessionalReviewRequest,
+        actor_id: str,
+        reviewer_secret: str,
+    ) -> ProfessionalReviewRecord:
+        async with self.store._lock:
+            connection = self.store.conn
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                case = self._select_case(connection, run_id)
+                self._authorize_reviewer(actor_id, reviewer_secret)
+                if not case:
+                    raise ApiError(404, "HIGH_RISK_RUN_NOT_FOUND", "高风险运行记录不存在。")
+                if case.status != "READY_FOR_HUMAN_REVIEW" or not case.report_hash:
+                    raise ApiError(409, "HIGH_RISK_REVIEW_NOT_READY", "必须先形成绑定证据的报告，再提交专业复核。")
+                if not self.allow_self_approval and hmac.compare_digest(actor_id, case.requested_by):
+                    raise ApiError(403, "SELF_REVIEW_FORBIDDEN", "请求者不能复核自己的高风险报告。")
+                if request.domain not in case.risk_assessment.detected_domains:
+                    raise ApiError(400, "REVIEW_DOMAIN_MISMATCH", "复核领域不在当前风险评估范围内。")
+                if not role_is_allowed(request.domain, request.reviewer_role):
+                    raise ApiError(403, "REVIEWER_ROLE_MISMATCH", "该专业角色不能复核当前领域。")
+                self._require_evidence_ready(case)
+                now = utc_now()
+                review = ProfessionalReviewRecord(
+                    review_id=str(uuid.uuid4()), run_id=run_id, reviewer_id=actor_id,
+                    reviewer_role=request.reviewer_role, domain=request.domain,
+                    scope=request.scope, attestation=request.attestation,
+                    decision=request.decision,
+                    evidence_snapshot_hash=self._evidence_snapshot_hash(case),
+                    report_hash=case.report_hash,
+                    reviewed_at=now,
+                    expires_at=now + timedelta(minutes=request.expires_in_minutes),
+                )
+                connection.execute(
+                    "INSERT INTO high_risk_professional_reviews(review_id,run_id,reviewer_id,reviewer_role,domain,scope,attestation,decision,evidence_snapshot_hash,report_hash,reviewed_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        review.review_id, run_id, actor_id, review.reviewer_role, review.domain,
+                        review.scope, review.attestation, review.decision,
+                        review.evidence_snapshot_hash, review.report_hash,
+                        review.reviewed_at.isoformat(), review.expires_at.isoformat(),
+                    ),
+                )
+                previous = case.status
+                if request.decision == "escalation_required":
+                    case.status = "PROFESSIONAL_ESCALATION_REQUIRED"
+                elif request.decision == "rejected":
+                    case.status = "EVIDENCE_REQUIRED"
+                case = self._update_case(connection, case, case.version)
+                self._insert_audit(
+                    connection, run_id, "professional_review_submitted", "reviewer", actor_id,
+                    previous_status=previous, new_status=case.status,
+                    request_hash=canonical_hash({
+                        "domain": request.domain,
+                        "role": request.reviewer_role,
+                        "decision": request.decision,
+                        "report_hash": review.report_hash,
+                        "evidence_snapshot_hash": review.evidence_snapshot_hash,
+                    }),
+                    metadata={
+                        "professional_review_id": review.review_id,
+                        "review_domain": review.domain,
+                        "reviewer_role": review.reviewer_role,
+                        "decision": review.decision,
+                        "expires_at": review.expires_at.isoformat(),
+                        "version": case.version,
+                    },
+                )
+                connection.commit()
+                return review
+            except Exception:
+                connection.rollback()
+                raise
+
     async def prepare_review(self, run_id: str, request: PrepareReviewRequest, actor_id: str) -> HighRiskRun:
         async with self.store._lock:
             connection = self.store.conn
@@ -493,6 +935,7 @@ class HighRiskService:
                 if case.status != "EVIDENCE_REQUIRED" or self._missing_critical(case):
                     raise ApiError(409, "HIGH_RISK_REVIEW_NOT_READY", "关键事实和证据门禁未满足，不能提交人工复核。")
                 self._require_requester(actor_id, case.requested_by)
+                self._require_evidence_ready(case)
                 previous = case.status
                 report_hash = canonical_hash(request.report)
                 action_hash = canonical_hash(request.requested_action_payload)
@@ -542,6 +985,7 @@ class HighRiskService:
                 ):
                     raise ApiError(409, "HIGH_RISK_REVIEW_NOT_READY", "尚无可绑定的人工复核报告和动作草案。")
                 self._require_requester(actor_id, case.requested_by)
+                self._require_professional_review_ready(case)
                 now = utc_now()
                 expired_rows = connection.execute(
                     "SELECT approval_id,expires_at FROM high_risk_approvals WHERE run_id=? AND status IN ('pending','approved') AND expires_at<=?",
@@ -702,7 +1146,25 @@ class HighRiskService:
                         denied = ApiError(409, "APPROVAL_ALREADY_DECIDED", "审批已经处理，不能重复决定。")
                     elif case.status != "APPROVAL_REQUIRED":
                         denied = ApiError(409, "INVALID_HIGH_RISK_TRANSITION", "当前状态不接受审批决定。")
-                    elif not (
+                    elif request.decision == "approved" and any(
+                        review.reviewer_id == actor_id
+                        and review.decision == "approved"
+                        and review.expires_at > utc_now()
+                        and review.report_hash == (case.report_hash or "")
+                        and review.evidence_snapshot_hash == self._evidence_snapshot_hash(case)
+                        for review in case.professional_reviews
+                    ):
+                        denied = ApiError(
+                            403,
+                            "SEPARATION_OF_DUTIES_REQUIRED",
+                            "专业复核人与最终审批人必须是不同的授权主体。",
+                        )
+                    elif request.decision == "approved":
+                        try:
+                            self._require_professional_review_ready(case)
+                        except ApiError as error:
+                            denied = error
+                    if not denied and not (
                         hmac.compare_digest(approval.run_id, case.run_id)
                         and hmac.compare_digest(approval.requested_action_payload_hash, case.requested_action_payload_hash or "")
                         and hmac.compare_digest(approval.decision_report_hash, case.report_hash or "")
@@ -868,6 +1330,7 @@ class HighRiskService:
                 if case.status != "APPROVED":
                     raise ApiError(409, "INVALID_HIGH_RISK_TRANSITION", "只有已批准且内容未变化的报告才能完成。")
                 self._require_requester(actor_id, approval.requested_by)
+                self._require_professional_review_ready(case)
                 if approval.status != "approved" or approval.consumed_at:
                     raise ApiError(409, "APPROVAL_ALREADY_CONSUMED", "审批不可重复使用。")
                 now = utc_now()

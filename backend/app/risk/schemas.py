@@ -34,6 +34,17 @@ DecisionStatus = Literal[
     "ACTION_BLOCKED",
 ]
 ActorType = Literal["user", "reviewer", "system", "model", "tool"]
+VerificationStatus = Literal[
+    "unverified",
+    "pending",
+    "verified",
+    "rejected",
+    "conflicting",
+    "expired",
+    "legacy_default",
+]
+EvidenceSourceType = Literal["manual", "document", "tool"]
+ProfessionalReviewDecision = Literal["approved", "rejected", "escalation_required"]
 
 
 def utc_now() -> datetime:
@@ -58,6 +69,8 @@ class RiskAssessment(BaseModel):
     detected_domains: list[str] = Field(default_factory=list, max_length=10)
     reasons: list[str] = Field(default_factory=list, max_length=20)
     classifier_version: str = Field(min_length=1, max_length=64)
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    requires_user_confirmation: bool = True
     assessed_at: datetime = Field(default_factory=utc_now)
     manually_overridden: bool = False
     override_actor_id: str | None = Field(default=None, max_length=128)
@@ -75,6 +88,15 @@ class RequiredFact(BaseModel):
     source: Literal["user", "document", "tool", "system", "unknown"] = "unknown"
     verified: bool = False
     materiality: Literal["low", "medium", "high", "critical"] = "critical"
+    source_ref: str | None = Field(default=None, max_length=2000)
+    source_title: str | None = Field(default=None, max_length=300)
+    source_version: str | None = Field(default=None, max_length=160)
+    source_timestamp: datetime | None = None
+    expires_at: datetime | None = None
+    verification_method: str | None = Field(default=None, max_length=500)
+    verified_by: str | None = Field(default=None, max_length=128)
+    verified_at: datetime | None = None
+    verification_status: VerificationStatus = "legacy_default"
 
     @field_validator("value")
     @classmethod
@@ -83,6 +105,70 @@ class RequiredFact(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+
+class EvidenceRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str
+    run_id: str
+    fact_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    fact_value_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    domain: str = Field(min_length=1, max_length=64)
+    source_type: EvidenceSourceType
+    source_title: str = Field(min_length=1, max_length=300)
+    source_ref: str = Field(min_length=1, max_length=2000)
+    source_version: str | None = Field(default=None, max_length=160)
+    source_timestamp: datetime
+    expires_at: datetime | None = None
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    submitted_by: str = Field(min_length=1, max_length=128)
+    submitted_at: datetime
+    verification_status: VerificationStatus = "pending"
+    verification_method: str | None = Field(default=None, max_length=500)
+    verified_by: str | None = Field(default=None, max_length=128)
+    verified_at: datetime | None = None
+
+
+class EvidenceVerificationRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verification_id: str
+    evidence_id: str
+    run_id: str
+    status: Literal["verified", "rejected", "conflicting"]
+    method: str = Field(min_length=3, max_length=500)
+    reviewer_id: str = Field(min_length=1, max_length=128)
+    reviewer_role: str = Field(min_length=2, max_length=160)
+    domain: str = Field(min_length=1, max_length=64)
+    note: str = Field(default="", max_length=2000)
+    verified_at: datetime
+
+
+class ProfessionalReviewRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_id: str
+    run_id: str
+    reviewer_id: str = Field(min_length=1, max_length=128)
+    reviewer_role: str = Field(min_length=2, max_length=160)
+    domain: str = Field(min_length=1, max_length=64)
+    scope: str = Field(min_length=3, max_length=2000)
+    attestation: str = Field(min_length=8, max_length=4000)
+    decision: ProfessionalReviewDecision
+    evidence_snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    report_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reviewed_at: datetime
+    expires_at: datetime
+
+
+class HighRiskAssuranceStatus(BaseModel):
+    evidence_complete: bool = False
+    evidence_current: bool = False
+    evidence_conflict: bool = False
+    professional_review_complete: bool = False
+    medical_red_flag: bool = False
+    blocking_reasons: list[str] = Field(default_factory=list, max_length=50)
 
 
 class DecisionQualitySignals(BaseModel):
@@ -107,6 +193,9 @@ class HighRiskRun(BaseModel):
     version: int = Field(ge=1)
     risk_assessment: RiskAssessment
     required_facts: list[RequiredFact]
+    evidence_records: list[EvidenceRecord] = Field(default_factory=list)
+    professional_reviews: list[ProfessionalReviewRecord] = Field(default_factory=list)
+    assurance: HighRiskAssuranceStatus = Field(default_factory=HighRiskAssuranceStatus)
     decision: HighRiskDecision | None = None
     requested_action_type: str | None = None
     requested_action_payload_hash: str | None = None
@@ -174,6 +263,40 @@ class HighRiskCreate(BaseModel):
 class FactsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     facts: list[RequiredFact] = Field(max_length=50)
+
+
+class EvidenceCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fact_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    source_type: EvidenceSourceType
+    source_title: str = Field(min_length=1, max_length=300)
+    source_ref: str = Field(min_length=1, max_length=2000)
+    source_version: str | None = Field(default=None, max_length=160)
+    source_timestamp: datetime
+    expires_at: datetime | None = None
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class EvidenceVerificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["verified", "rejected", "conflicting"]
+    method: str = Field(min_length=3, max_length=500)
+    reviewer_role: str = Field(min_length=2, max_length=160)
+    domain: str = Field(min_length=1, max_length=64)
+    note: str = Field(default="", max_length=2000)
+
+
+class ProfessionalReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewer_role: str = Field(min_length=2, max_length=160)
+    domain: str = Field(min_length=1, max_length=64)
+    scope: str = Field(min_length=3, max_length=2000)
+    attestation: str = Field(min_length=8, max_length=4000)
+    decision: ProfessionalReviewDecision
+    expires_in_minutes: int = Field(default=60, ge=5, le=1440)
 
 
 class TransitionRequest(BaseModel):

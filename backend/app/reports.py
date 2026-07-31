@@ -145,17 +145,28 @@ def run_markdown(
     ]
     if high_risk:
         completed, total, domains = _high_risk_summary(high_risk)
+        assurance = high_risk.assurance
         lines.extend([
             "## 高风险决策支持状态",
             "",
-            "> 非约束性决策支持；不代表事实已核验、专业人员已参与或任何监管合规。不得直接用于医疗、法律、投资、合规或生产执行。",
+            "> 非约束性决策支持；证据核验和专业角色均以本地记录为准，专业角色为复核人声明而非系统执照验证。不得直接用于开药、交易、法律提交、合规放行或生产变更。",
             "",
             f"- 控制状态：{high_risk.status}",
             f"- 风险等级：{high_risk.risk_assessment.risk_tier}",
             f"- 检测领域：{domains}",
             f"- 关键事实：{completed}/{total} 已填写",
+            f"- 证据门禁：{'完整且当前有效' if assurance.evidence_complete and assurance.evidence_current else '未满足'}",
+            f"- 证据冲突：{'有' if assurance.evidence_conflict else '无'}",
+            f"- 专业复核：{'已覆盖全部领域' if assurance.professional_review_complete else '未完成或已过期'}",
+            f"- 医疗紧急红旗：{'有，必须升级' if assurance.medical_red_flag else '未触发'}",
             "",
         ])
+        for fact in high_risk.required_facts:
+            source = fact.source_title or "未记录来源"
+            timestamp = fact.source_timestamp.isoformat() if fact.source_timestamp else "无时间戳"
+            lines.append(f"- {fact.name}：{fact.verification_status}；来源：{source}；时间：{timestamp}")
+        if high_risk.required_facts:
+            lines.append("")
     if run.source_snapshots:
         lines.extend(["## 资料快照", ""])
         for index, source in enumerate(run.source_snapshots, 1):
@@ -340,14 +351,24 @@ def run_html(
     high_risk_section = ""
     if high_risk:
         completed, total, domains = _high_risk_summary(high_risk)
+        assurance = high_risk.assurance
+        fact_rows = "".join(
+            f"<li>{escape(fact.name)}：{escape(fact.verification_status)}；来源：{escape(fact.source_title or '未记录来源')}；时间：{escape(fact.source_timestamp.isoformat() if fact.source_timestamp else '无时间戳')}</li>"
+            for fact in high_risk.required_facts
+        )
         high_risk_section = (
             "<section class='high-risk'><h2>高风险决策支持状态</h2>"
-            "<p><strong>非约束性决策支持；不代表事实已核验、专业人员已参与或任何监管合规。"
-            "不得直接用于医疗、法律、投资、合规或生产执行。</strong></p>"
+            "<p><strong>非约束性决策支持；证据核验和专业角色均以本地记录为准，专业角色为复核人声明而非系统执照验证。"
+            "不得直接用于开药、交易、法律提交、合规放行或生产变更。</strong></p>"
             f"<ul><li>控制状态：{escape(high_risk.status)}</li>"
             f"<li>风险等级：{escape(high_risk.risk_assessment.risk_tier)}</li>"
             f"<li>检测领域：{escape(domains)}</li>"
-            f"<li>关键事实：{completed}/{total} 已填写</li></ul></section>"
+            f"<li>关键事实：{completed}/{total} 已填写</li>"
+            f"<li>证据门禁：{'完整且当前有效' if assurance.evidence_complete and assurance.evidence_current else '未满足'}</li>"
+            f"<li>证据冲突：{'有' if assurance.evidence_conflict else '无'}</li>"
+            f"<li>专业复核：{'已覆盖全部领域' if assurance.professional_review_complete else '未完成或已过期'}</li>"
+            f"<li>医疗紧急红旗：{'有，必须升级' if assurance.medical_red_flag else '未触发'}</li>"
+            f"</ul><h3>关键事实证据状态</h3><ul>{fact_rows}</ul></section>"
         )
     review = ""
     if run.decision_review:
