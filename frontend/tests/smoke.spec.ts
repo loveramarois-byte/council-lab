@@ -1211,3 +1211,31 @@ test("大量历史记录分批显示且加载期间不闪烁空状态", async ({
   await expect(page.locator(".run-row")).toHaveCount(1);
   await expect(page.getByText("历史测试 105", { exact: true })).toBeVisible();
 });
+
+test("历史页明确区分空记录、无匹配和读取失败", async ({ page }) => {
+  const now = new Date().toISOString();
+  const oneRun = [{
+    id: "history-state-fixture", question: "唯一历史记录", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "low",
+    status: "completed", created_at: now, updated_at: now, candidates: [], critiques: [], verifications: [], revisions: [], scores: [], final_decision: null,
+    usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 10 }, degraded: false, protocol: "mock", discussion_turns: [], participant_roles: [], current_speaker_index: 4, discussion_round: 1, awaiting_user: false,
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, seat_assignments: [], auto_summarize: false, high_risk_control: false, recoverable: false,
+  }];
+  let responseMode: "empty" | "one" | "error" = "empty";
+  await page.route("**/api/runs", (route) => responseMode === "error"
+    ? route.fulfill({ status: 503, json: { error: { message: "本地数据库暂时忙" } } })
+    : route.fulfill({ json: responseMode === "one" ? oneRun : [] }));
+
+  await page.goto("/runs");
+  await expect(page.getByText("还没有审议记录")).toBeVisible();
+
+  responseMode = "one";
+  await page.reload();
+  await page.getByPlaceholder("搜索问题").fill("不存在的记录");
+  await expect(page.getByText("没有匹配的审议记录")).toBeVisible();
+  await expect(page.getByText("还没有审议记录")).toHaveCount(0);
+
+  responseMode = "error";
+  await page.reload();
+  await expect(page.getByText("历史记录暂时无法读取")).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新读取" })).toBeVisible();
+});
