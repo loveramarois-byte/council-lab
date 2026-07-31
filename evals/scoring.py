@@ -16,6 +16,7 @@ STRATEGIES = (
     "cross_model_council",
 )
 SCORE_FIELDS = ("accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty")
+OUTPUT_CONTRACTS = {"general_decision", "product_review", "technical_architecture"}
 
 
 def load_dataset(path: str | Path) -> dict[str, Any]:
@@ -42,6 +43,8 @@ def validate_dataset(payload: dict[str, Any]) -> None:
             raise ValueError(f"案例 {case.get('id')} 缺少问题或参考要点")
         if not isinstance(case.get("materials", []), list):
             raise ValueError(f"案例 {case.get('id')} 的 materials 必须是列表")
+        if case.get("output_contract", "general_decision") not in OUTPUT_CONTRACTS:
+            raise ValueError(f"案例 {case.get('id')} 的 output_contract 无效")
 
 
 def blind_labels(run_id: str, case_id: str, strategies: list[str]) -> dict[str, str]:
@@ -100,6 +103,16 @@ def aggregate_execution(cases: list[dict[str, Any]]) -> dict[str, dict[str, floa
             "duration_ms_per_run": _distribution(durations),
         }
     return aggregate
+
+
+def aggregate_execution_by_contract(cases: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, float | int]]]:
+    contracts = sorted({case.get("output_contract", "general_decision") for case in cases})
+    return {
+        contract: aggregate_execution(
+            [case for case in cases if case.get("output_contract", "general_decision") == contract]
+        )
+        for contract in contracts
+    }
 
 
 def summarize_human_reviews(result: dict[str, Any], reviews: dict[str, Any]) -> dict[str, Any]:
@@ -230,6 +243,7 @@ def summarize_human_reviews(result: dict[str, Any], reviews: dict[str, Any]) -> 
         "complete_blind_review": complete_blind_review,
         "quality": quality,
         "execution": aggregate_execution(result.get("cases", [])),
+        "execution_by_output_contract": aggregate_execution_by_contract(result.get("cases", [])),
         "quality_claims_allowed": bool(
             result.get("quality_claims_allowed")
             and (declared_strategies is None or set(active_strategies) == set(STRATEGIES))

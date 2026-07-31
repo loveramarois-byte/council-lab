@@ -41,7 +41,7 @@ high-risk invariants.
 
 ## Milestone 4: readiness and claim provenance
 
-- Add schema v9 claim and append-only outcome tables.
+- Add schema v9 claim and append-only outcome tables, followed by schema v10 to preserve explicit whole-Run local deletion without weakening high-risk audit immutability.
 - Add deterministic, multi-label readiness API and user-visible override.
 - Material claims retain user/model/cited/disputed provenance; model URLs remain
   unverified. Decision review appends outcome support or contradiction.
@@ -52,6 +52,7 @@ high-risk invariants.
 - Contracts alter checklist guidance and structured result sections, not seat
   identity or security controls.
 - Default remains general decision for API and historical compatibility.
+- New briefs use schema v2 typed extensions; historical schema v1 briefs remain readable and are never rewritten.
 
 ## Verification
 

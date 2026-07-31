@@ -35,6 +35,7 @@ from .request_boundary import load_internal_api_token, token_identifier
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
 from .templates import list_templates
+from .output_contracts import list_output_contracts
 from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, runtime_identity, update_manager
 
 store = Store(database_path())
@@ -510,6 +511,11 @@ async def deliberation_templates():
     return list_templates()
 
 
+@app.get("/api/output-contracts")
+async def output_contracts():
+    return list_output_contracts()
+
+
 @app.get("/api/projects")
 async def list_projects(response: Response):
     mark_legacy_response(response)
@@ -975,6 +981,7 @@ async def rerun(
                 source_ids=[item.id for item in source.source_snapshots],
                 include_project_history=True,
                 template_id=source.template_id,
+                output_contract=source.output_contract,
             ),
             frozen_sources=source.source_snapshots,
             frozen_project_name=source.project_name,

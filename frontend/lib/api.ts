@@ -118,6 +118,8 @@ export type DecisionReadiness = { ready: boolean; task_labels: string[]; checks:
 export type DecisionClaim = { id: string; run_id: string; text: string; basis: "user_provided" | "model_inference" | "cited_unverified" | "seat_disputed" | "outcome_supported" | "outcome_contradicted"; source_seat_ids: string[]; related_entity_ids: string[]; citation?: { url: string; provided_by: "user" | "model"; externally_checked: false } | null; dispute_summary?: string | null; created_at: string };
 export type DecisionClaimView = { claim: DecisionClaim; current_basis: DecisionClaim["basis"]; latest_outcome?: { result: "supported" | "contradicted"; note: string } | null };
 export type DeliberationTemplate = { id: string; name: string; description: string; prompt_hint: string; system_guidance: string };
+export type OutputContractId = "general_decision" | "product_review" | "technical_architecture";
+export type OutputContractDefinition = { id: OutputContractId; name: string; description: string; input_checks: string[]; prompt_hint: string; system_guidance: string };
 export type SeatOutcomeReview = { role: "analyst" | "challenger" | "builder" | "observer"; status: "pending" | "supported" | "mixed" | "contradicted"; note: string };
 export type DecisionReview = { selected_decision: string; expected_result: string; review_date?: string | null; actual_result: string; outcome_status: "pending" | "successful" | "partial" | "unsuccessful" | "unclear"; seat_outcomes: SeatOutcomeReview[]; updated_at: string };
 export type DecisionReviewInput = Omit<DecisionReview, "updated_at">;
@@ -196,6 +198,7 @@ export type Run = {
   project_context?: string;
   template_id?: string;
   template_name?: string;
+  output_contract?: OutputContractId;
   source_snapshots?: RunSourceSnapshot[];
   memory_snapshot?: RunMemorySnapshotItem[];
   decision_review?: DecisionReview | null;
@@ -238,7 +241,7 @@ export type DecisionBrief = {
   id: string;
   run_id: string;
   version: number;
-  schema_version: 1;
+  schema_version: 1 | 2;
   generated_at: string;
   generation_reason: "run_completed";
   status: "proceed" | "conditional" | "no_decision";
@@ -252,6 +255,12 @@ export type DecisionBrief = {
   reopen_triggers: { id: string; condition: string; check_method?: string | null; severity: "informational" | "important" | "blocking" }[];
   minority_report?: { summary: string; seat_ids: string[]; conditions_under_which_it_may_be_correct: string[] } | null;
   limitations: string[];
+  output_contract: OutputContractId;
+  contract_extension?:
+    | { contract: "general_decision"; decision_criteria: string[]; key_tradeoffs: string[] }
+    | { contract: "product_review"; target_users: string[]; user_problem: string; value_proposition: string; failure_conditions: string[]; validation_experiments: { hypothesis: string; method: string; success_threshold: string }[]; stop_conditions: string[] }
+    | { contract: "technical_architecture"; requirements: string[]; constraints: string[]; proposed_architecture: string; alternatives: { option: string; tradeoffs: string[] }[]; failure_modes: string[]; migration_plan: string[]; rollback_plan: string[]; observability_requirements: string[] }
+    | null;
 };
 export type ForkCheckpoint = "before_deliberation" | "after_seat_1" | "after_seat_2" | "after_seat_3" | "after_seat_4" | "before_synthesis";
 export type RunFork = {
@@ -358,6 +367,7 @@ export const api = {
   detectCCSwitch: () => request<Record<string, unknown>>("/api/providers/ccswitch/detect", { method: "POST" }),
   testProvider: (id: string) => request<Record<string, unknown>>(`/api/providers/${id}/test`, { method: "POST" }),
   templates: () => request<DeliberationTemplate[]>("/api/templates"),
+  outputContracts: () => request<OutputContractDefinition[]>("/api/output-contracts"),
   projects: () => request<Project[]>("/api/projects"),
   project: (id: string) => request<Project>(`/api/projects/${id}`),
   createProject: (body: Pick<Project, "name" | "description" | "instructions">) => request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
@@ -372,7 +382,7 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   readiness: (question: string, high_risk = false) => request<DecisionReadiness>("/api/readiness", { method: "POST", body: JSON.stringify({ question, high_risk }) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),

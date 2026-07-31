@@ -628,6 +628,7 @@ function DecisionBriefView({ brief }: { brief: DecisionBrief }) {
     <header><div><span>DECISION BRIEF · v{brief.version}</span><h2>结构化决策简报</h2></div><div className="decision-brief-status"><strong>{status.label}</strong><small>{status.detail}</small></div></header>
     <div className="decision-brief-support"><strong>{support}</strong><span>只表示公开讨论中的可观察表态，不代表事实正确概率。</span></div>
     <section className="decision-recommendation"><span>当前建议</span><RichText content={brief.recommendation} /></section>
+    {brief.contract_extension && <ContractExtensionView extension={brief.contract_extension} />}
     <div className="decision-brief-grid">
       {brief.decisive_reasons.length > 0 && <BriefSection title="决定性理由" items={brief.decisive_reasons.map((item) => item.summary)} />}
       {brief.unresolved.length > 0 && <section><h3>尚未解决的问题</h3><ul>{brief.unresolved.map((item) => <li key={item.id} className={item.blocking ? "blocking" : ""}>{item.blocking && <strong>阻塞</strong>}<span>{item.issue}</span>{item.resolution_method && <small>{item.resolution_method}</small>}</li>)}</ul></section>}
@@ -638,6 +639,39 @@ function DecisionBriefView({ brief }: { brief: DecisionBrief }) {
       <BriefSection title="限制" items={brief.limitations} />
     </div>
   </article>;
+}
+
+function ContractExtensionView({ extension }: { extension: NonNullable<DecisionBrief["contract_extension"]> }) {
+  if (extension.contract === "product_review") {
+    return <section className="contract-extension-card" role="region" aria-label="产品评审契约">
+      <header><strong>产品评审契约</strong><span>用户、价值、验证与停止条件</span></header>
+      <div className="contract-extension-grid">
+        <section><h3>用户问题</h3><p>{extension.user_problem}</p><h3>价值主张</h3><p>{extension.value_proposition}</p></section>
+        <BriefSection title="目标用户" items={extension.target_users} />
+        <BriefSection title="失败条件" items={extension.failure_conditions} />
+        <section><h3>验证实验</h3><ul>{extension.validation_experiments.map((item, index) => <li key={`experiment-${index}`}><span>{item.hypothesis}</span><small>{item.method} · 成功阈值：{item.success_threshold}</small></li>)}</ul></section>
+        <BriefSection title="停止条件" items={extension.stop_conditions} />
+      </div>
+    </section>;
+  }
+  if (extension.contract === "technical_architecture") {
+    return <section className="contract-extension-card" role="region" aria-label="技术架构评审契约">
+      <header><strong>技术架构评审契约</strong><span>需求、故障、迁移与回滚</span></header>
+      <div className="contract-extension-grid">
+        <section className="contract-wide"><h3>建议架构</h3><RichText content={extension.proposed_architecture} /></section>
+        <BriefSection title="需求" items={extension.requirements} />
+        <BriefSection title="约束" items={extension.constraints} />
+        <BriefSection title="故障模式" items={extension.failure_modes} />
+        <BriefSection title="迁移计划" items={extension.migration_plan} />
+        <BriefSection title="回滚计划" items={extension.rollback_plan} />
+        <BriefSection title="可观测性" items={extension.observability_requirements} />
+      </div>
+    </section>;
+  }
+  return <section className="contract-extension-card" role="region" aria-label="一般决策契约">
+    <header><strong>一般决策契约</strong><span>决策标准与关键取舍</span></header>
+    <div className="contract-extension-grid"><BriefSection title="决策标准" items={extension.decision_criteria} /><BriefSection title="关键取舍" items={extension.key_tradeoffs} /></div>
+  </section>;
 }
 
 function BriefSection({ title, items }: { title: string; items: string[] }) {

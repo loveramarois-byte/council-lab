@@ -33,6 +33,7 @@ from .models import (
     UsageSummary,
     utc_now,
 )
+from .output_contracts import get_output_contract
 from .providers import ModelBackend, build_backend
 from .risk.schemas import HighRiskCreate
 from .risk.service import HighRiskService
@@ -388,6 +389,7 @@ class Orchestrator:
                 item for item in (project_context, memory_section) if item
             )[:12_000]
         template = get_template(request.template_id)
+        output_contract = get_output_contract(request.output_contract)
         run_id = str(uuid.uuid4())
         primary = seats[0]
         run = RunRecord(
@@ -416,6 +418,7 @@ class Orchestrator:
             project_context=project_context,
             template_id=template.id,
             template_name=template.name,
+            output_contract=output_contract.id,
             source_snapshots=source_snapshots,
             memory_snapshot=[item.model_copy(deep=True) for item in memory_preview.included],
         )
@@ -581,6 +584,7 @@ class Orchestrator:
                 limits=request.limits or source.limits,
                 project_id=source.project_id,
                 template_id=source.template_id,
+                output_contract=source.output_contract,
             ),
             high_risk_actor=high_risk_actor,
             frozen_sources=source.source_snapshots,
@@ -920,6 +924,7 @@ class Orchestrator:
                 "如果确实没有观点冲突，就写仍待验证的问题，不得为了完成格式而虚构冲突。"
             )
         template = get_template(run.template_id)
+        output_contract = get_output_contract(run.output_contract)
         source_instruction = (
             "已提供带 [S编号] 的资料。涉及资料中的事实时引用对应编号；没有资料支持的内容必须标为推断或未知，禁止编造来源。"
             if run.source_snapshots
@@ -928,7 +933,8 @@ class Orchestrator:
         participant_count = len(participants)
         system = (
             f"你是本次 {participant_count} 席圆桌中的{participant['name']}，角色是{participant['role']}：{participant['brief']}。\n"
-            f"{debate_instruction}\n{role_instruction}\n本次模板要求：{template.system_guidance}\n{source_instruction}"
+            f"{debate_instruction}\n{role_instruction}\n本次模板要求：{template.system_guidance}\n"
+            f"本次输出契约：{output_contract.system_guidance}\n{source_instruction}"
             "这是用户全程可参与的公开讨论。必须回应记录中最新的用户插话。"
             "不要替全体宣布最终答案，不展示隐藏思维链，控制在220字以内。"
         )
@@ -1018,6 +1024,7 @@ class Orchestrator:
             94,
         )
         template = get_template(run.template_id)
+        output_contract = get_output_contract(run.output_contract)
         citation_instruction = (
             "附加资料使用 [S编号] 引用；只引用上下文中真实存在的编号。资料没有覆盖的事实必须保留为未知。"
             if run.source_snapshots
@@ -1030,7 +1037,7 @@ class Orchestrator:
             context_window.prompt,
             "你是圆桌记录员。根据本次全部参与席位和用户的完整公开讨论，直接给出最终答案。"
             "先综合已经形成的共识，再处理明确分歧，最后给出可执行答案和必要边界。"
-            f"本次模板要求：{template.system_guidance} {citation_instruction}"
+            f"本次模板要求：{template.system_guidance} 本次输出契约：{output_contract.system_guidance} {citation_instruction}"
             "不要声称不存在的共识，不展示隐藏思维链。",
         )
         provider_type = getattr(assignment.provider_snapshot.provider_type, "value", assignment.provider_snapshot.provider_type)

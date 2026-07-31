@@ -7,10 +7,14 @@ from .models import (
     DecisionAssumption,
     DecisionBrief,
     DecisionReason,
+    GeneralDecisionExtension,
     IssuePosition,
     MinorityReport,
+    ProductReviewExtension,
+    ProductValidationExperiment,
     ReopenTrigger,
     RunRecord,
+    TechnicalArchitectureExtension,
     UnresolvedIssue,
 )
 
@@ -152,11 +156,49 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
             conditions_under_which_it_may_be_correct=["其指出的失败条件或关键假设得到第一方证据支持。"],
         )
 
+    if run.output_contract == "product_review":
+        contract_extension = ProductReviewExtension(
+            target_users=["目标用户需要由用户或真实研究进一步明确"],
+            user_problem=run.question,
+            value_proposition=decision.final_answer.strip(),
+            failure_conditions=_deduplicate([
+                *decision.risks_and_limitations,
+                *(item.issue for item in unresolved),
+            ]),
+            validation_experiments=[
+                ProductValidationExperiment(
+                    hypothesis="当前产品建议能缓解所描述的用户问题。",
+                    method="先进行小范围用户研究或灰度实验，并保留原始数据。",
+                    success_threshold="执行前由用户明确可量化阈值；未定义阈值时不得宣称验证成功。",
+                )
+            ],
+            stop_conditions=[item.condition for item in reopen_triggers],
+        )
+    elif run.output_contract == "technical_architecture":
+        contract_extension = TechnicalArchitectureExtension(
+            requirements=[run.question],
+            constraints=[item.claim for item in assumptions],
+            proposed_architecture=decision.final_answer.strip(),
+            alternatives=[],
+            failure_modes=_deduplicate([
+                *decision.risks_and_limitations,
+                *(item.issue for item in unresolved),
+            ]),
+            migration_plan=[item.action for item in actions],
+            rollback_plan=["关键约束、故障模式或验证结果触发重开条件时，停止推进并恢复到已验证状态。"],
+            observability_requirements=["迁移前定义关键健康指标、错误率、延迟、容量和告警阈值，并保留可复盘记录。"],
+        )
+    else:
+        contract_extension = GeneralDecisionExtension(
+            decision_criteria=[item.claim for item in assumptions],
+            key_tradeoffs=[item.issue for item in unresolved],
+        )
+
     return DecisionBrief(
         id=f"brief-{uuid.uuid4()}",
         run_id=run.id,
         version=1,
-        schema_version=1,
+        schema_version=2,
         status=status,
         recommendation=decision.final_answer.strip(),
         support=support,
@@ -167,4 +209,6 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
         reopen_triggers=reopen_triggers,
         minority_report=minority_report,
         limitations=limitations,
+        output_contract=run.output_contract,
+        contract_extension=contract_extension,
     )

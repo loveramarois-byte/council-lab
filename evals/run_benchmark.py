@@ -32,7 +32,7 @@ from app.paths import database_path  # noqa: E402
 from app.providers import build_backend  # noqa: E402
 from app.runtime_config import assignment_config_is_valid, restore_provider_profiles  # noqa: E402
 from app.store import Store  # noqa: E402
-from evals.scoring import STRATEGIES, aggregate_execution, blind_labels, load_dataset  # noqa: E402
+from evals.scoring import STRATEGIES, aggregate_execution, aggregate_execution_by_contract, blind_labels, load_dataset  # noqa: E402
 
 
 def provider_reality(profiles: dict[str, ProviderProfile], profile_ids: set[str]) -> tuple[bool, bool]:
@@ -208,6 +208,7 @@ async def run_council(
                 assignment_config=config,
                 auto_summarize=True,
                 template_id="research_synthesis",
+                output_contract=case.get("output_contract", "general_decision"),
                 limits=RunLimits(max_model_calls=8, max_tokens=100000, timeout_seconds=600),
             ),
             frozen_sources=evidence_snapshots(case),
@@ -345,6 +346,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
                 {
                     "id": case["id"],
                     "category": case["category"],
+                    "output_contract": case.get("output_contract", "general_decision"),
                     "prompt": case["prompt"],
                     "materials": case.get("materials", []),
                     "reference_points": case["reference_points"],
@@ -368,6 +370,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         "mock_workflow_only": not uses_any_real_provider,
         "contains_mock_provider": not uses_only_real_providers,
         "execution": aggregate_execution(result_cases),
+        "execution_by_output_contract": aggregate_execution_by_contract(result_cases),
         "cases": result_cases,
     }
 

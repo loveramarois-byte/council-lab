@@ -264,7 +264,7 @@ async def test_decision_brief_api_validates_run_id_and_distinguishes_legacy_abse
         legacy = await client.get(f"/api/runs/{run.id}/decision-brief")
 
     assert response.status_code == 200
-    assert response.json()["schema_version"] == 1
+    assert response.json()["schema_version"] == 2
     assert exported.status_code == 200
     assert "结构化决策简报" in exported.text
     assert invalid.status_code == 422

@@ -48,8 +48,51 @@ def _decision_brief_markdown(brief: DecisionBrief) -> list[str]:
             f"- 意见：{brief.minority_report.summary}",
             "",
         ])
+    lines.extend(_contract_extension_markdown(brief))
     lines.extend(["### 限制", "", *[f"- {item}" for item in brief.limitations], ""])
     return lines
+
+
+def _contract_extension_markdown(brief: DecisionBrief) -> list[str]:
+    extension = brief.contract_extension
+    if extension is None:
+        return []
+    if extension.contract == "product_review":
+        lines = ["### 产品评审契约", "", f"- 用户问题：{extension.user_problem}", f"- 价值主张：{extension.value_proposition}"]
+        sections = (
+            ("目标用户", extension.target_users),
+            ("失败条件", extension.failure_conditions),
+            ("停止条件", extension.stop_conditions),
+        )
+        for label, items in sections:
+            lines.extend(f"- {label}：{item}" for item in items)
+        for item in extension.validation_experiments:
+            lines.append(
+                f"- 验证实验：{item.hypothesis}；方法：{item.method}；成功阈值：{item.success_threshold}"
+            )
+        return [*lines, ""]
+    if extension.contract == "technical_architecture":
+        lines = ["### 技术架构评审契约", "", f"- 建议架构：{extension.proposed_architecture}"]
+        sections = (
+            ("需求", extension.requirements),
+            ("约束", extension.constraints),
+            ("故障模式", extension.failure_modes),
+            ("迁移计划", extension.migration_plan),
+            ("回滚计划", extension.rollback_plan),
+            ("可观测性", extension.observability_requirements),
+        )
+        for label, items in sections:
+            lines.extend(f"- {label}：{item}" for item in items)
+        for item in extension.alternatives:
+            lines.append(f"- 备选架构：{item.option}；取舍：{'；'.join(item.tradeoffs)}")
+        return [*lines, ""]
+    return [
+        "### 一般决策契约",
+        "",
+        *[f"- 决策标准：{item}" for item in extension.decision_criteria],
+        *[f"- 关键取舍：{item}" for item in extension.key_tradeoffs],
+        "",
+    ]
 
 
 _CLAIM_BASIS_LABELS = {
@@ -194,13 +237,56 @@ def _decision_brief_html(brief: DecisionBrief) -> str:
             f"<p><strong>反对席位：</strong>{escape(', '.join(brief.minority_report.seat_ids))}</p>"
             f"<p>{escape(brief.minority_report.summary).replace(chr(10), '<br>')}</p>"
         )
+    contract_extension = _contract_extension_html(brief)
     return (
         "<section class='decision-brief'><h2>结构化决策简报</h2>"
         f"<p><strong>决策状态：</strong>{escape(status_labels[brief.status])} · "
         f"<strong>席位支持：</strong>{escape(support_labels[brief.support])}</p>"
         "<p class='support-note'>支持度只表示公开表态，不代表事实正确概率。</p>"
         f"<h3>当前建议</h3><p>{escape(brief.recommendation).replace(chr(10), '<br>')}</p>"
-        f"{sections}{minority}<h3>限制</h3>{list_items(brief.limitations)}</section>"
+        f"{sections}{minority}{contract_extension}<h3>限制</h3>{list_items(brief.limitations)}</section>"
+    )
+
+
+def _contract_extension_html(brief: DecisionBrief) -> str:
+    extension = brief.contract_extension
+    if extension is None:
+        return ""
+
+    def items(values: list[str]) -> str:
+        return f"<ul>{''.join(f'<li>{escape(item)}</li>' for item in values)}</ul>" if values else ""
+
+    if extension.contract == "product_review":
+        experiments = [
+            f"{item.hypothesis}；方法：{item.method}；成功阈值：{item.success_threshold}"
+            for item in extension.validation_experiments
+        ]
+        return (
+            "<section class='contract-extension'><h3>产品评审契约</h3>"
+            f"<p><strong>用户问题：</strong>{escape(extension.user_problem)}</p>"
+            f"<p><strong>价值主张：</strong>{escape(extension.value_proposition)}</p>"
+            f"<h4>目标用户</h4>{items(extension.target_users)}"
+            f"<h4>失败条件</h4>{items(extension.failure_conditions)}"
+            f"<h4>验证实验</h4>{items(experiments)}"
+            f"<h4>停止条件</h4>{items(extension.stop_conditions)}</section>"
+        )
+    if extension.contract == "technical_architecture":
+        alternatives = [f"{item.option}：{'；'.join(item.tradeoffs)}" for item in extension.alternatives]
+        return (
+            "<section class='contract-extension'><h3>技术架构评审契约</h3>"
+            f"<p><strong>建议架构：</strong>{escape(extension.proposed_architecture)}</p>"
+            f"<h4>需求</h4>{items(extension.requirements)}"
+            f"<h4>约束</h4>{items(extension.constraints)}"
+            f"<h4>备选架构</h4>{items(alternatives)}"
+            f"<h4>故障模式</h4>{items(extension.failure_modes)}"
+            f"<h4>迁移计划</h4>{items(extension.migration_plan)}"
+            f"<h4>回滚计划</h4>{items(extension.rollback_plan)}"
+            f"<h4>可观测性</h4>{items(extension.observability_requirements)}</section>"
+        )
+    return (
+        "<section class='contract-extension'><h3>一般决策契约</h3>"
+        f"<h4>决策标准</h4>{items(extension.decision_criteria)}"
+        f"<h4>关键取舍</h4>{items(extension.key_tradeoffs)}</section>"
     )
 
 

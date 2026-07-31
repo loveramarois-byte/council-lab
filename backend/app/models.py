@@ -17,6 +17,7 @@ from pydantic import (
 
 
 CURRENT_ASSIGNMENT_SCHEMA_VERSION = 2
+OutputContractId = Literal["general_decision", "product_review", "technical_architecture"]
 
 
 def utc_now() -> datetime:
@@ -180,6 +181,7 @@ class RunCreate(BaseModel):
     source_ids: list[str] | None = Field(default=None, max_length=20)
     include_project_history: bool = True
     template_id: str = "open_discussion"
+    output_contract: OutputContractId = "general_decision"
     selected_memory_ids: list[str] = Field(default_factory=list, max_length=20)
     readiness_override: bool = False
     readiness_override_reason: str = Field(default="", max_length=1000)
@@ -396,6 +398,17 @@ class DeliberationTemplate(BaseModel):
     system_guidance: str
 
 
+class OutputContractDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: OutputContractId
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=500)
+    input_checks: list[str] = Field(min_length=1, max_length=20)
+    prompt_hint: str = Field(min_length=1, max_length=500)
+    system_guidance: str = Field(min_length=1, max_length=4000)
+
+
 class CandidateAnswer(BaseModel):
     candidate_id: str
     answer: str
@@ -572,11 +585,56 @@ class MinorityReport(DecisionBriefItem):
         return normalized
 
 
+class GeneralDecisionExtension(DecisionBriefItem):
+    contract: Literal["general_decision"] = "general_decision"
+    decision_criteria: list[str] = Field(default_factory=list, max_length=30)
+    key_tradeoffs: list[str] = Field(default_factory=list, max_length=30)
+
+
+class ProductValidationExperiment(DecisionBriefItem):
+    hypothesis: str = Field(min_length=1, max_length=4000)
+    method: str = Field(min_length=1, max_length=4000)
+    success_threshold: str = Field(min_length=1, max_length=2000)
+
+
+class ProductReviewExtension(DecisionBriefItem):
+    contract: Literal["product_review"] = "product_review"
+    target_users: list[str] = Field(default_factory=list, max_length=30)
+    user_problem: str = Field(min_length=1, max_length=12000)
+    value_proposition: str = Field(min_length=1, max_length=50000)
+    failure_conditions: list[str] = Field(default_factory=list, max_length=30)
+    validation_experiments: list[ProductValidationExperiment] = Field(default_factory=list, max_length=20)
+    stop_conditions: list[str] = Field(default_factory=list, max_length=30)
+
+
+class ArchitectureAlternative(DecisionBriefItem):
+    option: str = Field(min_length=1, max_length=4000)
+    tradeoffs: list[str] = Field(default_factory=list, max_length=20)
+
+
+class TechnicalArchitectureExtension(DecisionBriefItem):
+    contract: Literal["technical_architecture"] = "technical_architecture"
+    requirements: list[str] = Field(default_factory=list, max_length=30)
+    constraints: list[str] = Field(default_factory=list, max_length=30)
+    proposed_architecture: str = Field(min_length=1, max_length=50000)
+    alternatives: list[ArchitectureAlternative] = Field(default_factory=list, max_length=20)
+    failure_modes: list[str] = Field(default_factory=list, max_length=30)
+    migration_plan: list[str] = Field(default_factory=list, max_length=30)
+    rollback_plan: list[str] = Field(default_factory=list, max_length=30)
+    observability_requirements: list[str] = Field(default_factory=list, max_length=30)
+
+
+DecisionContractExtension = Annotated[
+    GeneralDecisionExtension | ProductReviewExtension | TechnicalArchitectureExtension,
+    Field(discriminator="contract"),
+]
+
+
 class DecisionBrief(DecisionBriefItem):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,127}$")
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
     version: int = Field(default=1, ge=1)
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     generated_at: datetime = Field(default_factory=utc_now)
     generation_reason: Literal["run_completed"] = "run_completed"
     status: Literal["proceed", "conditional", "no_decision"]
@@ -590,9 +648,18 @@ class DecisionBrief(DecisionBriefItem):
     reopen_triggers: list[ReopenTrigger] = Field(default_factory=list, max_length=50)
     minority_report: MinorityReport | None = None
     limitations: list[str] = Field(min_length=1, max_length=50)
+    output_contract: OutputContractId = "general_decision"
+    contract_extension: DecisionContractExtension | None = None
 
     @model_validator(mode="after")
     def validate_semantics(self) -> "DecisionBrief":
+        if self.schema_version == 1 and self.contract_extension is not None:
+            raise ValueError("DecisionBrief schema v1 cannot contain a contract extension")
+        if self.schema_version == 2:
+            if self.contract_extension is None:
+                raise ValueError("DecisionBrief schema v2 requires a contract extension")
+            if self.contract_extension.contract != self.output_contract:
+                raise ValueError("DecisionBrief output contract does not match its extension")
         if self.status == "proceed" and any(item.blocking for item in self.unresolved):
             raise ValueError("status=proceed cannot contain a blocking unresolved issue")
         if self.support == "contested" and self.minority_report is None:
@@ -671,6 +738,7 @@ class RunRecord(BaseModel):
     project_context: str = ""
     template_id: str = "open_discussion"
     template_name: str = "开放讨论"
+    output_contract: OutputContractId = "general_decision"
     source_snapshots: list[RunSourceSnapshot] = Field(default_factory=list)
     memory_snapshot: list[RunMemorySnapshotItem] = Field(default_factory=list)
     decision_review: DecisionReview | None = None

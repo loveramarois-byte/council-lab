@@ -9,10 +9,11 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 | Area | Status | Boundary |
 | --- | --- | --- |
 | Deliberation workflow | Current | 复杂任务四席顺序讨论，短任务一席讨论；用户确认、可选自动总结、恢复与导出均为产品路径。 |
-| DecisionBrief v1 | Current | 新完成 Run 在完成状态前固化独立、不可变的结构化简报；旧 Run 不回填、不改写，仍按原结果格式读取。 |
+| DecisionBrief v1/v2 | Current | 新完成 Run 在完成状态前固化独立、不可变的结构化简报；v2 可携带强类型输出契约扩展，历史 v1 不回填、不改写。 |
 | Immutable Run forks | Current | 完成 Run 可创建新情景 Run；父 Run、发言、审批和审计不改写，复用发言和新调用分开记录。 |
 | Approved decision memory | Current | 记忆候选、用户批准动作和实际注入快照均独立持久化；未批准或未明确选择的内容不会跨 Run 注入。 |
 | Readiness and claim provenance | Current | 审议前执行多标签准备度检查；主张、引用、席位争议和后续结果使用独立追加式记录，不从共识推导事实状态。 |
+| Output contracts | Current | 一般决策、产品评审和技术架构评审复用固定四席与同一安全控制，只改变检查项、Prompt 指导和结构化结果字段。 |
 | High-risk control plane | P0, non-binding | 独立状态机、关键事实门禁、人工审批和追加式审计已实现；不执行外部动作，也没有证据核验或专业身份系统。 |
 | Run event replay | Current | 事件写入业务库并使用单调序号；SSE 支持 `Last-Event-ID` 重放和独立多订阅者。 |
 | Mobile access | Current, local network only | 使用短期签名会话、失败限速、同源校验和手工撤销；普通 HTTP 仍只适用于可信私有网络。 |
@@ -36,6 +37,8 @@ Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `stru
 - `council.checkpoints.sqlite3` 由 LangGraph SQLite saver 保存节点状态。
 
 `DecisionBrief v1` 复用已经持久化的最终综合和公开席位表态，不增加 Provider 调用，也不从 Markdown 反向解析字段。`support` 只表达可观察到的席位支持，不是事实概率；阻塞矛盾禁止与无条件 `proceed` 共存，明确反对必须生成少数意见。最终综合先写入 Run，再固化独立简报；简报校验或持久化失败时，Run 回到 `awaiting_final_input`，保留综合结果并允许不重复模型调用地重试。旧完成 Run 不自动生成或回填简报，API 返回稳定的 `DECISION_BRIEF_NOT_FOUND`，界面和导出继续兼容原始最终答案。
+
+新完成 Run 使用 `DecisionBrief schema v2` 固化 `output_contract` 与对应的强类型扩展。一般决策记录决策标准和关键取舍；产品评审记录目标用户、用户问题、价值、失败条件、验证实验和停止条件；技术架构评审记录需求、约束、方案、故障模式、迁移、回滚和可观测性。扩展由已保存问题、公开总结和 v1 字段确定性投影，不增加 Provider 调用；其中通用验证方法和阈值占位必须被视为待用户补充，不能冒充真实实验结果。历史 v1 简报按默认一般决策继续读取。
 
 情景分叉只接受已完成且已有最终答案的父 Run。`before_deliberation` 可改变模式；复用席位时要求父子模式和席位前缀完全一致，不存在的 checkpoint 会被拒绝而不是静默降级。子 Run 从零累计 usage，复用 Turn 在子快照中带 `reused_from_run_id`，原 Turn ID 同时记录在 `run_forks`。创建接口使用持久幂等键，断线重试不会重复创建或重复计费。高风险父 Run 的审批从不继承；子 Run 在任务启动前创建新的高风险控制记录，后续落库失败时保持阻断。旧 Run 若没有结构化简报仍可创建新情景，但要等父子双方都有简报后才提供结构化比较。
 

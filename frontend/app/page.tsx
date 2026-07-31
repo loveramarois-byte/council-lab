@@ -4,13 +4,22 @@ import Link from "next/link";
 import { ArrowUp, Bot, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Settings2, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AgentAssignmentsConfig, api, DecisionReadiness, DeliberationTemplate, MemoryPreview, MemoryView, providerIsReady, Provider } from "../lib/api";
+import { AgentAssignmentsConfig, api, DecisionReadiness, DeliberationTemplate, MemoryPreview, MemoryView, OutputContractDefinition, OutputContractId, providerIsReady, Provider } from "../lib/api";
 
 const modes = [
   { id: "quick", label: "引导", detail: "4 席 · 1.8k 上下文", icon: Zap },
   { id: "standard", label: "圆桌", detail: "4 席 · 4k 上下文", icon: ShieldCheck },
   { id: "rigorous", label: "深挖", detail: "4 席 · 7k 上下文", icon: Sparkles },
 ];
+
+const defaultContracts: OutputContractDefinition[] = [{
+  id: "general_decision",
+  name: "一般决策",
+  description: "比较目标、约束、选项、取舍和退出条件。",
+  input_checks: ["决策目标", "关键约束", "候选方案", "成功标准"],
+  prompt_hint: "说明要做的决定、约束、候选方案和怎样算成功。",
+  system_guidance: "",
+}];
 
 export default function HomePage() {
   const router = useRouter();
@@ -21,10 +30,12 @@ export default function HomePage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [assignments, setAssignments] = useState<AgentAssignmentsConfig | null>(null);
   const [templates, setTemplates] = useState<DeliberationTemplate[]>([]);
+  const [outputContracts, setOutputContracts] = useState<OutputContractDefinition[]>(defaultContracts);
   const [memories, setMemories] = useState<MemoryView[]>([]);
   const [selectedMemoryIds, setSelectedMemoryIds] = useState<string[]>([]);
   const [memoryPreview, setMemoryPreview] = useState<MemoryPreview | null>(null);
   const [templateId, setTemplateId] = useState("open_discussion");
+  const [outputContract, setOutputContract] = useState<OutputContractId>("general_decision");
   const [demoAcknowledged, setDemoAcknowledged] = useState(false);
   const [configState, setConfigState] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
@@ -37,10 +48,11 @@ export default function HomePage() {
     setConfigState("loading");
     setLoadError("");
     try {
-      const [items, config, templateItems, memoryItems] = await Promise.all([api.providers(), api.assignments(), api.templates(), api.memory().catch(() => [])]);
+      const [items, config, templateItems, contractItems, memoryItems] = await Promise.all([api.providers(), api.assignments(), api.templates(), api.outputContracts().catch(() => defaultContracts), api.memory().catch(() => [])]);
       setProviders(items);
       setAssignments(config);
       setTemplates(templateItems);
+      setOutputContracts(contractItems.length ? contractItems : defaultContracts);
       setMemories(memoryItems.filter((item) => item.active && !item.deleted));
       setDemoAcknowledged(false);
       setConfigState("ready");
@@ -60,6 +72,7 @@ export default function HomePage() {
 
   const selectedMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode]);
   const selectedTemplate = templates.find((item) => item.id === templateId);
+  const selectedContract = outputContracts.find((item) => item.id === outputContract);
   const allAssignments = assignments ? [...assignments.seats, assignments.finalizer] : [];
   const hasFiveAssignments = allAssignments.length === 5;
   const mockSeatCount = allAssignments.filter((item) => item.provider_id === "mock").length;
@@ -117,6 +130,7 @@ export default function HomePage() {
         mode,
         use_saved_assignments: true,
         template_id: templateId,
+        output_contract: outputContract,
         ...(selectedMemoryIds.length ? { selected_memory_ids: selectedMemoryIds } : {}),
         ...(autoSummarize && !highRisk ? { auto_summarize: true } : {}),
         ...(highRisk ? { high_risk: true } : {}),
@@ -162,8 +176,8 @@ export default function HomePage() {
       </div> : <>
         {hasDemoSeats && <div className="demo-disclosure"><CircleAlert size={15} /><span><strong>{mockSeatCount === 5 ? "本地演示模式" : `混合配置 · ${mockSeatCount} 个本地演示席`}</strong> · {demoDisclosure}</span><Link href={setupHref}>{setupLabel}<ChevronRight size={13} /></Link></div>}
         <div className="composer-section">
-          <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
-          <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} rows={5} />
+          <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"} · {selectedContract?.name || "一般决策"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><label className="template-select contract-select"><span>结果类型</span><select aria-label="输出契约" value={outputContract} onChange={(event) => setOutputContract(event.target.value as OutputContractId)}>{outputContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.name}</option>)}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
+          <textarea aria-label="你的问题" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} title={selectedContract?.prompt_hint} rows={5} />
           {readiness && <section className={`readiness-panel ${readiness.ready ? "ready" : "needs-input"}`} aria-label="决策准备度"><header><div><strong>{readiness.ready ? "可以开始审议" : "开始前还有信息缺口"}</strong><small>系统建议：{readiness.recommended_mode}</small></div><span>{readiness.task_labels.join(" · ")}</span></header>{readiness.clarification_questions.length > 0 && <ul>{readiness.clarification_questions.map((item) => <li key={item}>{item}</li>)}</ul>}{!readiness.ready && <footer><span>你可以补充问题，也可以明确保留这些缺口并继续。</span><button type="button" className="quiet-button" onClick={() => { setReadinessOverride(true); void submit(true); }}>仍然继续</button></footer>}</section>}
           {memories.length > 0 && <section className="memory-picker" aria-label="本次使用的已批准记忆"><header><div><strong>本次可用的已批准记忆</strong><small>默认不注入，只有你明确勾选的内容才会进入本次 Run。</small></div><span>{selectedMemoryIds.length} / {memories.length}</span></header><div>{memories.map((item) => <label key={item.memory.id}><input type="checkbox" checked={selectedMemoryIds.includes(item.memory.id)} onChange={(event) => setSelectedMemoryIds((current) => event.target.checked ? [...current, item.memory.id] : current.filter((id) => id !== item.memory.id))} /><span><strong>{item.memory.type}</strong>{item.memory.content}</span></label>)}</div>{memoryPreview && selectedMemoryIds.length > 0 && <details><summary>查看实际注入快照</summary><pre>{memoryPreview.rendered_context || "所选记忆当前不可用，不会注入。"}</pre></details>}</section>}
           <div className="composer-footer"><label className={`risk-mode-toggle ${highRisk ? "active" : ""}`}><input type="checkbox" checked={highRisk} onChange={(event) => { const checked = event.target.checked; setHighRisk(checked); if (checked) setAutoSummarize(false); }} /><span className={`toggle ${highRisk ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label>{!highRisk && <label className={`risk-mode-toggle ${autoSummarize ? "active" : ""}`}><input type="checkbox" checked={autoSummarize} onChange={(event) => setAutoSummarize(event.target.checked)} /><span className={`toggle ${autoSummarize ? "on" : ""}`} /><span><strong>自动总结</strong><small>{autoSummarize ? "讨论席结束后直接生成答案" : "默认等待你的确认"}</small></span></label>}<button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={() => submit()}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
