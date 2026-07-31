@@ -130,7 +130,7 @@ export default function HomePage() {
         mode,
         use_saved_assignments: true,
         template_id: templateId,
-        output_contract: outputContract,
+        ...(outputContract === "general_decision" ? {} : { output_contract: outputContract }),
         ...(selectedMemoryIds.length ? { selected_memory_ids: selectedMemoryIds } : {}),
         ...(autoSummarize && !highRisk ? { auto_summarize: true } : {}),
         ...(highRisk ? { high_risk: true } : {}),
