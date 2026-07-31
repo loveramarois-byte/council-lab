@@ -913,8 +913,19 @@ async def test_high_risk_run_is_controlled_before_model_task_starts(tmp_path):
         RunCreate(question="医疗决策支持", provider_id="mock", high_risk=True),
         high_risk_actor="requester-a",
     )
+    assert run.high_risk_control is True
     assert await store.has_high_risk_control(run.id)
     assert (await service.get(run.id)).status == "MORE_INFORMATION_REQUIRED"
+    await orchestrator.shutdown()
+
+
+async def test_new_standard_run_explicitly_disables_high_risk_control(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    service = HighRiskService(store, reviewer_config())
+    orchestrator = Orchestrator(store, builtin_providers(), service)
+    run = await orchestrator.start(RunCreate(question="普通产品决策", provider_id="mock"))
+    assert run.high_risk_control is False
+    assert (await store.get_run(run.id)).high_risk_control is False
     await orchestrator.shutdown()
 
 

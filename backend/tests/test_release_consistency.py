@@ -57,6 +57,8 @@ def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_bu
         assert "COUNCIL_NEXT_DIST_DIR" in script
     assert 'web/$RELEASE_DIST_DIR/static' in mac_release
     assert 'web\\$ReleaseDistDir\\static' in windows_release
+    assert 'frontend/public" "$RESOURCES_DIR/web/public' in mac_release
+    assert 'frontend\\public") (Join-Path $StageDir "web\\public' in windows_release
 
 
 def test_release_workflow_requests_packaged_javascript_and_css():
@@ -68,6 +70,9 @@ def test_release_workflow_requests_packaged_javascript_and_css():
     assert "python -m pytest backend/tests/test_release_consistency.py -k macos_launcher" in workflow
     assert "build_release_notes.py --output artifacts/RELEASE_NOTES.md" in workflow
     assert workflow.count("--notes-file artifacts/RELEASE_NOTES.md") == 2
+    assert workflow.count("web/public/sw.js") >= 1
+    assert workflow.count('web\\public\\sw.js') >= 1
+    assert workflow.count("http://127.0.0.1:3000/sw.js") >= 2
 
 
 def test_release_smoke_preserves_internal_api_authentication_on_both_platforms():

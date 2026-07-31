@@ -56,6 +56,7 @@ Copy-Item -Recurse (Join-Path $PyInstallerDist "council-backend") (Join-Path $St
 Copy-Item -Recurse (Join-Path $ProjectDir "frontend\$ReleaseDistDir\standalone") (Join-Path $StageDir "web")
 New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "web\$ReleaseDistDir") | Out-Null
 Copy-Item -Recurse (Join-Path $ProjectDir "frontend\$ReleaseDistDir\static") (Join-Path $StageDir "web\$ReleaseDistDir\static")
+Copy-Item -Recurse (Join-Path $ProjectDir "frontend\public") (Join-Path $StageDir "web\public")
 $NodeExe = (Get-Command node.exe -ErrorAction Stop).Source
 Copy-Item $NodeExe (Join-Path $StageDir "runtime\node.exe")
 Copy-Item (Join-Path $ProjectDir "desktop\start-bundled.ps1") (Join-Path $StageDir "runtime\start-council.ps1")

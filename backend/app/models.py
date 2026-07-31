@@ -493,6 +493,10 @@ class RunRecord(BaseModel):
     seat_assignments: list[ResolvedAgentAssignment] = Field(default_factory=list)
     finalizer_assignment: ResolvedAgentAssignment | None = None
     auto_summarize: bool = False
+    # None marks records written before the high-risk control flag was persisted.
+    # The frontend may probe those legacy records once; new records never need a
+    # speculative high-risk API request.
+    high_risk_control: bool | None = None
     recoverable: bool = False
     limit_reason: str | None = None
     project_id: str | None = None

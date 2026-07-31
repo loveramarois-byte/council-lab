@@ -176,6 +176,7 @@ export type Run = {
   seat_assignments: ResolvedAssignment[];
   finalizer_assignment?: ResolvedAssignment | null;
   auto_summarize: boolean;
+  high_risk_control?: boolean | null;
   recoverable: boolean;
   limit_reason?: string | null;
   project_id?: string | null;

@@ -730,6 +730,10 @@ body:has(.council-page.immersive) .main-content { width: 100%; }
 .update-note { margin-top: 19px; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.run-loading { gap: 8px; }
+.run-loading svg { color: var(--accent); }
+.run-load-more { display: flex; justify-content: center; padding: 22px 0 8px; }
+.run-load-more .text-action, .empty-state button.text-action { border: 0; background: transparent; cursor: pointer; }
 
 @media (max-width: 680px) {
   .update-heading { padding: 48px 0 22px; }

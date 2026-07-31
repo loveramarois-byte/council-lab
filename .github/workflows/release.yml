@@ -122,6 +122,9 @@ jobs:
           test "$(curl -fsS -H "X-Council-Internal-Token: $internal_token" http://127.0.0.1:8001/api/update/status | python -c 'import json,sys; print(json.load(sys.stdin)["current_version"])')" = "$version"
           curl -fsS http://127.0.0.1:3000/mobile-access/health | grep -q council-mobile-access
           node scripts/check_frontend_assets.mjs http://127.0.0.1:3000/pair
+          test -f "$resources/web/public/sw.js"
+          test -f "$resources/web/public/icons/council-192.png"
+          curl -fsS http://127.0.0.1:3000/sw.js | grep -q 'council-mobile-v1'
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)" = "403"
           token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/mobile-access.token")"
           desktop_token="$(tr -d '[:space:]' < "$COUNCIL_LOG_DIR/desktop-access.token")"
@@ -231,6 +234,10 @@ jobs:
             if (-not $healthy) { throw "Packaged services did not become healthy" }
             & node scripts/check_frontend_assets.mjs http://127.0.0.1:3000/pair
             if ($LASTEXITCODE -ne 0) { throw "Packaged frontend assets failed validation" }
+            if (-not (Test-Path (Join-Path $package "web\public\sw.js"))) { throw "Packaged Service Worker is missing" }
+            if (-not (Test-Path (Join-Path $package "web\public\icons\council-192.png"))) { throw "Packaged PWA icon is missing" }
+            $serviceWorker = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3000/sw.js
+            if ($serviceWorker.StatusCode -ne 200 -or $serviceWorker.Content -notmatch "council-mobile-v1") { throw "Packaged Service Worker is unavailable" }
           } finally {
             Stop-Process -Id $backend.Id, $frontend.Id -Force -ErrorAction SilentlyContinue
             if ($null -eq $oldHost) { Remove-Item Env:HOSTNAME -ErrorAction SilentlyContinue } else { $env:HOSTNAME = $oldHost }
