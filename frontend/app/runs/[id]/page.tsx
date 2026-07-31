@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, MemoryProposalView, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun } from "../../../lib/api";
+import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionClaimView, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, MemoryProposalView, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun } from "../../../lib/api";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
@@ -24,6 +24,7 @@ export default function RunDetailPage() {
   const [decisionBrief, setDecisionBrief] = useState<DecisionBrief | null>(null);
   const [lineage, setLineage] = useState<RunForkLineage>({ children: [] });
   const [comparison, setComparison] = useState<DecisionBriefComparison | null>(null);
+  const [claims, setClaims] = useState<DecisionClaimView[]>([]);
   const [forkOpen, setForkOpen] = useState(false);
   const [forkCheckpoint, setForkCheckpoint] = useState<ForkCheckpoint>("before_deliberation");
   const [forkReason, setForkReason] = useState("");
@@ -82,12 +83,13 @@ export default function RunDetailPage() {
             catch { setComparison(null); }
           } else setComparison(null);
         } catch { setLineage({ children: [] }); setComparison(null); }
+        try { setClaims(await api.decisionClaims(params.id)); } catch { setClaims([]); }
         try {
           const proposals = await api.memoryProposals(params.id);
           setMemoryProposals(proposals);
           setMemoryDrafts((current) => ({ ...Object.fromEntries(proposals.map((item) => [item.proposal.id, item.proposal.content])), ...current }));
         } catch { setMemoryProposals([]); }
-      } else { setDecisionBrief(null); setComparison(null); }
+      } else { setDecisionBrief(null); setComparison(null); setClaims([]); }
       if (highRiskProbeRef.current.runId !== params.id) {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
       }
@@ -126,7 +128,7 @@ export default function RunDetailPage() {
       router.push("/runs");
     }
   };
-  useEffect(() => { setHighRiskAudit([]); setDecisionBrief(null); setLineage({ children: [] }); setComparison(null); refresh(); }, [params.id]);
+  useEffect(() => { setHighRiskAudit([]); setDecisionBrief(null); setLineage({ children: [] }); setComparison(null); setClaims([]); setMemoryProposals([]); refresh(); }, [params.id]);
   useEffect(() => {
     if (!run || run.status !== "running") return;
     const unsubscribe = subscribeToRun(run.id, () => refresh(), undefined, refresh);
@@ -310,6 +312,7 @@ export default function RunDetailPage() {
     setReviewBusy(true); setReviewError("");
     try {
       setRun(await api.saveDecisionReview(run.id, reviewDraft));
+      setClaims(await api.decisionClaims(run.id));
       setReviewOpen(false);
     } catch (err) {
       setReviewError(err instanceof Error ? err.message : "回访没有保存成功");
@@ -492,6 +495,7 @@ export default function RunDetailPage() {
             </div>
           </article>}
           {run.status === "completed" && decisionBrief && <DecisionBriefView brief={decisionBrief} />}
+          {run.status === "completed" && claims.length > 0 && <DecisionClaimsView claims={claims} />}
           {run.status === "completed" && comparison && <DecisionComparisonView comparison={comparison} />}
           {run.status === "completed" && run.final_decision && (decisionBrief
             ? <details className="roundtable-summary raw-summary"><summary>查看原始综合文本</summary><RichText content={run.final_decision.final_answer} /></details>
@@ -598,6 +602,18 @@ function DecisionComparisonView({ comparison }: { comparison: DecisionBriefCompa
     <div><section><span>父 Run</span><strong>{comparison.left.recommendation}</strong><small>{comparison.left.status} · {comparison.left.support}</small></section><section><span>当前分叉</span><strong>{comparison.right.recommendation}</strong><small>{comparison.right.status} · {comparison.right.support}</small></section></div>
     {(comparison.unresolved_added.length > 0 || comparison.unresolved_removed.length > 0) && <footer>{comparison.unresolved_added.length > 0 && <span>新增未决：{comparison.unresolved_added.join("；")}</span>}{comparison.unresolved_removed.length > 0 && <span>已消除：{comparison.unresolved_removed.join("；")}</span>}</footer>}
   </article>;
+}
+
+function DecisionClaimsView({ claims }: { claims: DecisionClaimView[] }) {
+  const labels: Record<DecisionClaimView["current_basis"], string> = {
+    user_provided: "用户提供",
+    model_inference: "模型推断",
+    cited_unverified: "有引用，未核验",
+    seat_disputed: "席位间有争议",
+    outcome_supported: "后续结果支持",
+    outcome_contradicted: "后续结果反驳",
+  };
+  return <article className="decision-claims" aria-label="关键主张与依据"><header><strong>关键主张与依据</strong><span>席位共识不会自动变成事实验证</span></header><ul>{claims.map((item) => <li key={item.claim.id}><span data-basis={item.current_basis}>{labels[item.current_basis]}</span><p>{item.claim.text}</p>{item.claim.citation && <a href={item.claim.citation.url} target="_blank" rel="noreferrer">模型给出的引用 · 未外部核验</a>}</li>)}</ul></article>;
 }
 
 function DecisionBriefView({ brief }: { brief: DecisionBrief }) {

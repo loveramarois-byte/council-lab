@@ -113,6 +113,10 @@ export type MemoryProposalView = { proposal: MemoryProposal; status: "pending" |
 export type ApprovedMemory = { id: string; workspace_id: string; source_run_id: string; proposal_id: string; type: MemoryType; content: string; verification_status: string; valid_from: string; valid_until?: string | null; supersedes_memory_id?: string | null; created_at: string };
 export type MemoryView = { memory: ApprovedMemory; active: boolean; deleted: boolean; last_action: "approved" | "rejected" | "disabled" | "enabled" | "deleted"; last_action_at: string };
 export type MemoryPreview = { workspace_id: string; selected_memory_ids: string[]; included: RunMemorySnapshotItem[]; excluded_memory_ids: string[]; rendered_context: string };
+export type ReadinessCheck = { id: "goal_defined" | "constraints_defined" | "options_defined" | "success_criteria_defined" | "critical_facts_available"; status: "pass" | "warning" | "fail"; message: string };
+export type DecisionReadiness = { ready: boolean; task_labels: string[]; checks: ReadinessCheck[]; clarification_questions: string[]; recommended_mode: "direct" | "quick_council" | "full_council" | "high_risk_council"; rules_version: string };
+export type DecisionClaim = { id: string; run_id: string; text: string; basis: "user_provided" | "model_inference" | "cited_unverified" | "seat_disputed" | "outcome_supported" | "outcome_contradicted"; source_seat_ids: string[]; related_entity_ids: string[]; citation?: { url: string; provided_by: "user" | "model"; externally_checked: false } | null; dispute_summary?: string | null; created_at: string };
+export type DecisionClaimView = { claim: DecisionClaim; current_basis: DecisionClaim["basis"]; latest_outcome?: { result: "supported" | "contradicted"; note: string } | null };
 export type DeliberationTemplate = { id: string; name: string; description: string; prompt_hint: string; system_guidance: string };
 export type SeatOutcomeReview = { role: "analyst" | "challenger" | "builder" | "observer"; status: "pending" | "supported" | "mixed" | "contradicted"; note: string };
 export type DecisionReview = { selected_decision: string; expected_result: string; review_date?: string | null; actual_result: string; outcome_status: "pending" | "successful" | "partial" | "unsuccessful" | "unclear"; seat_outcomes: SeatOutcomeReview[]; updated_at: string };
@@ -164,6 +168,7 @@ export type Run = {
   created_at: string;
   updated_at: string;
   analysis?: QuestionAnalysis | null;
+  readiness?: DecisionReadiness | null;
   candidates: Candidate[];
   critiques: Critique[];
   verifications: Verification[];
@@ -367,7 +372,8 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; selected_memory_ids?: string[]; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
+  readiness: (question: string, high_risk = false) => request<DecisionReadiness>("/api/readiness", { method: "POST", body: JSON.stringify({ question, high_risk }) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   decisionBrief: (id: string) => request<DecisionBrief>(`/api/runs/${id}/decision-brief`),
@@ -388,7 +394,8 @@ export const api = {
   resumeRun: (id: string, limits: RunLimits) => idempotentRequest<Run>(`/api/runs/${id}/resume`, { method: "POST", body: JSON.stringify(limits) }),
   summarizeRun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/summarize`, { method: "POST" }),
   rerun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/rerun`, { method: "POST" }),
-  saveDecisionReview: (id: string, body: DecisionReviewInput) => request<Run>(`/api/runs/${id}/decision-review`, { method: "PUT", body: JSON.stringify(body) }),
+  saveDecisionReview: (id: string, body: DecisionReviewInput) => idempotentRequest<Run>(`/api/runs/${id}/decision-review`, { method: "PUT", body: JSON.stringify(body) }),
+  decisionClaims: (id: string) => request<DecisionClaimView[]>(`/api/runs/${id}/claims`),
   deleteRun: (id: string) => request<{ deleted: boolean }>(`/api/runs/${id}`, { method: "DELETE" }),
   highRiskRun: (id: string) => request<HighRiskRun>(`/api/high-risk/runs/${id}`),
   highRiskApproval: (id: string) => request<HighRiskApproval>(`/api/high-risk/runs/${id}/approval`),

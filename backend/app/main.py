@@ -22,6 +22,7 @@ from .idempotency import execute_idempotent_model_action, execute_idempotent_run
 from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
 from .decision_lifecycle import DecisionBriefComparison, RunForkCreate, RunForkLineage, compare_briefs
 from .decision_memory import MemoryPreview, MemoryPreviewRequest, MemoryProposalDecision, MemoryProposalView, MemoryView, build_memory_proposals
+from .decision_assurance import DecisionClaimView, DecisionOutcomeRecord, ReadinessRequest, analyze_readiness
 from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionBrief, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
@@ -216,6 +217,11 @@ async def create_run(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/readiness")
+async def check_decision_readiness(payload: ReadinessRequest):
+    return analyze_readiness(payload.question, high_risk=payload.high_risk)
 
 
 @app.post("/api/high-risk/runs", response_model=HighRiskRun)
@@ -679,6 +685,20 @@ async def get_decision_brief(run_id: RunIdPath):
     return brief
 
 
+@app.get("/api/runs/{run_id}/claims", response_model=list[DecisionClaimView])
+async def list_run_claims(run_id: RunIdPath):
+    if not await store.get_run(run_id):
+        raise HTTPException(404, "运行记录不存在")
+    return await store.list_decision_claims(run_id)
+
+
+@app.get("/api/runs/{run_id}/outcomes", response_model=list[DecisionOutcomeRecord])
+async def list_run_outcomes(run_id: RunIdPath):
+    if not await store.get_run(run_id):
+        raise HTTPException(404, "运行记录不存在")
+    return await store.list_decision_outcomes(run_id)
+
+
 @app.get("/api/runs/{run_id}/lineage", response_model=RunForkLineage)
 async def get_run_lineage(run_id: RunIdPath):
     if not await store.get_run(run_id):
@@ -788,15 +808,16 @@ async def export_run(run_id: str, format: str = "markdown"):
         raise HTTPException(404, "运行记录不存在")
     high_risk = await high_risk_service.get(run_id) if await store.has_high_risk_control(run_id) else None
     decision_brief = await store.get_decision_brief(run_id)
+    decision_claims = await store.list_decision_claims(run_id)
     if format == "markdown":
         return Response(
-            run_markdown(run, high_risk, decision_brief),
+            run_markdown(run, high_risk, decision_brief, decision_claims),
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="council-{run.id[:8]}.md"'},
         )
     if format == "html":
         return Response(
-            run_html(run, high_risk, decision_brief),
+            run_html(run, high_risk, decision_brief, decision_claims),
             media_type="text/html; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="council-{run.id[:8]}.html"'},
         )
@@ -974,7 +995,9 @@ async def rerun(
 async def save_decision_review(
     run_id: str,
     payload: DecisionReviewUpdate,
+    response: Response,
     actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     await high_risk_service.assert_normal_action_allowed(run_id, "decision-review", actor_header)
     run = await store.get_run(run_id)
@@ -982,10 +1005,20 @@ async def save_decision_review(
         raise HTTPException(404, "运行记录不存在")
     if run.status != "completed" or not run.final_decision:
         raise HTTPException(409, "圆桌完成后才能记录结果回访")
-    run.decision_review = DecisionReview(**payload.model_dump())
-    run.updated_at = utc_now()
-    await store.save_run(run)
-    return run
+    async def append_review():
+        await store.append_decision_outcome(
+            DecisionOutcomeRecord(run_id=run_id, review=DecisionReview(**payload.model_dump()))
+        )
+        return await store.get_run(run_id)
+
+    return await execute_idempotent_run_action(
+        store,
+        f"runs:{run_id}:decision-review",
+        idempotency_key,
+        payload.model_dump(mode="json"),
+        append_review,
+        response,
+    )
 
 
 @app.delete("/api/runs/{run_id}")

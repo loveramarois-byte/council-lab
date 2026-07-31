@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .context import build_context_window, context_budget_for_mode, token_estimator_for
 from .decision_brief import build_decision_brief
+from .decision_assurance import ReadinessOverride, analyze_readiness, build_decision_claims
 from .decision_lifecycle import RunFork, RunForkCreate, reusable_seat_count
 from .credentials import get_provider_secret
 from .models import (
@@ -324,6 +325,7 @@ class Orchestrator:
     ) -> RunRecord:
         seats, finalizer = self._resolve_config(request)
         analysis = analyze_question(request.question, request.mode, request.limits.max_tokens)
+        readiness = analyze_readiness(request.question, high_risk=request.high_risk)
         memory_preview = await self.store.preview_memories(request.selected_memory_ids)
         if memory_preview.excluded_memory_ids:
             raise ValueError("部分所选记忆不存在、已停用、已删除或已过期，请重新预览")
@@ -401,6 +403,7 @@ class Orchestrator:
             updated_at=utc_now(),
             protocol=primary.protocol,
             analysis=analysis,
+            readiness=readiness,
             participant_roles=active_participants,
             limits=request.limits,
             assignment_schema_version=CURRENT_ASSIGNMENT_SCHEMA_VERSION,
@@ -417,6 +420,11 @@ class Orchestrator:
             memory_snapshot=[item.model_copy(deep=True) for item in memory_preview.included],
         )
         fork: RunFork | None = None
+        readiness_override = ReadinessOverride(
+            run_id=run.id,
+            reason=request.readiness_override_reason.strip(),
+            readiness=readiness,
+        ) if request.readiness_override else None
         if fork_source is not None or fork_request is not None:
             if fork_source is None or fork_request is None:
                 raise ValueError("fork source and request must be provided together")
@@ -480,11 +488,13 @@ class Orchestrator:
         try:
             if fork is None:
                 if run.memory_snapshot:
-                    await self.store.save_run_with_memory_snapshot(run)
+                    await self.store.save_run_with_memory_snapshot(run, readiness_override)
+                elif readiness_override:
+                    await self.store.save_initial_run(run, readiness_override)
                 else:
                     await self.store.save_run(run)
             else:
-                await self.store.save_forked_run(run, fork)
+                await self.store.save_forked_run(run, fork, readiness_override)
         except Exception:
             if request.high_risk and self.high_risk_service:
                 try:
@@ -1087,6 +1097,7 @@ class Orchestrator:
             brief = await self.store.get_decision_brief(run.id)
             if brief is None:
                 brief = await self.store.create_decision_brief(build_decision_brief(run))
+            await self.store.create_decision_claims(build_decision_claims(brief))
         except Exception:
             run.status = "awaiting_final_input"
             run.awaiting_user = True
@@ -1108,6 +1119,14 @@ class Orchestrator:
             "结构化决策简报已固化",
             99,
             {"brief_id": brief.id, "version": brief.version, "schema_version": brief.schema_version},
+        )
+        await self.emit(
+            run,
+            "decision_claims_created",
+            "summary",
+            "关键主张的来源与争议状态已记录",
+            99,
+            {"verification": "not_inferred_from_consensus"},
         )
         run.status = "completed"
         run.awaiting_user = False

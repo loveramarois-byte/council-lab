@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .decision_assurance import ClaimOutcome, DecisionClaim, DecisionClaimView, DecisionOutcomeRecord, ReadinessOverride
 from .decision_lifecycle import RunFork, RunForkLineage
 from .decision_memory import (
     ApprovedMemory,
@@ -197,7 +198,31 @@ class Store:
             self.conn.execute("INSERT OR REPLACE INTO runs(id,payload,created_at) VALUES(?,?,?)", (run.id, run.model_dump_json(), run.created_at.isoformat()))
             self.conn.commit()
 
-    async def save_run_with_memory_snapshot(self, run: RunRecord) -> None:
+    def _insert_readiness_override(self, override: ReadinessOverride | None) -> None:
+        if override is None:
+            return
+        self.conn.execute(
+            "INSERT INTO readiness_overrides(id,run_id,payload_json,created_at) VALUES(?,?,?,?)",
+            (override.id, override.run_id, override.model_dump_json(), override.created_at.isoformat()),
+        )
+
+    async def save_initial_run(self, run: RunRecord, override: ReadinessOverride | None = None) -> None:
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(
+                    "INSERT INTO runs(id,payload,created_at) VALUES(?,?,?)",
+                    (run.id, run.model_dump_json(), run.created_at.isoformat()),
+                )
+                self._insert_readiness_override(override)
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def save_run_with_memory_snapshot(
+        self, run: RunRecord, override: ReadinessOverride | None = None
+    ) -> None:
         """Atomically create a Run and the immutable memory actually injected into it."""
         async with self._lock:
             self.conn.execute("BEGIN IMMEDIATE")
@@ -218,6 +243,7 @@ class Store:
                         run.created_at.isoformat(),
                     ),
                 )
+                self._insert_readiness_override(override)
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
@@ -454,7 +480,109 @@ class Store:
             rendered_context=render_memory_context(included),
         )
 
-    async def save_forked_run(self, run: RunRecord, fork: RunFork) -> None:
+    async def create_decision_claims(self, claims: list[DecisionClaim]) -> list[DecisionClaim]:
+        if not claims:
+            return []
+        run_id = claims[0].run_id
+        if any(item.run_id != run_id for item in claims):
+            raise ValueError("decision claims must share one Run")
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self.conn.execute(
+                    "SELECT payload_json FROM decision_claims WHERE run_id=? ORDER BY created_at,id",
+                    (run_id,),
+                ).fetchall()
+                if existing:
+                    self.conn.commit()
+                    return [DecisionClaim.model_validate_json(row[0]) for row in existing]
+                for item in claims:
+                    self.conn.execute(
+                        "INSERT INTO decision_claims(id,run_id,payload_json,created_at) VALUES(?,?,?,?)",
+                        (item.id, item.run_id, item.model_dump_json(), item.created_at.isoformat()),
+                    )
+                self.conn.commit()
+                return claims
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def list_decision_claims(self, run_id: str) -> list[DecisionClaimView]:
+        rows = self.conn.execute(
+            "SELECT payload_json FROM decision_claims WHERE run_id=? ORDER BY created_at,id", (run_id,)
+        ).fetchall()
+        views: list[DecisionClaimView] = []
+        for row in rows:
+            claim = DecisionClaim.model_validate_json(row[0])
+            outcome_row = self.conn.execute(
+                "SELECT payload_json FROM claim_outcomes WHERE claim_id=? ORDER BY sequence DESC LIMIT 1",
+                (claim.id,),
+            ).fetchone()
+            outcome = ClaimOutcome.model_validate_json(outcome_row[0]) if outcome_row else None
+            current_basis = (
+                "outcome_supported" if outcome and outcome.result == "supported"
+                else "outcome_contradicted" if outcome else claim.basis
+            )
+            views.append(DecisionClaimView(claim=claim, current_basis=current_basis, latest_outcome=outcome))
+        return views
+
+    async def append_decision_outcome(self, record: DecisionOutcomeRecord) -> DecisionOutcomeRecord:
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                if not self.conn.execute("SELECT 1 FROM runs WHERE id=?", (record.run_id,)).fetchone():
+                    raise ValueError("Run 不存在")
+                self.conn.execute(
+                    "INSERT INTO decision_outcomes(id,run_id,payload_json,created_at) VALUES(?,?,?,?)",
+                    (record.id, record.run_id, record.model_dump_json(), record.created_at.isoformat()),
+                )
+                seat_results = {item.role: item for item in record.review.seat_outcomes}
+                claim_rows = self.conn.execute(
+                    "SELECT payload_json FROM decision_claims WHERE run_id=?", (record.run_id,)
+                ).fetchall()
+                for row in claim_rows:
+                    claim = DecisionClaim.model_validate_json(row[0])
+                    outcomes = [seat_results[seat] for seat in claim.source_seat_ids if seat in seat_results]
+                    result = (
+                        "contradicted" if any(item.status == "contradicted" for item in outcomes)
+                        else "supported" if outcomes and all(item.status == "supported" for item in outcomes)
+                        else None
+                    )
+                    if result:
+                        note = "；".join(item.note for item in outcomes if item.note)[:1000]
+                        claim_outcome = ClaimOutcome(
+                            claim_id=claim.id,
+                            run_id=record.run_id,
+                            review_id=record.id,
+                            result=result,
+                            note=note,
+                        )
+                        self.conn.execute(
+                            "INSERT INTO claim_outcomes(id,claim_id,run_id,payload_json,created_at) VALUES(?,?,?,?,?)",
+                            (claim_outcome.id, claim.id, record.run_id, claim_outcome.model_dump_json(), claim_outcome.created_at.isoformat()),
+                        )
+                self.conn.commit()
+                return record
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def list_decision_outcomes(self, run_id: str) -> list[DecisionOutcomeRecord]:
+        rows = self.conn.execute(
+            "SELECT payload_json FROM decision_outcomes WHERE run_id=? ORDER BY sequence", (run_id,)
+        ).fetchall()
+        return [DecisionOutcomeRecord.model_validate_json(row[0]) for row in rows]
+
+    async def latest_decision_review(self, run_id: str):
+        row = self.conn.execute(
+            "SELECT payload_json FROM decision_outcomes WHERE run_id=? ORDER BY sequence DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        return DecisionOutcomeRecord.model_validate_json(row[0]).review if row else None
+
+    async def save_forked_run(
+        self, run: RunRecord, fork: RunFork, override: ReadinessOverride | None = None
+    ) -> None:
         """Atomically create a child Run and its immutable lineage record."""
         if fork.child_run_id != run.id:
             raise ValueError("fork child_run_id must match the new Run")
@@ -478,6 +606,7 @@ class Store:
                         fork.created_at.isoformat(),
                     ),
                 )
+                self._insert_readiness_override(override)
                 self.conn.commit()
             except Exception:
                 self.conn.rollback()
@@ -625,7 +754,11 @@ class Store:
 
     async def get_run(self, run_id: str) -> RunRecord | None:
         row = self.conn.execute("SELECT payload FROM runs WHERE id=?", (run_id,)).fetchone()
-        return RunRecord.model_validate_json(row[0]) if row else None
+        if not row:
+            return None
+        run = RunRecord.model_validate_json(row[0])
+        latest = await self.latest_decision_review(run_id)
+        return run.model_copy(update={"decision_review": latest}) if latest else run
 
     async def has_high_risk_control(self, run_id: str) -> bool:
         return self.conn.execute(
@@ -634,7 +767,12 @@ class Store:
 
     async def list_runs(self) -> list[RunRecord]:
         rows = self.conn.execute("SELECT payload FROM runs ORDER BY created_at DESC").fetchall()
-        return [RunRecord.model_validate_json(row[0]) for row in rows]
+        runs = [RunRecord.model_validate_json(row[0]) for row in rows]
+        for index, run in enumerate(runs):
+            latest = await self.latest_decision_review(run.id)
+            if latest:
+                runs[index] = run.model_copy(update={"decision_review": latest})
+        return runs
 
     def has_checkpoint(self, run_id: str) -> bool:
         checkpoint_path = Path(self.checkpoint_path)
@@ -655,12 +793,21 @@ class Store:
 
     async def delete_run(self, run_id: str) -> bool:
         async with self._lock:
-            self.conn.execute("DELETE FROM decision_briefs WHERE run_id=?", (run_id,))
-            self.conn.execute("DELETE FROM run_forks WHERE parent_run_id=? OR child_run_id=?", (run_id, run_id))
-            self.conn.execute("DELETE FROM run_memory_snapshots WHERE run_id=?", (run_id,))
-            cursor = self.conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
-            self.conn.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
-            self.conn.commit()
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute("DELETE FROM claim_outcomes WHERE run_id=?", (run_id,))
+                self.conn.execute("DELETE FROM decision_outcomes WHERE run_id=?", (run_id,))
+                self.conn.execute("DELETE FROM decision_claims WHERE run_id=?", (run_id,))
+                self.conn.execute("DELETE FROM readiness_overrides WHERE run_id=?", (run_id,))
+                self.conn.execute("DELETE FROM decision_briefs WHERE run_id=?", (run_id,))
+                self.conn.execute("DELETE FROM run_forks WHERE parent_run_id=? OR child_run_id=?", (run_id, run_id))
+                self.conn.execute("DELETE FROM run_memory_snapshots WHERE run_id=?", (run_id,))
+                cursor = self.conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
+                self.conn.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
             checkpoint_path = Path(self.checkpoint_path)
             if checkpoint_path.exists():
                 checkpoint_conn = sqlite3.connect(checkpoint_path)
@@ -755,7 +902,8 @@ class Store:
                 for table in (
                     "runs", "projects", "project_sources", "run_events", "decision_briefs",
                     "run_forks", "memory_proposals", "project_memories", "memory_actions",
-                    "run_memory_snapshots", "provider_profiles",
+                    "run_memory_snapshots", "readiness_overrides", "decision_claims",
+                    "decision_outcomes", "claim_outcomes", "provider_profiles",
                 )
             }
             integrity = str(self.conn.execute("PRAGMA quick_check").fetchone()[0])

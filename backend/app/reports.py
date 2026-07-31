@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html import escape
 
+from .decision_assurance import DecisionClaimView
 from .models import DecisionBrief, RunRecord
 from .risk.schemas import HighRiskRun
 
@@ -51,10 +52,40 @@ def _decision_brief_markdown(brief: DecisionBrief) -> list[str]:
     return lines
 
 
+_CLAIM_BASIS_LABELS = {
+    "user_provided": "用户提供",
+    "model_inference": "模型推断",
+    "cited_unverified": "有引用，未核验",
+    "seat_disputed": "席位间有争议",
+    "outcome_supported": "后续结果支持",
+    "outcome_contradicted": "后续结果反驳",
+}
+
+
+def _decision_claims_markdown(claims: list[DecisionClaimView]) -> list[str]:
+    if not claims:
+        return []
+    lines = ["## 关键主张与依据", ""]
+    for item in claims:
+        label = _CLAIM_BASIS_LABELS[item.current_basis]
+        lines.append(f"- **{label}**：{item.claim.text}")
+        if item.claim.citation:
+            lines.append(
+                f"  - 引用：{item.claim.citation.url}（{item.claim.citation.provided_by} 提供，未外部核验）"
+            )
+        if item.claim.dispute_summary:
+            lines.append(f"  - 争议：{item.claim.dispute_summary}")
+        if item.latest_outcome and item.latest_outcome.note:
+            lines.append(f"  - 回访依据：{item.latest_outcome.note}")
+    lines.append("")
+    return lines
+
+
 def run_markdown(
     run: RunRecord,
     high_risk: HighRiskRun | None = None,
     decision_brief: DecisionBrief | None = None,
+    decision_claims: list[DecisionClaimView] | None = None,
 ) -> str:
     lines = [
         f"# {run.question}",
@@ -96,6 +127,7 @@ def run_markdown(
             ])
     if decision_brief:
         lines.extend(_decision_brief_markdown(decision_brief))
+    lines.extend(_decision_claims_markdown(decision_claims or []))
     lines.extend(["## 公开讨论", ""])
     for turn in run.discussion_turns:
         provider = f" · {turn.provider_name} / {turn.model}" if turn.provider_name else ""
@@ -172,10 +204,33 @@ def _decision_brief_html(brief: DecisionBrief) -> str:
     )
 
 
+def _decision_claims_html(claims: list[DecisionClaimView]) -> str:
+    if not claims:
+        return ""
+    items: list[str] = []
+    for item in claims:
+        details = []
+        if item.claim.citation:
+            details.append(
+                f"<small>引用：{escape(item.claim.citation.url)}（{escape(item.claim.citation.provided_by)} 提供，未外部核验）</small>"
+            )
+        if item.claim.dispute_summary:
+            details.append(f"<small>争议：{escape(item.claim.dispute_summary)}</small>")
+        if item.latest_outcome and item.latest_outcome.note:
+            details.append(f"<small>回访依据：{escape(item.latest_outcome.note)}</small>")
+        items.append(
+            "<li>"
+            f"<strong>{escape(_CLAIM_BASIS_LABELS[item.current_basis])}</strong>：{escape(item.claim.text)}"
+            f"{''.join(details)}</li>"
+        )
+    return f"<section class='decision-claims'><h2>关键主张与依据</h2><ul>{''.join(items)}</ul></section>"
+
+
 def run_html(
     run: RunRecord,
     high_risk: HighRiskRun | None = None,
     decision_brief: DecisionBrief | None = None,
+    decision_claims: list[DecisionClaimView] | None = None,
 ) -> str:
     transcript = "".join(
         f"<article><h3>{escape(turn.speaker_name)} <small>{escape(turn.role_label)}</small></h3>"
@@ -224,11 +279,12 @@ def run_html(
             f"{f'<ul>{seats}</ul>' if seats else ''}</section>"
         )
     brief_section = _decision_brief_html(decision_brief) if decision_brief else ""
+    claims_section = _decision_claims_html(decision_claims or [])
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(run.question)} · Council</title><style>
     body{{max-width:860px;margin:48px auto;padding:0 24px;color:#292724;font:15px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;background:#f7f3ee}}
-    header,.answer,article,.sources,.review,.high-risk,.decision-brief{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:18px 0 9px}}small,header p,.sources span,.support-note{{color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.decision-brief{{border-left:4px solid #456d64}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
+    header,.answer,article,.sources,.review,.high-risk,.decision-brief,.decision-claims{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:18px 0 9px}}small,header p,.sources span,.support-note,.decision-claims small{{display:block;color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.decision-brief{{border-left:4px solid #456d64}}.decision-claims{{border-left:4px solid #987137}}.decision-claims li{{margin:10px 0}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
 </style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}</p></header>
     {high_risk_section}{f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
-    {brief_section}<section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""
+    {brief_section}{claims_section}<section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""

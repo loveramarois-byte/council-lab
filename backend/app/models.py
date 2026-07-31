@@ -181,7 +181,15 @@ class RunCreate(BaseModel):
     include_project_history: bool = True
     template_id: str = "open_discussion"
     selected_memory_ids: list[str] = Field(default_factory=list, max_length=20)
+    readiness_override: bool = False
+    readiness_override_reason: str = Field(default="", max_length=1000)
     limits: RunLimits = Field(default_factory=RunLimits)
+
+    @model_validator(mode="after")
+    def validate_readiness_override(self) -> "RunCreate":
+        if self.readiness_override and len(self.readiness_override_reason.strip()) < 3:
+            raise ValueError("继续准备度不足的 Run 时必须说明原因")
+        return self
 
 
 class DiscussionAction(BaseModel):
@@ -225,6 +233,36 @@ class QuestionAnalysis(BaseModel):
     confidence: float = Field(default=0.5, ge=0, le=1)
     reasons: list[str] = Field(default_factory=list)
     short_task_route: bool = False
+
+
+class ReadinessCheck(BaseModel):
+    id: Literal[
+        "goal_defined",
+        "constraints_defined",
+        "options_defined",
+        "success_criteria_defined",
+        "critical_facts_available",
+    ]
+    status: Literal["pass", "warning", "fail"]
+    message: str
+
+
+class DecisionReadiness(BaseModel):
+    ready: bool
+    task_labels: list[Literal[
+        "simple_answer",
+        "decision",
+        "analysis",
+        "creative",
+        "needs_current_data",
+        "needs_external_evidence",
+        "needs_calculation",
+        "high_risk",
+    ]]
+    checks: list[ReadinessCheck]
+    clarification_questions: list[str]
+    recommended_mode: Literal["direct", "quick_council", "full_council", "high_risk_council"]
+    rules_version: Literal["decision-readiness-v1"] = "decision-readiness-v1"
 
 
 class UsageSummary(BaseModel):
@@ -601,6 +639,7 @@ class RunRecord(BaseModel):
     created_at: datetime
     updated_at: datetime
     analysis: QuestionAnalysis | None = None
+    readiness: DecisionReadiness | None = None
     candidates: list[CandidateAnswer] = Field(default_factory=list)
     critiques: list[Critique] = Field(default_factory=list)
     verifications: list[VerificationResult] = Field(default_factory=list)

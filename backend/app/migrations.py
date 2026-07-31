@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -58,6 +58,26 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE TRIGGER IF NOT EXISTS memory_actions_no_delete BEFORE DELETE ON memory_actions BEGIN SELECT RAISE(ABORT, 'memory actions are append-only'); END",
         "CREATE TABLE IF NOT EXISTS run_memory_snapshots (run_id TEXT PRIMARY KEY, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id))",
         "CREATE TRIGGER IF NOT EXISTS run_memory_snapshots_no_update BEFORE UPDATE ON run_memory_snapshots BEGIN SELECT RAISE(ABORT, 'run memory snapshots are immutable'); END",
+    ),
+    9: (
+        "CREATE TABLE IF NOT EXISTS readiness_overrides (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id))",
+        "CREATE TRIGGER IF NOT EXISTS readiness_overrides_no_update BEFORE UPDATE ON readiness_overrides BEGIN SELECT RAISE(ABORT, 'readiness overrides are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS decision_claims (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id))",
+        "CREATE INDEX IF NOT EXISTS idx_decision_claims_run_created ON decision_claims(run_id, created_at)",
+        "CREATE TRIGGER IF NOT EXISTS decision_claims_no_update BEFORE UPDATE ON decision_claims BEGIN SELECT RAISE(ABORT, 'decision claims are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS decision_outcomes (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, run_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id))",
+        "CREATE INDEX IF NOT EXISTS idx_decision_outcomes_run_sequence ON decision_outcomes(run_id, sequence)",
+        "CREATE TRIGGER IF NOT EXISTS decision_outcomes_no_update BEFORE UPDATE ON decision_outcomes BEGIN SELECT RAISE(ABORT, 'decision outcomes are append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS decision_outcomes_no_delete BEFORE DELETE ON decision_outcomes BEGIN SELECT RAISE(ABORT, 'decision outcomes are append-only'); END",
+        "CREATE TABLE IF NOT EXISTS claim_outcomes (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, claim_id TEXT NOT NULL, run_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(claim_id) REFERENCES decision_claims(id), FOREIGN KEY(run_id) REFERENCES runs(id))",
+        "CREATE INDEX IF NOT EXISTS idx_claim_outcomes_claim_sequence ON claim_outcomes(claim_id, sequence)",
+        "CREATE INDEX IF NOT EXISTS idx_claim_outcomes_run_sequence ON claim_outcomes(run_id, sequence)",
+        "CREATE TRIGGER IF NOT EXISTS claim_outcomes_no_update BEFORE UPDATE ON claim_outcomes BEGIN SELECT RAISE(ABORT, 'claim outcomes are append-only'); END",
+        "CREATE TRIGGER IF NOT EXISTS claim_outcomes_no_delete BEFORE DELETE ON claim_outcomes BEGIN SELECT RAISE(ABORT, 'claim outcomes are append-only'); END",
+    ),
+    10: (
+        "DROP TRIGGER IF EXISTS decision_outcomes_no_delete",
+        "DROP TRIGGER IF EXISTS claim_outcomes_no_delete",
     ),
 }
 
