@@ -1,0 +1,51 @@
+name: Gitee Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to mirror
+        required: true
+        default: v0.13.0
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download verified GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ inputs.tag }}"
+          git rev-parse --verify "refs/tags/${tag}^{commit}"
+          mkdir -p artifacts
+          gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" --dir artifacts
+          test -f artifacts/Council-"${tag}"-macOS.zip
+          test -f artifacts/Council-"${tag}"-Windows.zip
+          test -f artifacts/SHA256SUMS.txt
+          (cd artifacts && sha256sum -c SHA256SUMS.txt)
+          mkdir -p release-source
+          git show "${tag}:VERSION" > release-source/VERSION
+          git show "${tag}:CHANGELOG.md" > release-source/CHANGELOG.md
+          test "${tag}" = "v$(tr -d '[:space:]' < release-source/VERSION)"
+          python scripts/build_release_notes.py --root release-source --output artifacts/RELEASE_NOTES.md
+      - name: Publish Gitee Release
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+        run: |
+          test -n "${GITEE_ACCESS_TOKEN}"
+          python scripts/publish_gitee_release.py \
+            --owner bbbbo-liu \
+            --repo council-lab \
+            --tag "${{ inputs.tag }}" \
+            --title "Council ${{ inputs.tag }}" \
+            --notes artifacts/RELEASE_NOTES.md \
+            --asset artifacts/Council-"${{ inputs.tag }}"-macOS.zip \
+            --asset artifacts/Council-"${{ inputs.tag }}"-Windows.zip \
+            --asset artifacts/SHA256SUMS.txt

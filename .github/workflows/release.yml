@@ -364,6 +364,8 @@ jobs:
       contents: write
       id-token: write
       attestations: write
+    env:
+      GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -395,3 +397,15 @@ jobs:
               --generate-notes \
               --notes-file artifacts/RELEASE_NOTES.md
           fi
+      - name: Publish Gitee Release
+        if: ${{ env.GITEE_ACCESS_TOKEN != '' }}
+        run: |
+          python scripts/publish_gitee_release.py \
+            --owner bbbbo-liu \
+            --repo council-lab \
+            --tag "${GITHUB_REF_NAME}" \
+            --title "Council ${GITHUB_REF_NAME}" \
+            --notes artifacts/RELEASE_NOTES.md \
+            --asset artifacts/Council-"${GITHUB_REF_NAME}"-macOS.zip \
+            --asset artifacts/Council-"${GITHUB_REF_NAME}"-Windows.zip \
+            --asset artifacts/SHA256SUMS.txt

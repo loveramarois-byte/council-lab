@@ -13,6 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_release_consistency.py"
 RELEASE_NOTES_SCRIPT = ROOT / "scripts" / "build_release_notes.py"
+GITEE_RELEASE_SCRIPT = ROOT / "scripts" / "publish_gitee_release.py"
 REQUIRED_FILES = (
     "VERSION",
     "frontend/package.json",
@@ -73,6 +74,24 @@ def test_release_workflow_requests_packaged_javascript_and_css():
     assert workflow.count("web/public/sw.js") >= 1
     assert workflow.count('web\\public\\sw.js') >= 1
     assert workflow.count("http://127.0.0.1:3000/sw.js") >= 2
+    assert "Publish Gitee Release" in workflow
+    assert "secrets.GITEE_ACCESS_TOKEN" in workflow
+    assert "publish_gitee_release.py" in workflow
+    github_publish = workflow.split("      - name: Publish GitHub Release\n", 1)[1].split("      - name: Publish Gitee Release\n", 1)[0]
+    assert github_publish.rstrip().endswith("fi")
+
+
+def test_gitee_release_can_be_replayed_from_verified_github_assets():
+    workflow = (ROOT / ".github/workflows/gitee-release.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in workflow
+    assert 'gh release download "${tag}"' in workflow
+    assert "sha256sum -c SHA256SUMS.txt" in workflow
+    assert 'git show "${tag}:VERSION"' in workflow
+    assert 'git show "${tag}:CHANGELOG.md"' in workflow
+    assert "--root release-source" in workflow
+    assert "build_release_notes.py" in workflow
+    assert "publish_gitee_release.py" in workflow
+    assert "GITEE_ACCESS_TOKEN" in workflow
 
 
 def test_release_smoke_preserves_internal_api_authentication_on_both_platforms():
