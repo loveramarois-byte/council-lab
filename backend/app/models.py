@@ -200,6 +200,7 @@ class DiscussionTurn(BaseModel):
     provider_name: str | None = None
     model: str | None = None
     round: int = 1
+    reused_from_run_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

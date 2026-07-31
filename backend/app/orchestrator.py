@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .context import build_context_window, context_budget_for_mode, token_estimator_for
 from .decision_brief import build_decision_brief
+from .decision_lifecycle import RunFork, RunForkCreate, reusable_seat_count
 from .credentials import get_provider_secret
 from .models import (
     AgentAssignmentsConfig,
@@ -318,6 +319,8 @@ class Orchestrator:
         frozen_sources: list[RunSourceSnapshot] | None = None,
         frozen_project_name: str = "",
         frozen_project_context: str | None = None,
+        fork_source: RunRecord | None = None,
+        fork_request: RunForkCreate | None = None,
     ) -> RunRecord:
         seats, finalizer = self._resolve_config(request)
         analysis = analyze_question(request.question, request.mode, request.limits.max_tokens)
@@ -404,6 +407,60 @@ class Orchestrator:
             template_name=template.name,
             source_snapshots=source_snapshots,
         )
+        fork: RunFork | None = None
+        if fork_source is not None or fork_request is not None:
+            if fork_source is None or fork_request is None:
+                raise ValueError("fork source and request must be provided together")
+            if fork_source.status != "completed" or fork_source.final_decision is None:
+                raise ValueError("只有已完成的 Run 可以创建不可变分叉")
+            source_participants = self._participants_for_run(fork_source)
+            reusable = reusable_seat_count(fork_request.checkpoint, len(source_participants))
+            if reusable and request.mode != fork_source.mode:
+                raise ValueError("切换审议模式时只能从讨论开始前创建分叉")
+            if len(active_participants) < reusable:
+                raise ValueError("新情景的席位数量少于所选分叉点，不能安全复用")
+            source_ids = [item.get("id") for item in source_participants[:reusable]]
+            target_ids = [item.get("id") for item in active_participants[:reusable]]
+            if source_ids != target_ids:
+                raise ValueError("新情景的席位布局与父 Run 不一致，不能安全复用")
+            source_agent_turns = [
+                turn for turn in fork_source.discussion_turns if turn.speaker_type == "agent"
+            ]
+            if len(source_agent_turns) < reusable or len(fork_source.candidates) < reusable:
+                raise ValueError("父 Run 没有足够的已完成席位用于所选分叉点")
+            copied_turns: list[DiscussionTurn] = []
+            copied_agents = 0
+            if reusable:
+                for turn in fork_source.discussion_turns:
+                    copied = turn.model_copy(
+                        deep=True,
+                        update={"reused_from_run_id": fork_source.id},
+                    )
+                    copied_turns.append(copied)
+                    if turn.speaker_type == "agent":
+                        copied_agents += 1
+                        if copied_agents == reusable:
+                            break
+            run.discussion_turns = copied_turns
+            run.candidates = [item.model_copy(deep=True) for item in fork_source.candidates[:reusable]]
+            run.current_speaker_index = reusable
+            reused_ids = [turn.id for turn in copied_turns]
+            changed_inputs: dict[str, str | int | bool | dict[str, int]] = {
+                "reason": fork_request.reason,
+                "prompt_append": fork_request.prompt_append,
+                "mode": request.mode,
+                "auto_summarize": request.auto_summarize,
+                "limits": request.limits.model_dump(mode="json"),
+            }
+            fork = RunFork(
+                parent_run_id=fork_source.id,
+                child_run_id=run.id,
+                checkpoint=fork_request.checkpoint,
+                reason=fork_request.reason,
+                changed_inputs=changed_inputs,
+                reused_turn_ids=reused_ids,
+                regenerated_seat_ids=[item["id"] for item in active_participants[reusable:]],
+            )
         if request.high_risk:
             if not self.high_risk_service or not high_risk_actor:
                 raise ValueError("高风险运行需要服务端控制服务和明确的操作主体")
@@ -412,7 +469,10 @@ class Orchestrator:
                 high_risk_actor,
             )
         try:
-            await self.store.save_run(run)
+            if fork is None:
+                await self.store.save_run(run)
+            else:
+                await self.store.save_forked_run(run, fork)
         except Exception:
             if request.high_risk and self.high_risk_service:
                 try:
@@ -422,11 +482,91 @@ class Orchestrator:
             raise
         self.live_runs[run_id] = run
         await self.store.seed_events(run_id)
+        if fork is not None:
+            await self.store.publish(
+                RunEvent(
+                    event_id=f"fork-{run_id}",
+                    run_id=run_id,
+                    type="run_fork_created",
+                    stage="setup",
+                    message="已从历史 Run 创建不可变分叉",
+                    progress=3,
+                    data={
+                        "fork_id": fork.id,
+                        "parent_run_id": fork.parent_run_id,
+                        "checkpoint": fork.checkpoint,
+                        "reused_turn_count": len(fork.reused_turn_ids),
+                        "approval_inherited": False,
+                    },
+                )
+            )
         cancel = asyncio.Event()
         self.cancel_events[run_id] = cancel
         self.run_locks[run_id] = asyncio.Lock()
         self.tasks[run_id] = asyncio.create_task(self.execute(run, cancel))
         return run
+
+    async def fork(
+        self,
+        source: RunRecord,
+        request: RunForkCreate,
+        *,
+        high_risk_actor: str | None = None,
+    ) -> RunRecord:
+        if source.status != "completed" or source.final_decision is None:
+            raise ValueError("只有已完成的 Run 可以创建不可变分叉")
+        assignment_config = None
+        if source.seat_assignments and source.finalizer_assignment:
+            assignment_config = AgentAssignmentsConfig(
+                schema_version=source.assignment_schema_version,
+                seats=[
+                    AgentModelAssignment(
+                        role=item.role,
+                        provider_id=item.provider_id,
+                        model=item.model,
+                        protocol=item.protocol,
+                        reasoning_effort=item.reasoning_effort,
+                        max_output_tokens=item.max_output_tokens,
+                        temperature=item.temperature,
+                        timeout_seconds=item.timeout_seconds,
+                    )
+                    for item in source.seat_assignments
+                ],
+                finalizer=AgentModelAssignment(
+                    role=source.finalizer_assignment.role,
+                    provider_id=source.finalizer_assignment.provider_id,
+                    model=source.finalizer_assignment.model,
+                    protocol=source.finalizer_assignment.protocol,
+                    reasoning_effort=source.finalizer_assignment.reasoning_effort,
+                    max_output_tokens=source.finalizer_assignment.max_output_tokens,
+                    temperature=source.finalizer_assignment.temperature,
+                    timeout_seconds=source.finalizer_assignment.timeout_seconds,
+                ),
+            )
+        question = source.question
+        if request.prompt_append.strip():
+            question = f"{question}\n\n新增情景约束：{request.prompt_append.strip()}"
+        high_risk = bool(source.high_risk_control or await self.store.has_high_risk_control(source.id))
+        return await self.start(
+            RunCreate(
+                question=question,
+                mode=request.mode or source.mode,
+                provider_id=source.provider_id,
+                model=source.model,
+                assignment_config=assignment_config,
+                auto_summarize=request.auto_summarize,
+                high_risk=high_risk,
+                limits=request.limits or source.limits,
+                project_id=source.project_id,
+                template_id=source.template_id,
+            ),
+            high_risk_actor=high_risk_actor,
+            frozen_sources=source.source_snapshots,
+            frozen_project_name=source.project_name,
+            frozen_project_context=source.project_context,
+            fork_source=source,
+            fork_request=request,
+        )
 
     @staticmethod
     def _evidence_context(run: RunRecord) -> str:

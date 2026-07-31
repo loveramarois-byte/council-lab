@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .decision_lifecycle import RunFork, RunForkLineage
 from .migrations import SCHEMA_VERSION, apply_migrations, schema_version
 from .models import AgentAssignmentsConfig, DecisionBrief, ProjectRecord, ProjectSource, ProviderProfile, RunEvent, RunRecord
 
@@ -186,6 +187,75 @@ class Store:
             self.conn.execute("INSERT OR REPLACE INTO runs(id,payload,created_at) VALUES(?,?,?)", (run.id, run.model_dump_json(), run.created_at.isoformat()))
             self.conn.commit()
 
+    async def save_forked_run(self, run: RunRecord, fork: RunFork) -> None:
+        """Atomically create a child Run and its immutable lineage record."""
+        if fork.child_run_id != run.id:
+            raise ValueError("fork child_run_id must match the new Run")
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                if not self.conn.execute("SELECT 1 FROM runs WHERE id=?", (fork.parent_run_id,)).fetchone():
+                    raise ValueError("fork parent Run does not exist")
+                self.conn.execute(
+                    "INSERT INTO runs(id,payload,created_at) VALUES(?,?,?)",
+                    (run.id, run.model_dump_json(), run.created_at.isoformat()),
+                )
+                self.conn.execute(
+                    "INSERT INTO run_forks(id,parent_run_id,child_run_id,checkpoint,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (
+                        fork.id,
+                        fork.parent_run_id,
+                        fork.child_run_id,
+                        fork.checkpoint,
+                        fork.model_dump_json(),
+                        fork.created_at.isoformat(),
+                    ),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def get_run_fork(self, child_run_id: str) -> RunFork | None:
+        row = self.conn.execute(
+            "SELECT payload_json FROM run_forks WHERE child_run_id=?",
+            (child_run_id,),
+        ).fetchone()
+        return RunFork.model_validate_json(row[0]) if row else None
+
+    async def list_run_forks(self, parent_run_id: str) -> list[RunFork]:
+        rows = self.conn.execute(
+            "SELECT payload_json FROM run_forks WHERE parent_run_id=? ORDER BY created_at",
+            (parent_run_id,),
+        ).fetchall()
+        return [RunFork.model_validate_json(row[0]) for row in rows]
+
+    async def get_run_lineage(self, run_id: str) -> RunForkLineage:
+        return RunForkLineage(
+            parent=await self.get_run_fork(run_id),
+            children=await self.list_run_forks(run_id),
+        )
+
+    async def runs_are_related(self, left_run_id: str, right_run_id: str) -> bool:
+        if left_run_id == right_run_id:
+            return True
+        rows = self.conn.execute("SELECT parent_run_id,child_run_id FROM run_forks").fetchall()
+        graph: dict[str, set[str]] = {}
+        for parent, child in rows:
+            graph.setdefault(parent, set()).add(child)
+            graph.setdefault(child, set()).add(parent)
+        pending = [left_run_id]
+        seen = {left_run_id}
+        while pending:
+            current = pending.pop()
+            for adjacent in graph.get(current, set()):
+                if adjacent == right_run_id:
+                    return True
+                if adjacent not in seen:
+                    seen.add(adjacent)
+                    pending.append(adjacent)
+        return False
+
     async def create_decision_brief(self, brief: DecisionBrief) -> DecisionBrief:
         """Append one immutable version, returning the existing identical replay."""
         async with self._lock:
@@ -319,6 +389,7 @@ class Store:
     async def delete_run(self, run_id: str) -> bool:
         async with self._lock:
             self.conn.execute("DELETE FROM decision_briefs WHERE run_id=?", (run_id,))
+            self.conn.execute("DELETE FROM run_forks WHERE parent_run_id=? OR child_run_id=?", (run_id, run_id))
             cursor = self.conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
             self.conn.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
             self.conn.commit()
@@ -413,7 +484,7 @@ class Store:
         async with self._lock:
             counts = {
                 table: int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                for table in ("runs", "projects", "project_sources", "run_events", "decision_briefs", "provider_profiles")
+                for table in ("runs", "projects", "project_sources", "run_events", "decision_briefs", "run_forks", "provider_profiles")
             }
             integrity = str(self.conn.execute("PRAGMA quick_check").fetchone()[0])
             journal_mode = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0])

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CouncilApiError, DecisionBrief, DecisionReviewInput, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, Participant, RequiredFact, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
+import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun } from "../../../lib/api";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
@@ -22,6 +22,14 @@ export default function RunDetailPage() {
   const highRiskProbeRef = useRef<{ runId: string; result: "unknown" | "pending" | "present" | "absent" }>({ runId: "", result: "unknown" });
   const [run, setRun] = useState<Run | null>(null);
   const [decisionBrief, setDecisionBrief] = useState<DecisionBrief | null>(null);
+  const [lineage, setLineage] = useState<RunForkLineage>({ children: [] });
+  const [comparison, setComparison] = useState<DecisionBriefComparison | null>(null);
+  const [forkOpen, setForkOpen] = useState(false);
+  const [forkCheckpoint, setForkCheckpoint] = useState<ForkCheckpoint>("before_deliberation");
+  const [forkReason, setForkReason] = useState("");
+  const [forkPrompt, setForkPrompt] = useState("");
+  const [forkBusy, setForkBusy] = useState(false);
+  const [forkError, setForkError] = useState("");
   const [immersive, setImmersive] = useState(false);
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<string | null>(null);
@@ -61,7 +69,15 @@ export default function RunDetailPage() {
           if (briefError instanceof CouncilApiError && briefError.status === 404) setDecisionBrief(null);
           else throw briefError;
         }
-      } else setDecisionBrief(null);
+        try {
+          const nextLineage = await api.runLineage(params.id);
+          setLineage(nextLineage);
+          if (nextLineage.parent) {
+            try { setComparison(await api.compareRuns(nextLineage.parent.parent_run_id, params.id)); }
+            catch { setComparison(null); }
+          } else setComparison(null);
+        } catch { setLineage({ children: [] }); setComparison(null); }
+      } else { setDecisionBrief(null); setComparison(null); }
       if (highRiskProbeRef.current.runId !== params.id) {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
       }
@@ -100,7 +116,7 @@ export default function RunDetailPage() {
       router.push("/runs");
     }
   };
-  useEffect(() => { setHighRiskAudit([]); setDecisionBrief(null); refresh(); }, [params.id]);
+  useEffect(() => { setHighRiskAudit([]); setDecisionBrief(null); setLineage({ children: [] }); setComparison(null); refresh(); }, [params.id]);
   useEffect(() => {
     if (!run || run.status !== "running") return;
     const unsubscribe = subscribeToRun(run.id, () => refresh(), undefined, refresh);
@@ -290,6 +306,23 @@ export default function RunDetailPage() {
     } finally { setReviewBusy(false); }
   };
 
+  const createFork = async () => {
+    if (!run || forkBusy || forkReason.trim().length < 3) return;
+    setForkBusy(true); setForkError("");
+    try {
+      const child = await api.forkRun(run.id, {
+        checkpoint: forkCheckpoint,
+        reason: forkReason.trim(),
+        prompt_append: forkPrompt.trim(),
+        auto_summarize: false,
+      });
+      setForkOpen(false);
+      router.push(`/runs/${child.id}`);
+    } catch (err) {
+      setForkError(err instanceof Error ? err.message : "分叉没有创建成功");
+    } finally { setForkBusy(false); }
+  };
+
   const act = async (action: "interject" | "question") => {
     if (!run || busy || !canWrite || !draft.trim()) return;
     setBusy(true); setError("");
@@ -411,7 +444,7 @@ export default function RunDetailPage() {
         <div className="dialogue-scroll" ref={transcriptRef} aria-live="polite">
           <article className="opening-question"><span>你提出</span><p>{run.question}</p></article>
           {run.discussion_turns.map((turn) => <article key={turn.id} className={`discussion-turn ${turn.speaker_type} speaker-${turn.speaker_id}`}>
-            <header><span className="speaker-avatar">{turn.speaker_type === "user" ? <UserRound size={15} /> : turn.speaker_name.slice(0, 1)}</span><div><strong>{turn.speaker_name}</strong><small>{turn.role_label || "参与者"} · 第 {turn.round} 轮{turn.provider_name ? ` · ${turn.provider_name} / ${turn.model}` : ""}</small></div></header>
+            <header><span className="speaker-avatar">{turn.speaker_type === "user" ? <UserRound size={15} /> : turn.speaker_name.slice(0, 1)}</span><div><strong>{turn.speaker_name}</strong><small>{turn.role_label || "参与者"} · 第 {turn.round} 轮{turn.provider_name ? ` · ${turn.provider_name} / ${turn.model}` : ""}{turn.reused_from_run_id ? " · 复用父 Run" : ""}</small></div></header>
             <RichText content={turn.content} />
           </article>)}
           {run.status === "running" && <article className="discussion-thinking">
@@ -427,6 +460,7 @@ export default function RunDetailPage() {
             </div>
           </article>}
           {run.status === "completed" && decisionBrief && <DecisionBriefView brief={decisionBrief} />}
+          {run.status === "completed" && comparison && <DecisionComparisonView comparison={comparison} />}
           {run.status === "completed" && run.final_decision && (decisionBrief
             ? <details className="roundtable-summary raw-summary"><summary>查看原始综合文本</summary><RichText content={run.final_decision.final_answer} /></details>
             : <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>未经过外部事实核验</strong><small>模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。</small></span></div><RichText content={run.final_decision.final_answer} /></article>)}
@@ -456,7 +490,7 @@ export default function RunDetailPage() {
           {(error || run.error) && <p className="discussion-error">{error || run.error}</p>}
         </div>}
 
-        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button><span /><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
+        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button>{lineage.parent && <Link className="quiet-button" href={`/runs/${lineage.parent.parent_run_id}`}><GitBranch size={15} />父 Run</Link>}{lineage.children.length > 0 && <span className="fork-child-count">{lineage.children.length} 个分支</span>}<span /><button className="quiet-button" onClick={() => { setForkError(""); setForkOpen(true); }}><GitBranch size={15} />创建情景分叉</button><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
       </section>
     </main>
     {highRisk && highRiskOpen && <div className="high-risk-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setHighRiskOpen(false); }}>
@@ -505,7 +539,26 @@ export default function RunDetailPage() {
         <footer>{reviewError ? <span className="review-error">{reviewError}</span> : <span>回访会写入本地记录和导出报告。</span>}<button className="send-button" onClick={saveDecisionReview} disabled={reviewBusy || !reviewDraft.selected_decision.trim() || !reviewDraft.expected_result.trim()}>{reviewBusy ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存回访</button></footer>
       </section>
     </div>}
+    {forkOpen && <div className="decision-review-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setForkOpen(false); }}>
+      <section className="decision-review-dialog fork-dialog" role="dialog" aria-modal="true" aria-labelledby="fork-title">
+        <header><div><span>IMMUTABLE FORK</span><h2 id="fork-title">创建情景分叉</h2><p>父 Run、原发言、审批和简报都不会被改写。</p></div><button className="icon-button" onClick={() => setForkOpen(false)} aria-label="关闭情景分叉"><X size={16} /></button></header>
+        <div className="decision-review-fields">
+          <label className="review-field review-wide"><span>从哪个检查点继续</span><select aria-label="分叉检查点" value={forkCheckpoint} onChange={(event) => setForkCheckpoint(event.target.value as ForkCheckpoint)}><option value="before_deliberation">讨论开始前</option>{run.participant_roles.map((seat, index) => <option key={seat.id} value={`after_seat_${index + 1}`}>复用到第 {index + 1} 席 · {seat.name}</option>)}<option value="before_synthesis">四席完成后、总结前</option></select></label>
+          <label className="review-field review-wide"><span>分叉原因</span><textarea aria-label="分叉原因" rows={2} minLength={3} maxLength={1000} value={forkReason} onChange={(event) => setForkReason(event.target.value)} placeholder="例如：预算从 50 万调整为 20 万" /></label>
+          <label className="review-field review-wide"><span>新增情景约束（可选）</span><textarea aria-label="新增情景约束" rows={4} maxLength={6000} value={forkPrompt} onChange={(event) => setForkPrompt(event.target.value)} placeholder="只写变化，不用重复原问题" /></label>
+        </div>
+        <footer>{forkError ? <span className="review-error">{forkError}</span> : <span>{highRisk ? "高风险分叉会创建全新的控制记录，旧审批不会继承。" : "复用内容会明确标记，不计入新 Run 的模型用量。"}</span>}<button className="send-button" onClick={createFork} disabled={forkBusy || forkReason.trim().length < 3}>{forkBusy ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}创建新 Run</button></footer>
+      </section>
+    </div>}
   </div>;
+}
+
+function DecisionComparisonView({ comparison }: { comparison: DecisionBriefComparison }) {
+  return <article className="decision-comparison" aria-label="父子 Run 结果比较">
+    <header><GitBranch size={16} /><div><strong>与父 Run 的结构化比较</strong><span>{comparison.related ? "同一情景树" : "独立 Run"} · {comparison.changed_fields.length ? `变化：${comparison.changed_fields.join("、")}` : "关键字段未变化"}</span></div></header>
+    <div><section><span>父 Run</span><strong>{comparison.left.recommendation}</strong><small>{comparison.left.status} · {comparison.left.support}</small></section><section><span>当前分叉</span><strong>{comparison.right.recommendation}</strong><small>{comparison.right.status} · {comparison.right.support}</small></section></div>
+    {(comparison.unresolved_added.length > 0 || comparison.unresolved_removed.length > 0) && <footer>{comparison.unresolved_added.length > 0 && <span>新增未决：{comparison.unresolved_added.join("；")}</span>}{comparison.unresolved_removed.length > 0 && <span>已消除：{comparison.unresolved_removed.join("；")}</span>}</footer>}
+  </article>;
 }
 
 function DecisionBriefView({ brief }: { brief: DecisionBrief }) {

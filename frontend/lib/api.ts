@@ -211,7 +211,7 @@ export type QuestionAnalysis = {
 };
 
 export type Participant = { id: string; name: string; role: string; brief: string };
-export type DiscussionTurn = { id: string; speaker_type: "user" | "agent" | "system"; speaker_id: string; speaker_name: string; role_label: string; content: string; provider_id?: string | null; provider_name?: string | null; model?: string | null; round: number; created_at: string };
+export type DiscussionTurn = { id: string; speaker_type: "user" | "agent" | "system"; speaker_id: string; speaker_name: string; role_label: string; content: string; provider_id?: string | null; provider_name?: string | null; model?: string | null; round: number; reused_from_run_id?: string | null; created_at: string };
 
 export type CandidateStructureSource = "agent_output" | "postprocessed" | "manual" | "legacy_default" | "none";
 export type Candidate = { candidate_id: string; anonymous_label?: string; answer: string; model: string; provider: string; status: string; usage: Usage; structure_source: CandidateStructureSource; key_reasons: string[]; assumptions: string[]; claims_to_verify: string[]; uncertainties: string[]; risks: string[]; proposed_sources: string[] };
@@ -239,6 +239,33 @@ export type DecisionBrief = {
   reopen_triggers: { id: string; condition: string; check_method?: string | null; severity: "informational" | "important" | "blocking" }[];
   minority_report?: { summary: string; seat_ids: string[]; conditions_under_which_it_may_be_correct: string[] } | null;
   limitations: string[];
+};
+export type ForkCheckpoint = "before_deliberation" | "after_seat_1" | "after_seat_2" | "after_seat_3" | "after_seat_4" | "before_synthesis";
+export type RunFork = {
+  id: string;
+  parent_run_id: string;
+  child_run_id: string;
+  checkpoint: ForkCheckpoint;
+  reason: string;
+  changed_inputs: Record<string, string | number | boolean | Record<string, number>>;
+  reused_turn_ids: string[];
+  regenerated_seat_ids: string[];
+  approval_inherited: false;
+  created_at: string;
+};
+export type RunForkLineage = { parent?: RunFork | null; children: RunFork[] };
+export type DecisionBriefComparison = {
+  left_run_id: string;
+  right_run_id: string;
+  related: boolean;
+  left: DecisionBrief;
+  right: DecisionBrief;
+  changed_fields: string[];
+  status_changed: boolean;
+  recommendation_changed: boolean;
+  support_changed: boolean;
+  unresolved_added: string[];
+  unresolved_removed: string[];
 };
 
 type ErrorEnvelope = {
@@ -336,6 +363,9 @@ export const api = {
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   decisionBrief: (id: string) => request<DecisionBrief>(`/api/runs/${id}/decision-brief`),
+  runLineage: (id: string) => request<RunForkLineage>(`/api/runs/${id}/lineage`),
+  compareRuns: (left: string, right: string) => request<DecisionBriefComparison>(`/api/runs/compare?left=${encodeURIComponent(left)}&right=${encodeURIComponent(right)}`),
+  forkRun: (id: string, body: { checkpoint: ForkCheckpoint; reason: string; prompt_append?: string; mode?: Run["mode"]; auto_summarize?: boolean; limits?: RunLimits }) => idempotentRequest<Run>(`/api/runs/${id}/fork`, { method: "POST", headers: { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR }, body: JSON.stringify(body) }),
   cancelRun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
   advanceRun: (id: string, body: { action: "continue" | "interject" | "question"; message?: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/advance`, { method: "POST", body: JSON.stringify(body) }),
   interjectRun: (id: string, body: { action: "interject" | "question"; message: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/interject`, { method: "POST", body: JSON.stringify(body) }),
@@ -370,7 +400,7 @@ export function subscribeToRun(
   let reconnecting = false;
   let lastEventId = 0;
   let stopped = false;
-  const names = ["run_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "decision_brief_generating", "decision_brief_generated", "decision_brief_validation_failed", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
+  const names = ["run_created", "run_fork_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "decision_brief_generating", "decision_brief_generated", "decision_brief_validation_failed", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
   const terminalEvents = new Set(["final_completed", "run_cancelled"]);
 
   const connect = async () => {

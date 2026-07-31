@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -38,6 +38,11 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE TABLE IF NOT EXISTS decision_briefs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, version INTEGER NOT NULL, schema_version INTEGER NOT NULL, payload_json TEXT NOT NULL, generation_reason TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id), UNIQUE(run_id, version))",
         "CREATE INDEX IF NOT EXISTS idx_decision_briefs_run_version ON decision_briefs(run_id, version DESC)",
         "CREATE TRIGGER IF NOT EXISTS decision_briefs_no_update BEFORE UPDATE ON decision_briefs BEGIN SELECT RAISE(ABORT, 'decision briefs are append-only'); END",
+    ),
+    7: (
+        "CREATE TABLE IF NOT EXISTS run_forks (id TEXT PRIMARY KEY, parent_run_id TEXT NOT NULL, child_run_id TEXT NOT NULL UNIQUE, checkpoint TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(parent_run_id) REFERENCES runs(id), FOREIGN KEY(child_run_id) REFERENCES runs(id))",
+        "CREATE INDEX IF NOT EXISTS idx_run_forks_parent_created ON run_forks(parent_run_id, created_at)",
+        "CREATE TRIGGER IF NOT EXISTS run_forks_no_update BEFORE UPDATE ON run_forks BEGIN SELECT RAISE(ABORT, 'run forks are append-only'); END",
     ),
 }
 

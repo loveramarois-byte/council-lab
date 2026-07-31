@@ -9,7 +9,7 @@ from typing import Annotated
 
 import httpx
 
-from fastapi import FastAPI, File, Header, HTTPException, Path as ApiPath, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Path as ApiPath, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -20,6 +20,7 @@ from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_w
 from .errors import install_error_handling
 from .idempotency import execute_idempotent_model_action, execute_idempotent_run_action
 from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
+from .decision_lifecycle import DecisionBriefComparison, RunForkCreate, RunForkLineage, compare_briefs
 from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionBrief, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
@@ -54,6 +55,7 @@ assignments_need_persist = bool(
 )
 
 RunIdPath = Annotated[str, ApiPath(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
+RunIdQuery = Annotated[str, Query(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
 
 
 @asynccontextmanager
@@ -638,6 +640,23 @@ async def list_runs():
     return await store.list_runs()
 
 
+@app.get("/api/runs/compare", response_model=DecisionBriefComparison)
+async def compare_runs(left: RunIdQuery, right: RunIdQuery):
+    if left == right:
+        raise HTTPException(400, "请选择两个不同的 Run")
+    left_run, right_run = await store.get_run(left), await store.get_run(right)
+    if not left_run or not right_run:
+        raise HTTPException(404, "比较的运行记录不存在")
+    left_brief, right_brief = await store.get_decision_brief(left), await store.get_decision_brief(right)
+    if left_brief is None or right_brief is None:
+        raise HTTPException(409, "两个 Run 都完成并生成结构化简报后才能比较")
+    return compare_briefs(
+        left_brief,
+        right_brief,
+        related=await store.runs_are_related(left, right),
+    )
+
+
 @app.get("/api/runs/{run_id}")
 async def get_run(run_id: str):
     run = await store.get_run(run_id)
@@ -656,6 +675,41 @@ async def get_decision_brief(run_id: RunIdPath):
 
         raise ApiError(404, "DECISION_BRIEF_NOT_FOUND", "该历史运行尚无结构化决策简报。")
     return brief
+
+
+@app.get("/api/runs/{run_id}/lineage", response_model=RunForkLineage)
+async def get_run_lineage(run_id: RunIdPath):
+    if not await store.get_run(run_id):
+        raise HTTPException(404, "运行记录不存在")
+    return await store.get_run_lineage(run_id)
+
+
+@app.post("/api/runs/{run_id}/fork")
+async def fork_run(
+    run_id: RunIdPath,
+    request: RunForkCreate,
+    response: Response,
+    actor_header: str | None = Header(default=None, alias="X-Council-Actor"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+):
+    source = await store.get_run(run_id)
+    if not source:
+        raise HTTPException(404, "运行记录不存在")
+
+    async def create_fork():
+        try:
+            return await orchestrator.fork(source, request, high_risk_actor=actor_header)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    return await execute_idempotent_run_action(
+        store,
+        f"runs:{run_id}:fork",
+        idempotency_key,
+        request.model_dump(mode="json"),
+        create_fork,
+        response,
+    )
 
 
 @app.get("/api/runs/{run_id}/export")
