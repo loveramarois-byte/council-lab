@@ -57,6 +57,8 @@ def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_bu
         assert "COUNCIL_NEXT_DIST_DIR" in script
     assert 'web/$RELEASE_DIST_DIR/static' in mac_release
     assert 'web\\$ReleaseDistDir\\static' in windows_release
+    assert 'frontend/public" "$RESOURCES_DIR/web/public' in mac_release
+    assert 'frontend\\public") (Join-Path $StageDir "web\\public' in windows_release
 
 
 def test_release_workflow_requests_packaged_javascript_and_css():

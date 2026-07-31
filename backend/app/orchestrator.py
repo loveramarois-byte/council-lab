@@ -395,6 +395,7 @@ class Orchestrator:
             seat_assignments=seats,
             finalizer_assignment=finalizer,
             auto_summarize=request.auto_summarize,
+            high_risk_control=request.high_risk,
             project_id=request.project_id if frozen_sources is not None else project.id if project else None,
             project_name=project_name,
             project_context=project_context,

@@ -40,3 +40,4 @@ desktop/Council.app/
 .idea/
 .vscode/
 .gstack/
+.coverage

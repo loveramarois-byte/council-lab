@@ -1113,3 +1113,68 @@ test("诊断页只在用户操作后导出脱敏支持包", async ({ page }) => 
   expect((await download).suggestedFilename()).toBe("council-diagnostics-test.zip");
   await expect(page.getByText(/诊断包已生成/)).toBeVisible();
 });
+
+test("普通审议不再探测高风险控制接口", async ({ page }) => {
+  const now = new Date().toISOString();
+  const run = {
+    id: "standard-run-fixture", question: "普通审议不应产生高风险请求", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "low",
+    status: "completed", created_at: now, updated_at: now, analysis: null, candidates: [], critiques: [], verifications: [], revisions: [], scores: [], final_decision: null,
+    usage: { model_calls: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, estimated_cost: null, duration_ms: 0 }, degraded: false, protocol: "mock", discussion_turns: [], participant_roles: [], current_speaker_index: 0, discussion_round: 1, awaiting_user: false,
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, seat_assignments: [], finalizer_assignment: null, auto_summarize: false, high_risk_control: false, recoverable: false,
+  };
+  let highRiskRequests = 0;
+  await page.route("**/api/runs/standard-run-fixture", (route) => route.fulfill({ json: run }));
+  await page.route("**/api/high-risk/runs/standard-run-fixture", (route) => {
+    highRiskRequests += 1;
+    return route.fulfill({ status: 404, json: { error: { code: "HIGH_RISK_RUN_NOT_FOUND", message: "不存在" } } });
+  });
+
+  await page.goto("/runs/standard-run-fixture");
+  await expect(page.getByRole("heading", { name: "普通审议不应产生高风险请求" })).toBeVisible();
+  expect(highRiskRequests).toBe(0);
+});
+
+test("Service Worker 脚本存在且不造成注册错误", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  const response = await page.request.get("/sw.js");
+  expect(response.ok()).toBeTruthy();
+  expect(response.headers()["content-type"]).toContain("javascript");
+  const serviceWorker = await response.text();
+  expect(serviceWorker).not.toContain("/api/");
+  expect(serviceWorker).not.toContain("/runs/");
+
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
+  expect(consoleErrors.filter((message) => message.includes("bad HTTP response") || message.includes("sw.js"))).toEqual([]);
+});
+
+test("大量历史记录分批显示且加载期间不闪烁空状态", async ({ page }) => {
+  const now = new Date().toISOString();
+  const runs = Array.from({ length: 105 }, (_, index) => ({
+    id: `history-${index}`, question: `历史测试 ${index + 1}`, mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "low",
+    status: "completed", created_at: now, updated_at: now, candidates: [], critiques: [], verifications: [], revisions: [], scores: [], final_decision: null,
+    usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 10 }, degraded: false, protocol: "mock", discussion_turns: [], participant_roles: [], current_speaker_index: 4, discussion_round: 1, awaiting_user: false,
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, seat_assignments: [], auto_summarize: false, high_risk_control: false, recoverable: false,
+  }));
+  let releaseResponse: (() => void) | undefined;
+  const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
+  await page.route("**/api/runs", async (route) => {
+    await responseGate;
+    return route.fulfill({ json: runs });
+  });
+
+  await page.goto("/runs");
+  await expect(page.getByText("正在读取历史记录")).toBeVisible();
+  await expect(page.getByText("还没有审议记录")).toHaveCount(0);
+  releaseResponse?.();
+  await expect(page.locator(".run-row")).toHaveCount(30);
+  await page.getByRole("button", { name: /加载更多/ }).click();
+  await expect(page.locator(".run-row")).toHaveCount(60);
+  await page.getByPlaceholder("搜索问题").fill("历史测试 105");
+  await expect(page.locator(".run-row")).toHaveCount(1);
+  await expect(page.getByText("历史测试 105", { exact: true })).toBeVisible();
+});

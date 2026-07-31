@@ -19,6 +19,7 @@ export default function RunDetailPage() {
   const fullscreenOwnedRef = useRef(false);
   const immersiveDesiredRef = useRef(false);
   const immersiveRequestRef = useRef(0);
+  const highRiskProbeRef = useRef<{ runId: string; result: "unknown" | "present" | "absent" }>({ runId: "", result: "unknown" });
   const [run, setRun] = useState<Run | null>(null);
   const [immersive, setImmersive] = useState(false);
   const [draft, setDraft] = useState("");
@@ -53,8 +54,20 @@ export default function RunDetailPage() {
     try {
       const nextRun = await api.run(params.id);
       setRun(nextRun);
+      if (highRiskProbeRef.current.runId !== params.id) {
+        highRiskProbeRef.current = { runId: params.id, result: "unknown" };
+      }
+      const shouldLoadHighRisk = nextRun.high_risk_control === true
+        || (nextRun.high_risk_control == null && highRiskProbeRef.current.result !== "absent");
+      if (!shouldLoadHighRisk) {
+        setHighRisk(null);
+        setHighRiskApproval(null);
+        setHighRiskAudit([]);
+        return;
+      }
       try {
         const nextHighRisk = await api.highRiskRun(params.id);
+        highRiskProbeRef.current.result = "present";
         setHighRisk(nextHighRisk);
         await refreshHighRiskAudit(params.id);
         if (nextHighRisk.decision?.report) setReportDraft(nextHighRisk.decision.report);
@@ -66,6 +79,7 @@ export default function RunDetailPage() {
         }
       } catch (highRiskLoadError) {
         if (highRiskLoadError instanceof CouncilApiError && highRiskLoadError.code === "HIGH_RISK_RUN_NOT_FOUND") {
+          highRiskProbeRef.current.result = "absent";
           setHighRisk(null);
           setHighRiskApproval(null);
           setHighRiskAudit([]);
