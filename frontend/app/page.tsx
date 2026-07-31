@@ -121,7 +121,7 @@ export default function HomePage() {
           assessment = { ready: true, task_labels: ["analysis"], checks: [], clarification_questions: [], recommended_mode: "full_council", rules_version: "server_fallback" };
         }
       }
-      if (!assessment.ready && !readinessOverride && !forceOverride) {
+      if (!assessment.ready && !highRisk && !readinessOverride && !forceOverride) {
         setSending(false);
         return;
       }
@@ -134,7 +134,7 @@ export default function HomePage() {
         ...(selectedMemoryIds.length ? { selected_memory_ids: selectedMemoryIds } : {}),
         ...(autoSummarize && !highRisk ? { auto_summarize: true } : {}),
         ...(highRisk ? { high_risk: true } : {}),
-        ...(!assessment.ready && (readinessOverride || forceOverride) ? { readiness_override: true, readiness_override_reason: "用户查看准备度缺口后选择继续" } : {}),
+        ...(!assessment.ready && !highRisk && (readinessOverride || forceOverride) ? { readiness_override: true, readiness_override_reason: "用户查看准备度缺口后选择继续" } : {}),
       });
       router.push(`/runs/${run.id}`);
     } catch (err) {
