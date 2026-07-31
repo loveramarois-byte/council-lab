@@ -215,7 +215,7 @@ class MockProvider(ModelBackend):
     async def generate(self, prompt: str, system: str, model: str, temperature: float = 0.2) -> Generation:
         await asyncio.sleep(0.18)
         if "记录员" in system:
-            text = "最终答案：先确认目标与约束，再根据四席已经公开的认同、反驳和用户补充选择可执行方案；对仍有分歧的部分保留验证步骤和回退条件。"
+            text = "最终答案：先确认目标与约束，再根据各席已经公开的认同、反驳和用户补充选择可执行方案；对仍有分歧的部分保留验证步骤和回退条件。"
         elif "第一位发言者" in system:
             text = "初步观点：先明确问题的目标、已知条件和决策标准，再比较方案；这能让后续反驳落到具体依据上。"
         else:

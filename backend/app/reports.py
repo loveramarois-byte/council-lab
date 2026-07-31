@@ -57,7 +57,14 @@ def run_markdown(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
         provider = f" · {turn.provider_name} / {turn.model}" if turn.provider_name else ""
         lines.extend([f"### {turn.speaker_name} · {turn.role_label}{provider}", "", turn.content, ""])
     if run.final_decision:
-        lines.extend(["## 圆桌最终答案", "", run.final_decision.final_answer, ""])
+        lines.extend([
+            "## 圆桌最终答案",
+            "",
+            "> **未经过外部事实核验。** 模型共识不等于事实；关键结论请使用第一方资料或可复现测试核对。",
+            "",
+            run.final_decision.final_answer,
+            "",
+        ])
         if run.final_decision.disagreements:
             lines.extend(["### 保留分歧", ""] + [f"- {item}" for item in run.final_decision.disagreements] + [""])
         if run.final_decision.risks_and_limitations:
@@ -98,7 +105,10 @@ def run_html(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
         for index, source in enumerate(run.source_snapshots, 1)
     )
     answer = (
-        f"<section class='answer'><h2>圆桌最终答案</h2><p>{escape(run.final_decision.final_answer).replace(chr(10), '<br>')}</p></section>"
+        "<section class='answer'><h2>圆桌最终答案</h2>"
+        "<aside class='verification-warning'><strong>未经过外部事实核验。</strong> "
+        "模型共识不等于事实；关键结论请使用第一方资料或可复现测试核对。</aside>"
+        f"<p>{escape(run.final_decision.final_answer).replace(chr(10), '<br>')}</p></section>"
         if run.final_decision
         else ""
     )
@@ -134,7 +144,7 @@ def run_html(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(run.question)} · Council</title><style>
     body{{max-width:860px;margin:48px auto;padding:0 24px;color:#292724;font:15px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;background:#f7f3ee}}
-    header,.answer,article,.sources,.review,.high-risk{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:0 0 9px}}small,header p,.sources span{{color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
+    header,.answer,article,.sources,.review,.high-risk{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:0 0 9px}}small,header p,.sources span{{color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
 </style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}</p></header>
     {high_risk_section}{f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
     <section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""

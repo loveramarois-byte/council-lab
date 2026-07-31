@@ -1636,6 +1636,8 @@ async def test_project_history_enters_context_and_reports_keep_sources(tmp_path,
     assert "事实正文" in markdown
     assert "最终答案引用 [S1]" in markdown
     assert "[S1] 一手资料" in html and "最终答案引用 [S1]" in html
+    assert "未经过外部事实核验" in markdown
+    assert "未经过外部事实核验" in html
     assert "决策回访" in markdown and "两周内验证关键假设" in html
 
 

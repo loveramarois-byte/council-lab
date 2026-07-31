@@ -33,7 +33,7 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
-  await expect(page.getByText("依次发言、公开回应，由你确认后再形成答案。")).toBeVisible();
+  await expect(page.getByText("依次发言、公开回应；短定义与确定性计算会自动精简调用。")).toBeVisible();
   await expect(page.getByRole("heading", { name: "当前五席还是本地演示。" })).toBeVisible();
   await expect(page.getByText(/预设示例，不调用真实 AI/)).toBeVisible();
   await expect(page.getByRole("link", { name: /连接真实 AI/ })).toHaveAttribute("href", "/settings/providers");
@@ -62,6 +62,27 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   await page.getByRole("button", { name: /进入圆桌/ }).click();
   await page.waitForURL("**/runs/demo-fixture");
   expect(createPayload).toEqual({ question: "这个演示请求不应携带资料空间字段", mode: "standard", use_saved_assignments: true, template_id: "open_discussion" });
+});
+
+test("自动总结必须由用户明确开启并进入同一个创建请求", async ({ page }) => {
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  let createPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/runs", (route) => {
+    createPayload = route.request().postDataJSON();
+    return route.fulfill({ json: { id: "auto-summary-fixture" } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByText("自动总结", { exact: true }).click();
+  await expect(page.getByText("讨论席结束后直接生成答案")).toBeVisible();
+  await page.getByPlaceholder("写下需要四席共同审议的问题").fill("请评估是否应该上线付费订阅");
+  await page.getByRole("button", { name: /进入圆桌/ }).click();
+  await page.waitForURL("**/runs/auto-summary-fixture");
+
+  expect(createPayload).toMatchObject({ auto_summarize: true });
 });
 
 test("创建请求断线后使用同一幂等键重试", async ({ page }) => {
@@ -518,6 +539,7 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await expect(page.getByText("最终答案还要考虑回滚窗口", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "生成最终答案" }).click();
     await expect(page.getByText("圆桌最终答案")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("未经过外部事实核验", { exact: true })).toBeVisible();
     await expect(page.locator(".council-seat.completed")).toHaveCount(4);
     await expect(page.locator(".summary-node.completed")).toHaveCount(1);
     await expect(page.getByText("第 5 次调用", { exact: false }).first()).toBeVisible();
@@ -533,6 +555,30 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await expect(page.getByRole("button", { name: "编辑回访" })).toBeVisible();
     const saved = await (await request.get(`${backendUrl}/api/runs/${run.id}`, { headers: internalApiHeaders })).json() as { decision_review?: { expected_result: string; outcome_status: string } };
     expect(saved.decision_review).toMatchObject({ expected_result: "两周内验证回滚方案", outcome_status: "partial" });
+  } finally {
+    await request.delete(`${backendUrl}/api/runs/${run.id}`, { headers: internalApiHeaders });
+  }
+});
+
+test("快速短定义只显示一席和第二次总结调用", async ({ page, request }) => {
+  const response = await request.post(`${backendUrl}/api/runs`, {
+    headers: internalApiHeaders,
+    data: { question: "请用一句话解释什么是向量数据库", mode: "quick", provider_id: "mock", model: "council-mock", auto_summarize: true },
+  });
+  expect(response.ok()).toBeTruthy();
+  const run = await response.json() as { id: string };
+  try {
+    await page.goto(`/runs/${run.id}`);
+    await expect(page.locator(".council-seat")).toHaveCount(1);
+    await expect(page.getByText("1 席顺序调用", { exact: true })).toBeVisible();
+    await expect(page.getByText("短任务精简路线", { exact: true })).toBeVisible();
+    await expect(page.getByText("第 2 次调用", { exact: false }).first()).toBeVisible();
+    await expect(page.getByText("圆桌最终答案")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("未经过外部事实核验", { exact: true })).toBeVisible();
+    const saved = await (await request.get(`${backendUrl}/api/runs/${run.id}`, { headers: internalApiHeaders })).json() as { status: string; usage: { model_calls: number }; participant_roles: unknown[] };
+    expect(saved.status).toBe("completed");
+    expect(saved.usage.model_calls).toBe(2);
+    expect(saved.participant_roles).toHaveLength(1);
   } finally {
     await request.delete(`${backendUrl}/api/runs/${run.id}`, { headers: internalApiHeaders });
   }

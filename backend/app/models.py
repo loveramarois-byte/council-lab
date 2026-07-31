@@ -207,10 +207,12 @@ class QuestionAnalysis(BaseModel):
     question_type: str
     needs_realtime: bool = False
     needs_web: bool = False
+    needs_external_evidence: bool = False
     needs_code_execution: bool = False
     needs_math: bool = False
     needs_file: bool = False
     high_risk_domain: bool = False
+    high_risk_domains: list[str] = Field(default_factory=list)
     faulty_premise: bool = False
     suitable_for_multi_agent: bool = True
     recommended_agents: int = 3
@@ -218,6 +220,9 @@ class QuestionAnalysis(BaseModel):
     expected_model_calls: int = 8
     expected_token_limit: int = 40000
     expected_tool_calls: int = 0
+    confidence: float = Field(default=0.5, ge=0, le=1)
+    reasons: list[str] = Field(default_factory=list)
+    short_task_route: bool = False
 
 
 class UsageSummary(BaseModel):
