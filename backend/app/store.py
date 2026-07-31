@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .migrations import SCHEMA_VERSION, apply_migrations, schema_version
-from .models import AgentAssignmentsConfig, ProjectRecord, ProjectSource, ProviderProfile, RunEvent, RunRecord
+from .models import AgentAssignmentsConfig, DecisionBrief, ProjectRecord, ProjectSource, ProviderProfile, RunEvent, RunRecord
 
 
 @dataclass(frozen=True)
@@ -186,6 +186,50 @@ class Store:
             self.conn.execute("INSERT OR REPLACE INTO runs(id,payload,created_at) VALUES(?,?,?)", (run.id, run.model_dump_json(), run.created_at.isoformat()))
             self.conn.commit()
 
+    async def create_decision_brief(self, brief: DecisionBrief) -> DecisionBrief:
+        """Append one immutable version, returning the existing identical replay."""
+        async with self._lock:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.conn.execute(
+                    "SELECT payload_json FROM decision_briefs WHERE run_id=? AND version=?",
+                    (brief.run_id, brief.version),
+                ).fetchone()
+                if row:
+                    existing = DecisionBrief.model_validate_json(row[0])
+                    if existing.model_dump(mode="json", exclude={"id", "generated_at"}) != brief.model_dump(
+                        mode="json", exclude={"id", "generated_at"}
+                    ):
+                        raise ValueError("DecisionBrief version already exists with different content")
+                    self.conn.commit()
+                    return existing
+                if not self.conn.execute("SELECT 1 FROM runs WHERE id=?", (brief.run_id,)).fetchone():
+                    raise ValueError("DecisionBrief requires an existing Run")
+                self.conn.execute(
+                    "INSERT INTO decision_briefs(id,run_id,version,schema_version,payload_json,generation_reason,created_at) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        brief.id,
+                        brief.run_id,
+                        brief.version,
+                        brief.schema_version,
+                        brief.model_dump_json(),
+                        brief.generation_reason,
+                        brief.generated_at.isoformat(),
+                    ),
+                )
+                self.conn.commit()
+                return brief
+            except Exception:
+                self.conn.rollback()
+                raise
+
+    async def get_decision_brief(self, run_id: str) -> DecisionBrief | None:
+        row = self.conn.execute(
+            "SELECT payload_json FROM decision_briefs WHERE run_id=? ORDER BY version DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        return DecisionBrief.model_validate_json(row[0]) if row else None
+
     async def claim_idempotent_operation(
         self,
         scope: str,
@@ -274,6 +318,7 @@ class Store:
 
     async def delete_run(self, run_id: str) -> bool:
         async with self._lock:
+            self.conn.execute("DELETE FROM decision_briefs WHERE run_id=?", (run_id,))
             cursor = self.conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
             self.conn.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
             self.conn.commit()
@@ -368,7 +413,7 @@ class Store:
         async with self._lock:
             counts = {
                 table: int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-                for table in ("runs", "projects", "project_sources", "run_events", "provider_profiles")
+                for table in ("runs", "projects", "project_sources", "run_events", "decision_briefs", "provider_profiles")
             }
             integrity = str(self.conn.execute("PRAGMA quick_check").fetchone()[0])
             journal_mode = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0])

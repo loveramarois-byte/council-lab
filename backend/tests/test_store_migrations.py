@@ -69,6 +69,36 @@ def test_failed_migration_restores_original_database(tmp_path, monkeypatch):
         restored.close()
 
 
+def test_v5_database_upgrades_without_rewriting_run_or_high_risk_records(tmp_path):
+    database = tmp_path / "council.sqlite3"
+    connection = sqlite3.connect(database)
+    for version in range(1, 6):
+        for statement in SCHEMA_MIGRATIONS[version]:
+            connection.execute(statement)
+        connection.execute(f"PRAGMA user_version={version}")
+    run_payload = '{"id":"completed-run","status":"completed","discussion_turns":[{"id":"turn-1"}]}'
+    connection.execute(
+        "INSERT INTO runs(id,payload,created_at) VALUES(?,?,?)",
+        ("completed-run", run_payload, "2026-07-31T00:00:00+00:00"),
+    )
+    connection.execute(
+        "INSERT INTO high_risk_audit_events(event_id,run_id,event_type,occurred_at,actor_type,metadata_json) VALUES(?,?,?,?,?,?)",
+        ("audit-1", "completed-run", "risk_assessed", "2026-07-31T00:00:00+00:00", "system", "{}"),
+    )
+    connection.commit()
+    connection.close()
+
+    store = Store(database)
+    try:
+        assert store.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert store.conn.execute("SELECT payload FROM runs WHERE id='completed-run'").fetchone()[0] == run_payload
+        assert store.conn.execute("SELECT event_id FROM high_risk_audit_events").fetchone()[0] == "audit-1"
+        columns = {row[1] for row in store.conn.execute("PRAGMA table_info(decision_briefs)")}
+        assert {"id", "run_id", "version", "schema_version", "payload_json", "generation_reason", "created_at"} <= columns
+    finally:
+        store.close()
+
+
 def test_v3_migration_marks_existing_candidate_structure_as_legacy_default(tmp_path):
     database = tmp_path / "council.sqlite3"
     connection = sqlite3.connect(database)

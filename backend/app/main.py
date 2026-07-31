@@ -5,10 +5,11 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
 import httpx
 
-from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Path as ApiPath, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -19,7 +20,7 @@ from .evidence import MAX_UPLOAD_BYTES, content_hash, extract_file_text, fetch_w
 from .errors import install_error_handling
 from .idempotency import execute_idempotent_model_action, execute_idempotent_run_action
 from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
-from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
+from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionBrief, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
 from .provider_catalog import BUILTIN_PROVIDER_IDS, builtin_providers
@@ -51,6 +52,8 @@ assignments = orchestrator.normalize_assignment_config(assignments)
 assignments_need_persist = bool(
     saved_assignments_valid and saved_assignments and saved_assignments.schema_version < assignments.schema_version
 )
+
+RunIdPath = Annotated[str, ApiPath(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
 
 
 @asynccontextmanager
@@ -643,21 +646,34 @@ async def get_run(run_id: str):
     return run
 
 
+@app.get("/api/runs/{run_id}/decision-brief", response_model=DecisionBrief)
+async def get_decision_brief(run_id: RunIdPath):
+    if not await store.get_run(run_id):
+        raise HTTPException(404, "运行记录不存在")
+    brief = await store.get_decision_brief(run_id)
+    if brief is None:
+        from .errors import ApiError
+
+        raise ApiError(404, "DECISION_BRIEF_NOT_FOUND", "该历史运行尚无结构化决策简报。")
+    return brief
+
+
 @app.get("/api/runs/{run_id}/export")
 async def export_run(run_id: str, format: str = "markdown"):
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
     high_risk = await high_risk_service.get(run_id) if await store.has_high_risk_control(run_id) else None
+    decision_brief = await store.get_decision_brief(run_id)
     if format == "markdown":
         return Response(
-            run_markdown(run, high_risk),
+            run_markdown(run, high_risk, decision_brief),
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="council-{run.id[:8]}.md"'},
         )
     if format == "html":
         return Response(
-            run_html(run, high_risk),
+            run_html(run, high_risk, decision_brief),
             media_type="text/html; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="council-{run.id[:8]}.html"'},
         )

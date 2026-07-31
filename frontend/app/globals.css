@@ -555,6 +555,16 @@ body:has(.council-page) .sidebar-footnote { border-color: var(--border); }
 .roundtable-summary { border: 1px solid #e2cfc4; border-left: 3px solid var(--accent); border-top-color: #e2cfc4; border-radius: 4px 8px 8px 4px; background: #fbf3ee; }
 .roundtable-summary header { color: var(--accent); }
 .roundtable-summary header small { color: var(--muted); }
+.raw-summary { padding: 11px 14px; }.raw-summary summary { cursor: pointer; color: var(--muted); font-size: 11px; font-weight: 700; }.raw-summary[open] summary { margin-bottom: 10px; }
+.decision-brief-card { margin-top: 20px; overflow: hidden; border: 1px solid var(--border-strong); border-left: 4px solid #65746e; border-radius: 5px 9px 9px 5px; background: #fffdf9; }
+.decision-brief-card.status-proceed { border-left-color: var(--success); }.decision-brief-card.status-conditional { border-left-color: #987137; }.decision-brief-card.status-no_decision { border-left-color: var(--danger); }
+.decision-brief-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 17px 13px; border-bottom: 1px solid var(--border); background: #f7f3ee; }
+.decision-brief-card > header span { color: var(--accent); font-size: 9px; font-weight: 800; }.decision-brief-card > header h2 { margin: 3px 0 0; font: 500 22px/1.15 var(--serif); }
+.decision-brief-status { max-width: 280px; text-align: right; }.decision-brief-status strong, .decision-brief-status small { display: block; }.decision-brief-status strong { font-size: 12px; }.decision-brief-status small { margin-top: 2px; color: var(--muted); font-size: 9px; line-height: 1.4; }
+.decision-brief-support { display: flex; align-items: baseline; gap: 9px; padding: 9px 17px; border-bottom: 1px solid var(--border); background: #fbf9f5; }.decision-brief-support strong { font-size: 10px; }.decision-brief-support span { color: var(--muted); font-size: 9px; }
+.decision-recommendation { padding: 16px 17px; border-bottom: 1px solid var(--border); }.decision-recommendation > span { color: var(--muted); font-size: 9px; font-weight: 700; }.decision-recommendation .rich-text { margin-top: 7px; font-size: 15px; line-height: 1.68; }
+.decision-brief-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.decision-brief-grid > section { min-width: 0; padding: 14px 17px 16px; border-bottom: 1px solid var(--border); }.decision-brief-grid > section:nth-child(odd) { border-right: 1px solid var(--border); }.decision-brief-grid h3 { margin: 0 0 8px; font: 600 11px/1.3 var(--sans); }.decision-brief-grid ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }.decision-brief-grid li { display: grid; gap: 2px; padding-left: 10px; border-left: 2px solid var(--border-strong); font-size: 11px; line-height: 1.5; }.decision-brief-grid li.blocking { border-left-color: var(--danger); }.decision-brief-grid li.blocking > strong { width: max-content; border-radius: 3px; background: #f8e4e7; padding: 1px 4px; color: var(--danger); font-size: 8px; }.decision-brief-grid li small, .decision-brief-grid section > small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.minority-report { background: #fff8f4; }.minority-report p { margin: 0 0 7px; white-space: pre-wrap; font-size: 11px; line-height: 1.55; }
 .participation-context > button, .participation-dock textarea { border-color: var(--border); background: #fbfaf7; color: var(--muted); }
 .participation-dock textarea { border-radius: 8px; box-shadow: 0 2px 8px rgba(58,48,40,.035); }
 .source-strip { border-color: var(--border); background: #f3efe9; }
@@ -580,6 +590,7 @@ body:has(.council-page) .sidebar-footnote { border-color: var(--border); }
 
 @media (max-width: 680px) {
   .decision-review-backdrop { padding: 6px; }.decision-review-dialog { max-height: calc(100vh - 12px); }.decision-review-dialog > header { padding: 12px; }.decision-review-fields { padding: 10px 12px 8px; gap: 7px; }.seat-review-list { padding: 0 12px 9px; }.seat-review-list > div { grid-template-columns: 40px 105px minmax(0, 1fr); gap: 4px; }.decision-review-dialog > footer { padding: 6px 12px; }
+  .decision-brief-card { margin-top: 12px; }.decision-brief-card > header { padding: 12px; }.decision-brief-card > header h2 { font-size: 19px; }.decision-brief-status { max-width: 145px; }.decision-brief-support { display: block; padding: 8px 12px; }.decision-brief-support span { display: block; margin-top: 2px; }.decision-recommendation { padding: 12px; }.decision-brief-grid { grid-template-columns: 1fr; }.decision-brief-grid > section:nth-child(odd) { border-right: 0; }.decision-brief-grid > section { padding: 11px 12px 13px; }
 }
 
 /* Immersive reading keeps the discussion usable even when browser fullscreen is unavailable. */
@@ -652,6 +663,7 @@ body:has(.council-page.immersive) .main-content { width: 100%; }
 .council-page.immersive .opening-question,
 .council-page.immersive .discussion-turn,
 .council-page.immersive .discussion-thinking,
+.council-page.immersive .decision-brief-card,
 .council-page.immersive .roundtable-summary {
   width: 100%;
   max-width: 760px;

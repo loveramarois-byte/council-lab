@@ -4,7 +4,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CouncilApiError, DecisionReviewInput, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, Participant, RequiredFact, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
+import { api, CouncilApiError, DecisionBrief, DecisionReviewInput, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, Participant, RequiredFact, ResolvedAssignment, Run, runExportUrl, subscribeToRun } from "../../../lib/api";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
@@ -21,6 +21,7 @@ export default function RunDetailPage() {
   const immersiveRequestRef = useRef(0);
   const highRiskProbeRef = useRef<{ runId: string; result: "unknown" | "pending" | "present" | "absent" }>({ runId: "", result: "unknown" });
   const [run, setRun] = useState<Run | null>(null);
+  const [decisionBrief, setDecisionBrief] = useState<DecisionBrief | null>(null);
   const [immersive, setImmersive] = useState(false);
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<string | null>(null);
@@ -54,6 +55,13 @@ export default function RunDetailPage() {
     try {
       const nextRun = await api.run(params.id);
       setRun(nextRun);
+      if (nextRun.status === "completed") {
+        try { setDecisionBrief(await api.decisionBrief(params.id)); }
+        catch (briefError) {
+          if (briefError instanceof CouncilApiError && briefError.status === 404) setDecisionBrief(null);
+          else throw briefError;
+        }
+      } else setDecisionBrief(null);
       if (highRiskProbeRef.current.runId !== params.id) {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
       }
@@ -92,7 +100,7 @@ export default function RunDetailPage() {
       router.push("/runs");
     }
   };
-  useEffect(() => { setHighRiskAudit([]); refresh(); }, [params.id]);
+  useEffect(() => { setHighRiskAudit([]); setDecisionBrief(null); refresh(); }, [params.id]);
   useEffect(() => {
     if (!run || run.status !== "running") return;
     const unsubscribe = subscribeToRun(run.id, () => refresh(), undefined, refresh);
@@ -418,7 +426,10 @@ export default function RunDetailPage() {
               </div>}
             </div>
           </article>}
-          {run.status === "completed" && run.final_decision && <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>未经过外部事实核验</strong><small>模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。</small></span></div><RichText content={run.final_decision.final_answer} /></article>}
+          {run.status === "completed" && decisionBrief && <DecisionBriefView brief={decisionBrief} />}
+          {run.status === "completed" && run.final_decision && (decisionBrief
+            ? <details className="roundtable-summary raw-summary"><summary>查看原始综合文本</summary><RichText content={run.final_decision.final_answer} /></details>
+            : <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>未经过外部事实核验</strong><small>模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。</small></span></div><RichText content={run.final_decision.final_answer} /></article>)}
         </div>
 
         {runFailed && <div className="failed-actions" role="alert">
@@ -495,6 +506,34 @@ export default function RunDetailPage() {
       </section>
     </div>}
   </div>;
+}
+
+function DecisionBriefView({ brief }: { brief: DecisionBrief }) {
+  const status = {
+    proceed: { label: "可以推进", detail: "当前没有结构化阻塞项" },
+    conditional: { label: "满足条件后推进", detail: "执行前仍需处理未验证信息或分歧" },
+    no_decision: { label: "暂不形成决定", detail: "存在阻塞性矛盾，当前不应执行" },
+  }[brief.status];
+  const support = { unanimous: "一致支持", majority: "多数支持", contested: "存在明确反对" }[brief.support];
+  const basis = { user_input: "用户输入", model_inference: "模型推断", cited_unverified: "引用未核验", outcome_verified: "结果已验证" };
+  return <article className={`decision-brief-card status-${brief.status}`} aria-label="结构化决策简报">
+    <header><div><span>DECISION BRIEF · v{brief.version}</span><h2>结构化决策简报</h2></div><div className="decision-brief-status"><strong>{status.label}</strong><small>{status.detail}</small></div></header>
+    <div className="decision-brief-support"><strong>{support}</strong><span>只表示公开讨论中的可观察表态，不代表事实正确概率。</span></div>
+    <section className="decision-recommendation"><span>当前建议</span><RichText content={brief.recommendation} /></section>
+    <div className="decision-brief-grid">
+      {brief.decisive_reasons.length > 0 && <BriefSection title="决定性理由" items={brief.decisive_reasons.map((item) => item.summary)} />}
+      {brief.unresolved.length > 0 && <section><h3>尚未解决的问题</h3><ul>{brief.unresolved.map((item) => <li key={item.id} className={item.blocking ? "blocking" : ""}>{item.blocking && <strong>阻塞</strong>}<span>{item.issue}</span>{item.resolution_method && <small>{item.resolution_method}</small>}</li>)}</ul></section>}
+      {brief.actions.length > 0 && <BriefSection title="下一步行动" items={brief.actions.map((item) => item.action)} />}
+      {brief.reopen_triggers.length > 0 && <BriefSection title="重新审议条件" items={brief.reopen_triggers.map((item) => item.condition)} />}
+      {brief.assumptions.length > 0 && <section><h3>假设与依据</h3><ul>{brief.assumptions.map((item) => <li key={item.id}><span>{item.claim}</span><small>{basis[item.basis]}{item.validation_method ? ` · ${item.validation_method}` : ""}</small></li>)}</ul></section>}
+      {brief.minority_report && <section className="minority-report"><h3>少数意见</h3><p>{brief.minority_report.summary}</p><small>反对席位：{brief.minority_report.seat_ids.join("、")}</small></section>}
+      <BriefSection title="限制" items={brief.limitations} />
+    </div>
+  </article>;
+}
+
+function BriefSection({ title, items }: { title: string; items: string[] }) {
+  return <section><h3>{title}</h3><ul>{items.map((item, index) => <li key={`${title}-${index}`}><span>{item}</span></li>)}</ul></section>;
 }
 
 function highRiskStatusLabel(status: string) {

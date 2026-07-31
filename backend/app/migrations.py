@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -33,6 +33,11 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX IF NOT EXISTS idx_high_risk_audit_run_sequence ON high_risk_audit_events(run_id, sequence)",
         "CREATE TRIGGER IF NOT EXISTS high_risk_audit_no_update BEFORE UPDATE ON high_risk_audit_events BEGIN SELECT RAISE(ABORT, 'high-risk audit events are append-only'); END",
         "CREATE TRIGGER IF NOT EXISTS high_risk_audit_no_delete BEFORE DELETE ON high_risk_audit_events BEGIN SELECT RAISE(ABORT, 'high-risk audit events are append-only'); END",
+    ),
+    6: (
+        "CREATE TABLE IF NOT EXISTS decision_briefs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, version INTEGER NOT NULL, schema_version INTEGER NOT NULL, payload_json TEXT NOT NULL, generation_reason TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(run_id) REFERENCES runs(id), UNIQUE(run_id, version))",
+        "CREATE INDEX IF NOT EXISTS idx_decision_briefs_run_version ON decision_briefs(run_id, version DESC)",
+        "CREATE TRIGGER IF NOT EXISTS decision_briefs_no_update BEFORE UPDATE ON decision_briefs BEGIN SELECT RAISE(ABORT, 'decision briefs are append-only'); END",
     ),
 }
 

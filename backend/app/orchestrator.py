@@ -10,6 +10,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from .context import build_context_window, context_budget_for_mode, token_estimator_for
+from .decision_brief import build_decision_brief
 from .credentials import get_provider_secret
 from .models import (
     AgentAssignmentsConfig,
@@ -920,6 +921,42 @@ class Orchestrator:
             await self._finalize_debate(run, run.finalizer_assignment, backends)
         finally:
             await self._close_backends(backends)
+        # Persist the public finalizer output before building the independent
+        # immutable snapshot. A failed brief can then be retried without another
+        # provider call because _finalize_debate returns when final_decision exists.
+        await self.emit(
+            run,
+            "decision_brief_generating",
+            "summary",
+            "正在固化结构化决策简报",
+            97,
+        )
+        try:
+            brief = await self.store.get_decision_brief(run.id)
+            if brief is None:
+                brief = await self.store.create_decision_brief(build_decision_brief(run))
+        except Exception:
+            run.status = "awaiting_final_input"
+            run.awaiting_user = True
+            run.recoverable = True
+            run.error = "结构化决策简报未能安全保存；最终综合已保留，可以直接重试，不会重复模型调用。"
+            await self.emit(
+                run,
+                "decision_brief_validation_failed",
+                "summary",
+                "决策简报未完成，最终综合已保留",
+                97,
+                {"error": "decision_brief_persistence_failed"},
+            )
+            return
+        await self.emit(
+            run,
+            "decision_brief_generated",
+            "summary",
+            "结构化决策简报已固化",
+            99,
+            {"brief_id": brief.id, "version": brief.version, "schema_version": brief.schema_version},
+        )
         run.status = "completed"
         run.awaiting_user = False
         run.recoverable = False

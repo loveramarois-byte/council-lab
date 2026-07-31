@@ -538,8 +538,10 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await page.getByRole("button", { name: "加入最终补充" }).click();
     await expect(page.getByText("最终答案还要考虑回滚窗口", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "生成最终答案" }).click();
-    await expect(page.getByText("圆桌最终答案")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("未经过外部事实核验", { exact: true })).toBeVisible();
+    const brief = page.getByRole("article", { name: "结构化决策简报" });
+    await expect(brief).toBeVisible({ timeout: 10_000 });
+    await expect(brief).toContainText("Council 未执行独立联网核验");
+    await expect(page.getByText("查看原始综合文本")).toBeVisible();
     await expect(page.locator(".council-seat.completed")).toHaveCount(4);
     await expect(page.locator(".summary-node.completed")).toHaveCount(1);
     await expect(page.getByText("第 5 次调用", { exact: false }).first()).toBeVisible();
@@ -573,8 +575,10 @@ test("快速短定义只显示一席和第二次总结调用", async ({ page, re
     await expect(page.getByText("1 席顺序调用", { exact: true })).toBeVisible();
     await expect(page.getByText("短任务精简路线", { exact: true })).toBeVisible();
     await expect(page.getByText("第 2 次调用", { exact: false }).first()).toBeVisible();
-    await expect(page.getByText("圆桌最终答案")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("未经过外部事实核验", { exact: true })).toBeVisible();
+    const brief = page.getByRole("article", { name: "结构化决策简报" });
+    await expect(brief).toBeVisible({ timeout: 10_000 });
+    await expect(brief).toContainText("Council 未执行独立联网核验");
+    await expect(page.getByText("查看原始综合文本")).toBeVisible();
     const saved = await (await request.get(`${backendUrl}/api/runs/${run.id}`, { headers: internalApiHeaders })).json() as { status: string; usage: { model_calls: number }; participant_roles: unknown[] };
     expect(saved.status).toBe("completed");
     expect(saved.usage.model_calls).toBe(2);
@@ -1132,6 +1136,44 @@ test("普通审议不再探测高风险控制接口", async ({ page }) => {
   await page.goto("/runs/standard-run-fixture");
   await expect(page.getByRole("heading", { name: "普通审议不应产生高风险请求" })).toBeVisible();
   expect(highRiskRequests).toBe(0);
+});
+
+test("完成后的结构化决策简报保留阻塞项、少数意见并可导出", async ({ page }) => {
+  const now = new Date().toISOString();
+  const run = {
+    id: "decision-brief-fixture", question: "是否应该发布这个版本？", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "high",
+    status: "completed", created_at: now, updated_at: now, analysis: null, candidates: [], critiques: [], verifications: [], revisions: [], scores: [],
+    final_decision: { final_answer: "先做小范围发布，并保留回滚开关。", key_reasons: [], verified_claims: [], partially_verified_claims: [], contradicted_claims: [], unverified_claims: ["需求未核验"], disagreements: ["预算不足"], risks_and_limitations: ["模型共识不等于事实验证。"], confidence: { level: "unverified", explanation: "不提供百分比置信度" }, sources: [], provider_summary: { provider: "Mock", protocol: "mock", model: "council-mock", used_ccswitch: false, degraded: false }, usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 100 } },
+    usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 100 }, degraded: false, protocol: "mock", workflow_engine: "langgraph", checkpoint_count: 4,
+    context_snapshot: { strategy: "deterministic_context_clipping", token_budget: 4000, estimated_tokens: 300, included_turns: 4, total_turns: 4, compacted: false, summary: "" },
+    limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, discussion_turns: [], participant_roles: [{ id: "analyst", name: "析理", role: "拆解者", brief: "拆解" }, { id: "challenger", name: "诘问", role: "挑战者", brief: "反例" }],
+    seat_assignments: [], finalizer_assignment: null, current_speaker_index: 2, discussion_round: 1, awaiting_user: false, auto_summarize: false, high_risk_control: false, recoverable: false, limit_reason: null,
+  };
+  const brief = {
+    id: "brief-fixture", run_id: run.id, version: 1, schema_version: 1, generated_at: now, generation_reason: "run_completed", status: "conditional", recommendation: "先做小范围发布，并保留回滚开关。", support: "contested",
+    decisive_reasons: [], rejected_alternatives: [],
+    unresolved: [{ id: "issue-1", issue: "预算上限尚未确认", blocking: true, positions: [{ seat_id: "challenger", position: "预算不足时不应上线" }], resolution_method: "确认预算门槛后重新审议。" }],
+    assumptions: [{ id: "assumption-1", claim: "当前需求强度足以支持灰度", basis: "model_inference", validation_method: "核对真实用户数据", owner: "用户", due_at: null }],
+    actions: [{ id: "action-1", action: "先确认预算上限", owner: "用户", due_at: null, success_criteria: "预算获得确认", status: "pending" }],
+    reopen_triggers: [{ id: "trigger-1", condition: "预算或需求发生实质变化", check_method: "重新核对", severity: "blocking" }],
+    minority_report: { summary: "预算不足时不应上线。", seat_ids: ["challenger"], conditions_under_which_it_may_be_correct: ["预算低于门槛"] },
+    limitations: ["席位支持度不代表事实正确概率。", "未经过外部事实核验。"],
+  };
+  await page.route(/\/api\/runs\/decision-brief-fixture$/, (route) => route.fulfill({ json: run }));
+  await page.route("**/api/runs/decision-brief-fixture/decision-brief", (route) => route.fulfill({ json: brief }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/runs/${run.id}`);
+  const card = page.getByRole("article", { name: "结构化决策简报" });
+  await expect(card).toContainText("满足条件后推进");
+  await expect(card).toContainText("存在明确反对");
+  await expect(card).toContainText("预算上限尚未确认");
+  await expect(card).toContainText("少数意见");
+  await expect(card).toContainText("不代表事实正确概率");
+  await expect(page.getByText("查看原始综合文本")).toBeVisible();
+  await expect(page.locator(".completed-actions").getByRole("link", { name: "Markdown" })).toHaveAttribute("href", `/api/runs/${run.id}/export?format=markdown`);
+  const viewport = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
+  expect(viewport.width).toBeLessThanOrEqual(viewport.viewportWidth);
 });
 
 test("旧普通审议的兼容探测在轮询期间只发送一次", async ({ page }) => {

@@ -447,6 +447,116 @@ class FinalDecision(BaseModel):
     usage: UsageSummary
 
 
+class DecisionBriefItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DecisionReason(DecisionBriefItem):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    summary: str = Field(min_length=1, max_length=4000)
+    supporting_seat_ids: list[str] = Field(default_factory=list, max_length=20)
+    opposing_seat_ids: list[str] = Field(default_factory=list, max_length=20)
+    related_claim_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class RejectedAlternative(DecisionBriefItem):
+    option: str = Field(min_length=1, max_length=2000)
+    reason: str = Field(min_length=1, max_length=4000)
+
+
+class IssuePosition(DecisionBriefItem):
+    seat_id: str = Field(min_length=1, max_length=64)
+    position: str = Field(min_length=1, max_length=4000)
+
+
+class UnresolvedIssue(DecisionBriefItem):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    issue: str = Field(min_length=1, max_length=4000)
+    blocking: bool = False
+    positions: list[IssuePosition] = Field(default_factory=list, max_length=20)
+    resolution_method: str | None = Field(default=None, max_length=2000)
+
+
+class DecisionAssumption(DecisionBriefItem):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    claim: str = Field(min_length=1, max_length=4000)
+    basis: Literal["user_input", "model_inference", "cited_unverified", "outcome_verified"]
+    validation_method: str | None = Field(default=None, max_length=2000)
+    owner: str | None = Field(default=None, max_length=160)
+    due_at: datetime | None = None
+
+
+class DecisionAction(DecisionBriefItem):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    action: str = Field(min_length=1, max_length=4000)
+    owner: str | None = Field(default=None, max_length=160)
+    due_at: datetime | None = None
+    success_criteria: str | None = Field(default=None, max_length=2000)
+    status: Literal["pending", "in_progress", "done", "cancelled"] = "pending"
+
+
+class ReopenTrigger(DecisionBriefItem):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,63}$")
+    condition: str = Field(min_length=1, max_length=4000)
+    check_method: str | None = Field(default=None, max_length=2000)
+    severity: Literal["informational", "important", "blocking"] = "important"
+
+
+class MinorityReport(DecisionBriefItem):
+    summary: str = Field(min_length=1, max_length=6000)
+    seat_ids: list[str] = Field(min_length=1, max_length=20)
+    conditions_under_which_it_may_be_correct: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("seat_ids")
+    @classmethod
+    def unique_seat_ids(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value]
+        if any(not item or len(item) > 64 for item in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("minority seat_ids must be unique, non-empty identifiers")
+        return normalized
+
+
+class DecisionBrief(DecisionBriefItem):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{1,127}$")
+    run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    version: int = Field(default=1, ge=1)
+    schema_version: Literal[1] = 1
+    generated_at: datetime = Field(default_factory=utc_now)
+    generation_reason: Literal["run_completed"] = "run_completed"
+    status: Literal["proceed", "conditional", "no_decision"]
+    recommendation: str = Field(min_length=1, max_length=50000)
+    support: Literal["unanimous", "majority", "contested"]
+    decisive_reasons: list[DecisionReason] = Field(default_factory=list, max_length=50)
+    rejected_alternatives: list[RejectedAlternative] = Field(default_factory=list, max_length=30)
+    unresolved: list[UnresolvedIssue] = Field(default_factory=list, max_length=50)
+    assumptions: list[DecisionAssumption] = Field(default_factory=list, max_length=50)
+    actions: list[DecisionAction] = Field(default_factory=list, max_length=50)
+    reopen_triggers: list[ReopenTrigger] = Field(default_factory=list, max_length=50)
+    minority_report: MinorityReport | None = None
+    limitations: list[str] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def validate_semantics(self) -> "DecisionBrief":
+        if self.status == "proceed" and any(item.blocking for item in self.unresolved):
+            raise ValueError("status=proceed cannot contain a blocking unresolved issue")
+        if self.support == "contested" and self.minority_report is None:
+            raise ValueError("support=contested requires a minority report")
+        if self.minority_report is not None and self.support != "contested":
+            raise ValueError("minority report requires support=contested")
+        collections = (
+            self.decisive_reasons,
+            self.unresolved,
+            self.assumptions,
+            self.actions,
+            self.reopen_triggers,
+        )
+        for items in collections:
+            ids = [item.id for item in items]
+            if len(ids) != len(set(ids)):
+                raise ValueError("DecisionBrief item ids must be unique within each collection")
+        return self
+
+
 class RunEvent(BaseModel):
     event_id: str
     sequence: int = Field(default=0, ge=0)

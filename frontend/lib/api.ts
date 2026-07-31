@@ -221,6 +221,25 @@ export type Revision = { candidate_id: string; revised_answer: string; accepted_
 export type Score = { candidate_id: string; evidence_score: number; reasoning_score: number; coverage_score: number; risk_score: number; clarity_score: number; weighted_total: number; explanation: string };
 export type Usage = { model_calls: number; tool_calls: number; input_tokens: number; output_tokens: number; estimated_cost?: number | null; duration_ms: number };
 export type FinalDecision = { final_answer: string; key_reasons: string[]; verified_claims: string[]; partially_verified_claims: string[]; contradicted_claims: string[]; unverified_claims: string[]; disagreements: string[]; risks_and_limitations: string[]; confidence: { level: string; score?: number; explanation: string }; sources: string[]; provider_summary: { provider: string; protocol: string; model: string; used_ccswitch: boolean; degraded: boolean; seat_providers?: { role: string; provider: string; model: string }[] }; usage: Usage };
+export type DecisionBrief = {
+  id: string;
+  run_id: string;
+  version: number;
+  schema_version: 1;
+  generated_at: string;
+  generation_reason: "run_completed";
+  status: "proceed" | "conditional" | "no_decision";
+  recommendation: string;
+  support: "unanimous" | "majority" | "contested";
+  decisive_reasons: { id: string; summary: string; supporting_seat_ids: string[]; opposing_seat_ids: string[]; related_claim_ids: string[] }[];
+  rejected_alternatives: { option: string; reason: string }[];
+  unresolved: { id: string; issue: string; blocking: boolean; positions: { seat_id: string; position: string }[]; resolution_method?: string | null }[];
+  assumptions: { id: string; claim: string; basis: "user_input" | "model_inference" | "cited_unverified" | "outcome_verified"; validation_method?: string | null; owner?: string | null; due_at?: string | null }[];
+  actions: { id: string; action: string; owner?: string | null; due_at?: string | null; success_criteria?: string | null; status: "pending" | "in_progress" | "done" | "cancelled" }[];
+  reopen_triggers: { id: string; condition: string; check_method?: string | null; severity: "informational" | "important" | "blocking" }[];
+  minority_report?: { summary: string; seat_ids: string[]; conditions_under_which_it_may_be_correct: string[] } | null;
+  limitations: string[];
+};
 
 type ErrorEnvelope = {
   detail?: string;
@@ -316,6 +335,7 @@ export const api = {
   createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
+  decisionBrief: (id: string) => request<DecisionBrief>(`/api/runs/${id}/decision-brief`),
   cancelRun: (id: string) => idempotentRequest<Run>(`/api/runs/${id}/cancel`, { method: "POST" }),
   advanceRun: (id: string, body: { action: "continue" | "interject" | "question"; message?: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/advance`, { method: "POST", body: JSON.stringify(body) }),
   interjectRun: (id: string, body: { action: "interject" | "question"; message: string; target_agent?: string }) => idempotentRequest<Run>(`/api/runs/${id}/interject`, { method: "POST", body: JSON.stringify(body) }),
@@ -350,7 +370,7 @@ export function subscribeToRun(
   let reconnecting = false;
   let lastEventId = 0;
   let stopped = false;
-  const names = ["run_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
+  const names = ["run_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "decision_brief_generating", "decision_brief_generated", "decision_brief_validation_failed", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
   const terminalEvents = new Set(["final_completed", "run_cancelled"]);
 
   const connect = async () => {

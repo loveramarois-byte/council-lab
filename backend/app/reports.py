@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from html import escape
 
-from .models import RunRecord
+from .models import DecisionBrief, RunRecord
 from .risk.schemas import HighRiskRun
 
 
@@ -13,7 +13,49 @@ def _high_risk_summary(case: HighRiskRun) -> tuple[int, int, str]:
     return completed, total, domains
 
 
-def run_markdown(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
+def _decision_brief_markdown(brief: DecisionBrief) -> list[str]:
+    status_labels = {"proceed": "可以推进", "conditional": "满足条件后推进", "no_decision": "暂不形成决定"}
+    support_labels = {"unanimous": "一致支持", "majority": "多数支持", "contested": "存在明确反对"}
+    lines = [
+        "## 结构化决策简报",
+        "",
+        f"- 简报版本：v{brief.version} / schema v{brief.schema_version}",
+        f"- 决策状态：{status_labels[brief.status]}",
+        f"- 席位支持：{support_labels[brief.support]}（只表示公开表态，不代表事实正确概率）",
+        "",
+        "### 当前建议",
+        "",
+        brief.recommendation,
+        "",
+    ]
+    sections = (
+        ("决定性理由", [item.summary for item in brief.decisive_reasons]),
+        ("被否决的备选项", [f"{item.option} — {item.reason}" for item in brief.rejected_alternatives]),
+        ("尚未解决的问题", [f"{'[阻塞] ' if item.blocking else ''}{item.issue}" for item in brief.unresolved]),
+        ("假设与依据", [f"{item.claim}（依据：{item.basis}）" for item in brief.assumptions]),
+        ("下一步行动", [item.action for item in brief.actions]),
+        ("重新审议条件", [f"{item.condition}（{item.severity}）" for item in brief.reopen_triggers]),
+    )
+    for heading, items in sections:
+        if items:
+            lines.extend([f"### {heading}", "", *[f"- {item}" for item in items], ""])
+    if brief.minority_report:
+        lines.extend([
+            "### 少数意见",
+            "",
+            f"- 反对席位：{', '.join(brief.minority_report.seat_ids)}",
+            f"- 意见：{brief.minority_report.summary}",
+            "",
+        ])
+    lines.extend(["### 限制", "", *[f"- {item}" for item in brief.limitations], ""])
+    return lines
+
+
+def run_markdown(
+    run: RunRecord,
+    high_risk: HighRiskRun | None = None,
+    decision_brief: DecisionBrief | None = None,
+) -> str:
     lines = [
         f"# {run.question}",
         "",
@@ -52,6 +94,8 @@ def run_markdown(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
                 source.content,
                 "",
             ])
+    if decision_brief:
+        lines.extend(_decision_brief_markdown(decision_brief))
     lines.extend(["## 公开讨论", ""])
     for turn in run.discussion_turns:
         provider = f" · {turn.provider_name} / {turn.model}" if turn.provider_name else ""
@@ -93,7 +137,46 @@ def run_markdown(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
     return "\n".join(lines)
 
 
-def run_html(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
+def _decision_brief_html(brief: DecisionBrief) -> str:
+    status_labels = {"proceed": "可以推进", "conditional": "满足条件后推进", "no_decision": "暂不形成决定"}
+    support_labels = {"unanimous": "一致支持", "majority": "多数支持", "contested": "存在明确反对"}
+
+    def list_items(items: list[str]) -> str:
+        return f"<ul>{''.join(f'<li>{escape(item)}</li>' for item in items)}</ul>" if items else ""
+
+    sections = "".join(
+        f"<h3>{escape(heading)}</h3>{list_items(items)}"
+        for heading, items in (
+            ("决定性理由", [item.summary for item in brief.decisive_reasons]),
+            ("尚未解决的问题", [f"{'[阻塞] ' if item.blocking else ''}{item.issue}" for item in brief.unresolved]),
+            ("假设与依据", [f"{item.claim}（依据：{item.basis}）" for item in brief.assumptions]),
+            ("下一步行动", [item.action for item in brief.actions]),
+            ("重新审议条件", [f"{item.condition}（{item.severity}）" for item in brief.reopen_triggers]),
+        )
+        if items
+    )
+    minority = ""
+    if brief.minority_report:
+        minority = (
+            "<h3>少数意见</h3>"
+            f"<p><strong>反对席位：</strong>{escape(', '.join(brief.minority_report.seat_ids))}</p>"
+            f"<p>{escape(brief.minority_report.summary).replace(chr(10), '<br>')}</p>"
+        )
+    return (
+        "<section class='decision-brief'><h2>结构化决策简报</h2>"
+        f"<p><strong>决策状态：</strong>{escape(status_labels[brief.status])} · "
+        f"<strong>席位支持：</strong>{escape(support_labels[brief.support])}</p>"
+        "<p class='support-note'>支持度只表示公开表态，不代表事实正确概率。</p>"
+        f"<h3>当前建议</h3><p>{escape(brief.recommendation).replace(chr(10), '<br>')}</p>"
+        f"{sections}{minority}<h3>限制</h3>{list_items(brief.limitations)}</section>"
+    )
+
+
+def run_html(
+    run: RunRecord,
+    high_risk: HighRiskRun | None = None,
+    decision_brief: DecisionBrief | None = None,
+) -> str:
     transcript = "".join(
         f"<article><h3>{escape(turn.speaker_name)} <small>{escape(turn.role_label)}</small></h3>"
         f"<p>{escape(turn.content).replace(chr(10), '<br>')}</p></article>"
@@ -140,11 +223,12 @@ def run_html(run: RunRecord, high_risk: HighRiskRun | None = None) -> str:
             f"<p><strong>结果状态：</strong>{escape(item.outcome_status)}</p>"
             f"{f'<ul>{seats}</ul>' if seats else ''}</section>"
         )
+    brief_section = _decision_brief_html(decision_brief) if decision_brief else ""
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(run.question)} · Council</title><style>
     body{{max-width:860px;margin:48px auto;padding:0 24px;color:#292724;font:15px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;background:#f7f3ee}}
-    header,.answer,article,.sources,.review,.high-risk{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:0 0 9px}}small,header p,.sources span{{color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
+    header,.answer,article,.sources,.review,.high-risk,.decision-brief{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:18px 0 9px}}small,header p,.sources span,.support-note{{color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.decision-brief{{border-left:4px solid #456d64}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
 </style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}</p></header>
     {high_risk_section}{f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
-    <section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""
+    {brief_section}<section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""
