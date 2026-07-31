@@ -2,13 +2,13 @@
 
 Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问本地后端；后端负责 LangGraph 工作流、Provider、上下文预算、运行状态和安全边界。
 
-核心流程是可恢复的有限状态图：`dispatch -> turn x 4 -> awaiting_final_input -> finalize`。四个席位按固定顺序调用各自配置的 Provider/model，每席读取公开记录并明确认同、部分认同或反驳。第四席完成后默认停在用户确认点；用户可以补充一次或多次，或直接触发总结席的第五次调用。中途和最终补充都写入公开记录。
+核心流程是可恢复的有限状态图：`dispatch -> turn x N -> awaiting_final_input -> finalize`。决策、风险和复杂任务使用四个席位；快速档的短定义与确定性算术保守路由为一个讨论席。各席按固定顺序调用保存的 Provider/model 配置并读取公开记录。讨论席完成后默认停在用户确认点，或在创建时明确开启 `auto_summarize` 后直接总结。中途和最终补充都写入公开记录。
 
 ## Feature status
 
 | Area | Status | Boundary |
 | --- | --- | --- |
-| Deliberation workflow | Current | 四席顺序讨论、用户确认、第五席总结、恢复与导出均为默认产品路径。 |
+| Deliberation workflow | Current | 复杂任务四席顺序讨论，短任务一席讨论；用户确认、可选自动总结、恢复与导出均为产品路径。 |
 | High-risk control plane | P0, non-binding | 独立状态机、关键事实门禁、人工审批和追加式审计已实现；不执行外部动作，也没有证据核验或专业身份系统。 |
 | Run event replay | Current | 事件写入业务库并使用单调序号；SSE 支持 `Last-Event-ID` 重放和独立多订阅者。 |
 | Mobile access | Current, local network only | 使用短期签名会话、失败限速、同源校验和手工撤销；普通 HTTP 仍只适用于可信私有网络。 |
@@ -17,7 +17,7 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 | Evaluation framework | Experimental | 数据集和评分脚本不构成多席优于单模型的产品声明。 |
 | Network search and code sandbox | Not implemented | 模型共识不等于外部事实核验，也不会自动执行代码。 |
 
-五席配置持久化在应用设置中。创建 Run 时，Provider 公共配置、协议、模型、reasoning effort、超时和输出上限被复制为 Run 快照；后续修改或删除 Provider 不会改写历史 Run。单席调用失败不会静默切换到 Mock 或其他 Provider。
+五席配置持久化在应用设置中。创建 Run 时，Provider 公共配置、协议、模型、reasoning effort、超时和输出上限被复制为 Run 快照；短任务只把实际参与席位保存到 `participant_roles`，不改写用户的五席配置。后续修改或删除 Provider 不会改写历史 Run。单席调用失败不会静默切换到 Mock 或其他 Provider。
 
 Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `structure_source` 记录来源：`agent_output`、`postprocessed`、`manual`、`legacy_default` 或 `none`。当前顺序审议没有可靠的结构化提取，因此新 Candidate 使用 `none` 且相关数组保持为空。旧版本遗留的通用模板会原样保留以兼容历史 Run，但统一标记为 `legacy_default`；界面、报告和评测不得将其描述为模型明确给出的理由、假设或风险。
 

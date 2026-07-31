@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 from typing import Any, TypedDict
@@ -76,29 +77,97 @@ def describe_run_error(exc: Exception, timeout_seconds: int | float = 120) -> st
 
 
 def analyze_question(question: str, mode: str, token_limit: int = 40000) -> QuestionAnalysis:
-    lower = question.lower()
-    question_type = (
-        "coding"
-        if any(token in lower for token in ("代码", "python", "javascript", "bug", "api"))
-        else "mathematical"
-        if any(token in lower for token in ("计算", "多少", "几率", "equation"))
-        else "current_factual"
-        if any(token in lower for token in ("今天", "最新", "当前", "now", "latest"))
-        else "factual"
+    normalized = " ".join(question.strip().split())
+    lower = normalized.lower()
+    current_tokens = ("今天", "最新", "当前", "今年", "实时", "now", "latest", "current")
+    forecast_tokens = ("预测", "预计", "趋势", "增长", "gdp", "用户会", "市场规模", "几率", "概率")
+    decision_tokens = (
+        "是否", "应该", "选择", "选型", "方案", "决策", "商业模式", "上线", "融资", "风险", "合规",
+        "哪个", "哪种", "比较", "对比", "值得", "要不要", "能买吗",
     )
-    high_risk = any(token in lower for token in ("法律", "医疗", "诊断", "投资", "金融"))
+    coding_tokens = ("代码", "报错", "异常", "函数", "脚本", "调试", "python", "javascript", "typescript", " bug", "bug ")
+    definition_tokens = ("一句话解释", "用一句话", "什么是", "是什么意思", "定义")
+    math_request_tokens = ("计算", "算一下", "等于多少", "得多少", "结果是多少")
+    high_risk_map = {
+        "medical": ("医疗", "诊断", "用药", "病症"),
+        "legal": ("法律", "诉讼", "合同责任"),
+        "investment": ("投资", "金融", "股票", "基金", "收益率"),
+        "compliance": ("合规", "监管", "审计"),
+        "production": ("生产事故", "生产故障", "线上事故"),
+    }
+    high_risk_domains = [
+        domain for domain, tokens in high_risk_map.items() if any(token in lower for token in tokens)
+    ]
+    needs_realtime = any(token in lower for token in current_tokens)
+    forecast_or_ambiguous_quantity = any(token in lower for token in forecast_tokens)
+    decision_or_risk = any(token in lower for token in decision_tokens)
+    has_digit = any(character.isdigit() for character in normalized)
+    has_symbolic_expression = re.search(
+        r"\d(?:[\d., ]*)\s*(?:[+×÷*/]|-\s+|\s+-)\s*(?:[\d., ]*)\d",
+        normalized,
+    ) is not None
+    has_worded_expression = re.search(
+        r"\d(?:[\d., ]*)\s*(?:加|减|乘以?|除以?|打\s*\d+(?:\.\d+)?\s*折)[\s\S]*\d",
+        normalized,
+    ) is not None
+    has_percentage_expression = "%" in normalized and len(re.findall(r"\d+(?:\.\d+)?", normalized)) >= 2
+    has_explicit_math_request = any(token in lower for token in math_request_tokens)
+    deterministic_math = (
+        len(normalized) <= 120
+        and has_digit
+        and (has_explicit_math_request or has_symbolic_expression or has_worded_expression or has_percentage_expression)
+        and not forecast_or_ambiguous_quantity
+        and not decision_or_risk
+        and not high_risk_domains
+    )
+    math_request = deterministic_math or any(token in lower for token in ("计算", "公式", "equation"))
+    short_definition = (
+        len(normalized) <= 80
+        and any(token in lower for token in definition_tokens)
+        and not decision_or_risk
+        and not needs_realtime
+        and not high_risk_domains
+    )
+    short_task_route = mode == "quick" and (deterministic_math or short_definition)
+    if any(token in lower for token in coding_tokens):
+        question_type = "coding"
+    elif math_request:
+        question_type = "mathematical"
+    elif needs_realtime or forecast_or_ambiguous_quantity:
+        question_type = "current_factual"
+    elif short_definition:
+        question_type = "definition"
+    elif decision_or_risk:
+        question_type = "decision"
+    else:
+        question_type = "open_ended"
+    reasons = []
+    if short_task_route:
+        reasons.append("问题被保守识别为可由单席作答、总结席复核的短定义或确定性计算")
+    if decision_or_risk:
+        reasons.append("问题包含决策、方案或风险权衡，需要完整圆桌")
+    if needs_realtime or forecast_or_ambiguous_quantity:
+        reasons.append("问题依赖当前数据、预测或不确定数量，不能按确定性计算降席")
+    if high_risk_domains:
+        reasons.append("问题涉及高风险领域，保持完整圆桌和人工控制")
     return QuestionAnalysis(
         question_type=question_type,
-        needs_realtime=question_type == "current_factual",
-        needs_web=question_type in {"current_factual", "factual"},
+        needs_realtime=needs_realtime,
+        needs_web=question_type == "current_factual",
+        needs_external_evidence=question_type == "current_factual" or bool(high_risk_domains),
         needs_code_execution=question_type == "coding",
         needs_math=question_type == "mathematical",
-        high_risk_domain=high_risk,
-        recommended_agents=4,
+        high_risk_domain=bool(high_risk_domains),
+        high_risk_domains=high_risk_domains,
+        suitable_for_multi_agent=not short_task_route,
+        recommended_agents=1 if short_task_route else 4,
         recommended_mode=mode,
-        expected_model_calls=5,
+        expected_model_calls=2 if short_task_route else 5,
         expected_token_limit=token_limit,
         expected_tool_calls=0,
+        confidence=0.9 if short_task_route else 0.75,
+        reasons=reasons,
+        short_task_route=short_task_route,
     )
 
 
@@ -225,8 +294,16 @@ class Orchestrator:
         return [self._resolve_assignment(item) for item in config.seats], self._resolve_assignment(config.finalizer)
 
     @classmethod
+    def _participants_for_run(cls, run: RunRecord) -> list[dict[str, str]]:
+        expected_ids = [item["id"] for item in cls.PARTICIPANTS]
+        stored_ids = [item.get("id") for item in run.participant_roles]
+        if stored_ids and stored_ids == expected_ids[: len(stored_ids)]:
+            return run.participant_roles
+        return cls.PARTICIPANTS
+
+    @classmethod
     def _active_timeout_seconds(cls, run: RunRecord) -> float:
-        if run.current_speaker_index < len(cls.PARTICIPANTS):
+        if run.current_speaker_index < len(cls._participants_for_run(run)):
             return min(run.seat_assignments[run.current_speaker_index].timeout_seconds, run.limits.timeout_seconds)
         if run.finalizer_assignment:
             return min(run.finalizer_assignment.timeout_seconds, run.limits.timeout_seconds)
@@ -242,6 +319,8 @@ class Orchestrator:
         frozen_project_context: str | None = None,
     ) -> RunRecord:
         seats, finalizer = self._resolve_config(request)
+        analysis = analyze_question(request.question, request.mode, request.limits.max_tokens)
+        active_participants = self.PARTICIPANTS[: analysis.recommended_agents]
         project = None
         source_snapshots: list[RunSourceSnapshot] = []
         project_context = ""
@@ -309,7 +388,8 @@ class Orchestrator:
             created_at=utc_now(),
             updated_at=utc_now(),
             protocol=primary.protocol,
-            participant_roles=self.PARTICIPANTS,
+            analysis=analysis,
+            participant_roles=active_participants,
             limits=request.limits,
             assignment_schema_version=CURRENT_ASSIGNMENT_SCHEMA_VERSION,
             seat_assignments=seats,
@@ -383,9 +463,9 @@ class Orchestrator:
             run.status = "running"
             run.recoverable = False
             await self.emit(run, "question_analyzed", "analysis", "问题已放上圆桌，第一位成员正在准备发言", 8)
-            run.analysis = analyze_question(run.question, run.mode, run.limits.max_tokens)
+            run.analysis = run.analysis or analyze_question(run.question, run.mode, run.limits.max_tokens)
             await self._run_debate_graph(run, cancel, resume=False)
-            if run.status == "awaiting_final_input" and run.auto_summarize:
+            if run.auto_summarize and run.final_decision is None:
                 await self._finalize_once(run)
         except RunLimitReached as exc:
             await self._stop_for_limit(run, exc)
@@ -394,9 +474,7 @@ class Orchestrator:
                 run.status = "running"
                 run.recoverable = True
             elif run.id not in self.retrying_runs:
-                run.status = "cancelled"
-                run.error = "任务已取消"
-                await self.emit(run, "run_cancelled", "cancelled", "审议已取消，已保留当前进度", 100)
+                await self._mark_cancelled(run)
         except Exception as exc:
             run.status = "failed"
             run.degraded = True
@@ -432,6 +510,7 @@ class Orchestrator:
 
     async def _run_debate_graph(self, run: RunRecord, cancel: asyncio.Event, resume: bool) -> None:
         backends: dict[str, ModelBackend] = {}
+        participants = self._participants_for_run(run)
 
         async def run_turn(state: DebateWorkflowState) -> dict[str, int]:
             if cancel.is_set():
@@ -439,9 +518,9 @@ class Orchestrator:
             speaker_index = state["next_speaker_index"]
             if speaker_index < run.current_speaker_index:
                 return {"next_speaker_index": run.current_speaker_index}
-            if speaker_index >= len(self.PARTICIPANTS):
+            if speaker_index >= len(participants):
                 return {"next_speaker_index": speaker_index}
-            participant = self.PARTICIPANTS[speaker_index]
+            participant = participants[speaker_index]
             candidate_id = f"candidate-{participant['id']}"
             if any(item.candidate_id == candidate_id for item in run.candidates):
                 run.current_speaker_index = max(run.current_speaker_index, speaker_index + 1)
@@ -456,7 +535,7 @@ class Orchestrator:
             return {}
 
         def route(state: DebateWorkflowState) -> str:
-            return "turn" if state["next_speaker_index"] < len(self.PARTICIPANTS) else "done"
+            return "turn" if state["next_speaker_index"] < len(participants) else "done"
 
         builder = StateGraph(DebateWorkflowState)
         builder.add_node("dispatch", dispatch)
@@ -482,16 +561,21 @@ class Orchestrator:
         finally:
             await self._close_backends(backends)
 
-        if run.current_speaker_index >= len(self.PARTICIPANTS) and run.final_decision is None:
-            run.status = "awaiting_final_input"
-            run.awaiting_user = True
-            await self.emit(
-                run,
-                "awaiting_final_input",
-                "discussion",
-                "四席发言完成。你可以补充信息，确认后再生成最终答案",
-                90,
-            )
+        if run.current_speaker_index >= len(participants) and run.final_decision is None:
+            if run.auto_summarize:
+                run.status = "running"
+                run.awaiting_user = False
+                await self.store.save_run(run)
+            else:
+                run.status = "awaiting_final_input"
+                run.awaiting_user = True
+                await self.emit(
+                    run,
+                    "awaiting_final_input",
+                    "discussion",
+                    f"{len(participants)} 席发言完成。你可以补充信息，确认后再生成最终答案",
+                    90,
+                )
 
     @staticmethod
     async def _close_backends(backends: dict[str, ModelBackend]) -> None:
@@ -620,7 +704,8 @@ class Orchestrator:
         backends: dict[str, ModelBackend],
         speaker_index: int,
     ) -> None:
-        participant = self.PARTICIPANTS[speaker_index]
+        participants = self._participants_for_run(run)
+        participant = participants[speaker_index]
         assignment = run.seat_assignments[speaker_index]
         run.awaiting_user = False
         context_window = build_context_window(
@@ -659,15 +744,27 @@ class Orchestrator:
                 "确有不同意见就指出具体哪一点、为什么，若没有可反驳之处就明确认同，不要为了制造冲突而强行反驳。"
                 "随后补充自己的新依据、修正或方案。"
             )
+        role_instruction = ""
+        if participant["id"] == "challenger":
+            role_instruction = (
+                "挑战要求：至少给出一个可证伪的反例、明确失败条件或关键假设，并说明什么证据会推翻当前判断。"
+                "禁止只写礼貌性的认同后重复前文。"
+            )
+        elif participant["id"] == "observer":
+            role_instruction = (
+                "观察要求：单列‘未解决分歧：’，至少指出一个尚未解决的观点冲突或决策边界；"
+                "如果确实没有观点冲突，就写仍待验证的问题，不得为了完成格式而虚构冲突。"
+            )
         template = get_template(run.template_id)
         source_instruction = (
             "已提供带 [S编号] 的资料。涉及资料中的事实时引用对应编号；没有资料支持的内容必须标为推断或未知，禁止编造来源。"
             if run.source_snapshots
             else "当前没有附加资料，不得声称结论已经过外部核验。"
         )
+        participant_count = len(participants)
         system = (
-            f"你是四人圆桌中的{participant['name']}，角色是{participant['role']}：{participant['brief']}。\n"
-            f"{debate_instruction}\n本次模板要求：{template.system_guidance}\n{source_instruction}"
+            f"你是本次 {participant_count} 席圆桌中的{participant['name']}，角色是{participant['role']}：{participant['brief']}。\n"
+            f"{debate_instruction}\n{role_instruction}\n本次模板要求：{template.system_guidance}\n{source_instruction}"
             "这是用户全程可参与的公开讨论。必须回应记录中最新的用户插话。"
             "不要替全体宣布最终答案，不展示隐藏思维链，控制在220字以内。"
         )
@@ -701,12 +798,12 @@ class Orchestrator:
         )
         candidate.anonymous_label = participant["name"]
         run.candidates = [item for item in run.candidates if item.candidate_id != candidate.candidate_id] + [candidate]
-        next_speaker = self.PARTICIPANTS[run.current_speaker_index] if run.current_speaker_index < len(self.PARTICIPANTS) else None
+        next_speaker = participants[run.current_speaker_index] if run.current_speaker_index < len(participants) else None
         await self.emit(
             run,
             "agent_turn_completed",
             "discussion",
-            f"{participant['name']}发言完毕，下一位将继续回应；你可随时插话",
+            f"{participant['name']}发言完毕" + ("，下一位将继续回应；你可随时插话" if next_speaker else "，讨论席已完成"),
             min(88, 20 + len(run.discussion_turns) * 14),
             {"turn": turn.model_dump(mode="json"), "next_speaker": next_speaker},
         )
@@ -748,7 +845,14 @@ class Orchestrator:
             token_estimator=context_window.token_estimator,
             token_estimator_exact=context_window.token_estimator_exact,
         )
-        await self.emit(run, "summary_started", "summary", "正在根据四席公开讨论和你的最终补充形成答案", 94)
+        participant_count = len(run.participant_roles) or len(run.seat_assignments) or len(run.discussion_turns)
+        await self.emit(
+            run,
+            "summary_started",
+            "summary",
+            f"正在根据 {participant_count} 席公开讨论和你的最终补充形成答案",
+            94,
+        )
         template = get_template(run.template_id)
         citation_instruction = (
             "附加资料使用 [S编号] 引用；只引用上下文中真实存在的编号。资料没有覆盖的事实必须保留为未知。"
@@ -760,7 +864,7 @@ class Orchestrator:
             assignment,
             backends,
             context_window.prompt,
-            "你是圆桌记录员。根据四位成员和用户的完整公开讨论，直接给出最终答案。"
+            "你是圆桌记录员。根据本次全部参与席位和用户的完整公开讨论，直接给出最终答案。"
             "先综合已经形成的共识，再处理明确分歧，最后给出可执行答案和必要边界。"
             f"本次模板要求：{template.system_guidance} {citation_instruction}"
             "不要声称不存在的共识，不展示隐藏思维链。",
@@ -770,11 +874,12 @@ class Orchestrator:
             f"[S{index}] {source.title}" + (f" — {source.url}" if source.url else f" — {source.filename}" if source.filename else "")
             for index, source in enumerate(run.source_snapshots, 1)
         ]
+        active_roles = {participant["id"] for participant in self._participants_for_run(run)}
         run.final_decision = FinalDecision(
             final_answer=generation.text.strip(),
             key_reasons=[
-                "四席按顺序公开回应",
-                "用户在最终综合前确认了讨论上下文",
+                f"{len(self._participants_for_run(run))} 席按顺序公开回应",
+                "最终综合使用了已保存的完整公开上下文",
                 *([f"本次固化了 {len(sources)} 份资料快照"] if sources else []),
             ],
             unverified_claims=[
@@ -800,6 +905,7 @@ class Orchestrator:
                 "seat_providers": [
                     {"role": item.role, "provider": item.provider_name, "model": item.model}
                     for item in run.seat_assignments
+                    if item.role in active_roles
                 ],
             },
             usage=run.usage,
@@ -822,12 +928,13 @@ class Orchestrator:
         run = self.live_runs.get(run_id) or await self.store.get_run(run_id)
         if not run:
             return None
+        participants = self._participants_for_run(run)
         can_interject = run.status == "awaiting_final_input" or (
-            run.status == "running" and run.current_speaker_index < len(self.PARTICIPANTS)
+            run.status == "running" and run.current_speaker_index < len(participants)
         )
         if not can_interject or not action.message.strip():
             return run
-        target = next((item for item in self.PARTICIPANTS if item["id"] == action.target_agent), None)
+        target = next((item for item in participants if item["id"] == action.target_agent), None)
         prefix = f"问{target['name']}：" if action.action == "question" and target else ""
         run.discussion_turns.append(
             DiscussionTurn(
@@ -919,7 +1026,7 @@ class Orchestrator:
             started = time.perf_counter()
             try:
                 await self._run_debate_graph(run, cancel, resume=True)
-                if run.status == "awaiting_final_input" and run.auto_summarize:
+                if run.auto_summarize and run.final_decision is None:
                     await self._finalize_once(run)
             except RunLimitReached as exc:
                 await self._stop_for_limit(run, exc)
@@ -927,8 +1034,8 @@ class Orchestrator:
                 if self.shutting_down:
                     run.status = "running"
                     run.recoverable = True
-                else:
-                    raise
+                elif run.id not in self.retrying_runs:
+                    await self._mark_cancelled(run)
             except Exception as exc:
                 run.degraded = True
                 run.status = "failed"
@@ -1043,17 +1150,30 @@ class Orchestrator:
         if not run:
             return None
         if run.status == "awaiting_final_input":
-            run.status = "cancelled"
-            run.awaiting_user = False
-            run.error = "任务已取消"
-            await self.emit(run, "run_cancelled", "cancelled", "审议已取消，已保留当前进度", 100)
+            await self._mark_cancelled(run)
             return run
         if run.status in {"queued", "running"}:
             self.cancel_events.setdefault(run_id, asyncio.Event()).set()
             task = self.tasks.get(run_id)
             if task:
                 task.cancel()
-        return await self.store.get_run(run_id)
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            if run.status != "cancelled":
+                await self._mark_cancelled(run)
+            return run
+        return run
+
+    async def _mark_cancelled(self, run: RunRecord) -> None:
+        if run.status == "cancelled":
+            return
+        run.status = "cancelled"
+        run.awaiting_user = False
+        run.recoverable = False
+        run.error = "任务已取消"
+        await self.emit(run, "run_cancelled", "cancelled", "审议已取消，已保留当前进度", 100)
 
     async def delete(self, run_id: str) -> bool:
         run = self.live_runs.get(run_id) or await self.store.get_run(run_id)

@@ -17,6 +17,7 @@ export default function HomePage() {
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState("standard");
   const [highRisk, setHighRisk] = useState(false);
+  const [autoSummarize, setAutoSummarize] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [assignments, setAssignments] = useState<AgentAssignmentsConfig | null>(null);
   const [templates, setTemplates] = useState<DeliberationTemplate[]>([]);
@@ -91,6 +92,7 @@ export default function HomePage() {
         mode,
         use_saved_assignments: true,
         template_id: templateId,
+        ...(autoSummarize && !highRisk ? { auto_summarize: true } : {}),
         ...(highRisk ? { high_risk: true } : {}),
       });
       router.push(`/runs/${run.id}`);
@@ -104,7 +106,7 @@ export default function HomePage() {
     <header className="topbar"><div><span className="top-kicker">工作台 / 新建审议</span><span className="top-title">Council 圆桌</span></div><div className={`top-meta ${hasDemoSeats || configState === "error" ? "demo" : ""}`}><span className="status-dot" />{topStatus}</div></header>
 
     <section className="home-command">
-      <div><h1>四种视角，你也在场。</h1><p>依次发言、公开回应，由你确认后再形成答案。</p></div>
+      <div><h1>四种视角，你也在场。</h1><p>依次发言、公开回应；短定义与确定性计算会自动精简调用。</p></div>
       <div className="council-sequence" aria-label="四席顺序"><span>析</span><ChevronRight size={12} /><span>诘</span><ChevronRight size={12} /><span>构</span><ChevronRight size={12} /><span>观</span><ChevronRight size={12} /><strong>答</strong></div>
     </section>
 
@@ -135,12 +137,12 @@ export default function HomePage() {
         <div className="composer-section">
           <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
           <textarea value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} rows={5} />
-          <div className="composer-footer"><label className={`risk-mode-toggle ${highRisk ? "active" : ""}`}><input type="checkbox" checked={highRisk} onChange={(event) => setHighRisk(event.target.checked)} /><span className={`toggle ${highRisk ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label><button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={submit}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
+          <div className="composer-footer"><label className={`risk-mode-toggle ${highRisk ? "active" : ""}`}><input type="checkbox" checked={highRisk} onChange={(event) => { const checked = event.target.checked; setHighRisk(checked); if (checked) setAutoSummarize(false); }} /><span className={`toggle ${highRisk ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label>{!highRisk && <label className={`risk-mode-toggle ${autoSummarize ? "active" : ""}`}><input type="checkbox" checked={autoSummarize} onChange={(event) => setAutoSummarize(event.target.checked)} /><span className={`toggle ${autoSummarize ? "on" : ""}`} /><span><strong>自动总结</strong><small>{autoSummarize ? "讨论席结束后直接生成答案" : "默认等待你的确认"}</small></span></label>}<button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={submit}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
           {error && <p className="form-error" role="alert">{error}</p>}
         </div>
       </>}
     </section>
 
-    <section className="mode-section"><div className="mode-heading"><div><span className="section-label">运行档位</span><span className="section-hint">控制上下文与推理预算</span></div><span className="section-hint">正常 5 次调用 · 失败最多重试 3 次</span></div><div className="mode-grid">{modes.map(({ id, label, detail, icon: Icon }) => <button key={id} type="button" className={`mode-option ${mode === id ? "selected" : ""}`} onClick={() => setMode(id)}><span className="mode-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>{detail}</small></span><span className="radio-dot" /></button>)}</div><div className="estimate-line"><span><span className="estimate-bar" />预计 {selectedMode.detail}</span><span>{configState === "loading" ? "席位配置加载中" : configState === "error" ? "席位配置读取失败" : configurationReady ? `${activeProviderNames.size} 个 Provider · 五席真实 AI` : configurationRunnable ? `${mockSeatCount} 个本地演示席 · 需明确确认` : "席位配置未就绪"}</span></div></section>
+    <section className="mode-section"><div className="mode-heading"><div><span className="section-label">运行档位</span><span className="section-hint">控制上下文与推理预算</span></div><span className="section-hint">决策通常 5 次调用 · 快速短任务 2 次</span></div><div className="mode-grid">{modes.map(({ id, label, detail, icon: Icon }) => <button key={id} type="button" className={`mode-option ${mode === id ? "selected" : ""}`} onClick={() => setMode(id)}><span className="mode-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>{detail}</small></span><span className="radio-dot" /></button>)}</div><div className="estimate-line"><span><span className="estimate-bar" />预计 {selectedMode.detail}</span><span>{configState === "loading" ? "席位配置加载中" : configState === "error" ? "席位配置读取失败" : configurationReady ? `${activeProviderNames.size} 个 Provider · 五席真实 AI` : configurationRunnable ? `${mockSeatCount} 个本地演示席 · 需明确确认` : "席位配置未就绪"}</span></div></section>
   </div>;
 }

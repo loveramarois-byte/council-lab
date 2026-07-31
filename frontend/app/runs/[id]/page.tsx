@@ -133,15 +133,19 @@ export default function RunDetailPage() {
   const nextParticipant = useMemo(() => run?.participant_roles[run.current_speaker_index], [run]);
   const selectedParticipant = run?.participant_roles.find((item) => item.id === target) || null;
   const agentTurnCount = run?.discussion_turns.filter((turn) => turn.speaker_type === "agent").length || 0;
+  const seatCount = run?.participant_roles.length || 4;
+  const summaryCallNumber = seatCount + 1;
+  const expectedModelCalls = run?.analysis?.expected_model_calls || summaryCallNumber;
+  const discussionComplete = agentTurnCount >= seatCount;
   const activeAssignment = run
-    ? agentTurnCount < 4
+    ? agentTurnCount < seatCount
       ? run.seat_assignments?.[run.current_speaker_index]
       : run.finalizer_assignment
     : undefined;
   const activeProviderId = activeAssignment?.provider_id || run?.provider_id;
   const currentRequestUsesCCSwitch = activeProviderId === "ccswitch";
   const completedSpeakerIds = useMemo(() => new Set(run?.discussion_turns.filter((turn) => turn.speaker_type === "agent").map((turn) => turn.speaker_id) || []), [run?.discussion_turns]);
-  const debateActive = run?.status === "running" && agentTurnCount < 4;
+  const debateActive = run?.status === "running" && agentTurnCount < seatCount;
   const awaitingFinal = run?.status === "awaiting_final_input";
   const canWrite = Boolean(debateActive || awaitingFinal);
   const runFailed = run?.status === "failed";
@@ -351,15 +355,15 @@ export default function RunDetailPage() {
       <section className="council-question">
         <span>本次议题</span>
         <h1>{run.question}</h1>
-        <p>{run.status === "completed" ? "四席与总结席调用完成，答案和过程均已保留。" : awaitingFinal ? "四席已完成；补充信息或直接确认生成最终答案。" : runStopped ? run.error : runFailed ? `${nextParticipant?.name || "记录员"}调用失败，已保留前面的公开讨论。` : agentTurnCount >= 4 ? "总结席正在综合公开讨论。" : `${nextParticipant?.name || "成员"}正在调用中，你可随时插话。`}</p>
+        <p>{run.status === "completed" ? `${seatCount} 席与总结席调用完成，答案和过程均已保留。` : awaitingFinal ? `${seatCount} 席已完成；补充信息或直接确认生成最终答案。` : runStopped ? run.error : runFailed ? `${nextParticipant?.name || "记录员"}调用失败，已保留前面的公开讨论。` : discussionComplete ? "总结席正在综合公开讨论。" : `${nextParticipant?.name || "成员"}正在调用中，你可随时插话。`}</p>
       </section>
 
       <section className="council-callboard" aria-label="AI 独立调用顺序">
-        <div className="callboard-meta"><Bot size={14} /><strong>4 席顺序调用</strong><span>各席独立配置</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
+        <div className="callboard-meta"><Bot size={14} /><strong>{seatCount} 席顺序调用</strong><span>{run.analysis?.short_task_route ? "短任务精简路线" : "各席独立配置"}</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="成功模型调用的实际次数和系统预计总次数"><Gauge size={12} />调用 {run.usage.model_calls} / 预计 {expectedModelCalls}</span><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
         <div className="council-seats">
           {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} assignment={run.seat_assignments?.[index]} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
-          <div className={`summary-node ${run.status === "completed" ? "completed" : runFailed && agentTurnCount >= 4 ? "failed" : agentTurnCount >= 4 ? "active" : "queued"}`} aria-label="第 5 次调用：记录员总结">
-            <FileCheck2 size={17} /><span><strong>最终答案</strong><small>第 5 次调用</small></span>
+          <div className={`summary-node ${run.status === "completed" ? "completed" : runFailed && discussionComplete ? "failed" : discussionComplete ? "active" : "queued"}`} aria-label={`第 ${summaryCallNumber} 次调用：记录员总结`}>
+            <FileCheck2 size={17} /><span><strong>最终答案</strong><small>第 {summaryCallNumber} 次调用</small></span>
           </div>
         </div>
       </section>
@@ -388,7 +392,7 @@ export default function RunDetailPage() {
           {run.status === "running" && <article className="discussion-thinking">
             <LoaderCircle className="spin" size={17} />
             <div className="discussion-thinking-copy">
-              <span><strong>{debateActive ? nextParticipant?.name || "下一位成员" : "记录员"}</strong>{currentRequestUsesCCSwitch && waitingSeconds >= 10 ? "正在等待 CC Switch 返回上游响应" : debateActive ? "正在阅读并回应前面的发言" : "正在综合四席讨论"}</span>
+              <span><strong>{debateActive ? nextParticipant?.name || "下一位成员" : "记录员"}</strong>{currentRequestUsesCCSwitch && waitingSeconds >= 10 ? "正在等待 CC Switch 返回上游响应" : debateActive ? "正在阅读并回应前面的发言" : `正在综合 ${seatCount} 席讨论`}</span>
               <small><Clock3 size={12} />已等待 {waitingSeconds} 秒{currentRequestUsesCCSwitch ? " · 请求由 CC Switch 路由；若已配置故障转移，将由它处理" : ""}</small>
               {showWaitingRecovery && <div className="discussion-recovery">
                 <span>上游响应较慢，你可以继续等，或中止这次请求并重试当前席位。</span>
@@ -397,7 +401,7 @@ export default function RunDetailPage() {
               </div>}
             </div>
           </article>}
-          {run.status === "completed" && run.final_decision && <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 5 次调用 · 模型共识未经过外部事实核验</small></span></header><RichText content={run.final_decision.final_answer} /></article>}
+          {run.status === "completed" && run.final_decision && <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>未经过外部事实核验</strong><small>模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。</small></span></div><RichText content={run.final_decision.final_answer} /></article>}
         </div>
 
         {runFailed && <div className="failed-actions" role="alert">
@@ -411,11 +415,11 @@ export default function RunDetailPage() {
         {(run.status === "running" || awaitingFinal) && <div className="participation-dock">
           <div className="participation-context">
             {selectedParticipant ? <button onClick={() => setTarget(null)}><span>正在点名</span><strong>{selectedParticipant.name}</strong><X size={13} /></button> : <span>写下你的观点，或点击上方任一席位点名追问</span>}
-            <small>{awaitingFinal ? "这些补充会进入第五次总结调用。" : "席位会依次发言；你的插话会进入后续上下文。"}</small>
+            <small>{awaitingFinal ? `这些补充会进入第 ${summaryCallNumber} 次总结调用。` : "席位会依次发言；你的插话会进入后续上下文。"}</small>
           </div>
           <textarea value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!canWrite || busy} placeholder={awaitingFinal ? "最终答案生成前，我还想补充…" : selectedParticipant ? `向${selectedParticipant.name}追问…` : "我想补充 / 反驳 / 改变讨论方向…"} rows={2} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") act(selectedParticipant ? "question" : "interject"); }} />
           <div className="participation-actions">
-            <span className="debate-progress">{debateActive ? `已完成 ${agentTurnCount} / 4 席` : "四席完成，等待你的确认"}</span>
+            <span className="debate-progress">{debateActive ? `已完成 ${agentTurnCount} / ${seatCount} 席` : `${seatCount} 席完成${run.auto_summarize ? "，正在自动总结" : "，等待你的确认"}`}</span>
             <span />
             <button className="quiet-button" disabled={!canWrite || busy || !draft.trim()} onClick={() => act(selectedParticipant ? "question" : "interject")}>{busy ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}{awaitingFinal ? "加入最终补充" : selectedParticipant ? `问${selectedParticipant.name}` : "加入讨论"}</button>
             {awaitingFinal && !highRisk && <button className="send-button" disabled={busy} onClick={finalize}>{busy ? <LoaderCircle className="spin" size={15} /> : <FileCheck2 size={15} />}生成最终答案</button>}

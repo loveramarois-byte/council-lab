@@ -156,7 +156,7 @@ export type Run = {
   status: "queued" | "running" | "awaiting_final_input" | "completed" | "failed" | "stopped" | "cancelled";
   created_at: string;
   updated_at: string;
-  analysis?: Record<string, unknown> | null;
+  analysis?: QuestionAnalysis | null;
   candidates: Candidate[];
   critiques: Critique[];
   verifications: Verification[];
@@ -185,6 +185,28 @@ export type Run = {
   template_name?: string;
   source_snapshots?: RunSourceSnapshot[];
   decision_review?: DecisionReview | null;
+};
+
+export type QuestionAnalysis = {
+  question_type: string;
+  needs_realtime: boolean;
+  needs_web: boolean;
+  needs_external_evidence?: boolean;
+  needs_code_execution: boolean;
+  needs_math: boolean;
+  needs_file: boolean;
+  high_risk_domain: boolean;
+  high_risk_domains?: string[];
+  faulty_premise: boolean;
+  suitable_for_multi_agent: boolean;
+  recommended_agents: number;
+  recommended_mode: string;
+  expected_model_calls: number;
+  expected_token_limit: number;
+  expected_tool_calls: number;
+  confidence?: number;
+  reasons?: string[];
+  short_task_route?: boolean;
 };
 
 export type Participant = { id: string; name: string; role: string; brief: string };
