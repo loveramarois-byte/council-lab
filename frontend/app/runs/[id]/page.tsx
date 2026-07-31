@@ -86,9 +86,9 @@ export default function RunDetailPage() {
         try { setClaims(await api.decisionClaims(params.id)); } catch { setClaims([]); }
         try {
           const proposals = await api.memoryProposals(params.id);
-          setMemoryProposals(proposals);
+          setMemoryProposals((current) => proposals.length === 0 && current.length > 0 ? current : proposals);
           setMemoryDrafts((current) => ({ ...Object.fromEntries(proposals.map((item) => [item.proposal.id, item.proposal.content])), ...current }));
-        } catch { setMemoryProposals([]); }
+        } catch {}
       } else { setDecisionBrief(null); setComparison(null); setClaims([]); }
       if (highRiskProbeRef.current.runId !== params.id) {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
