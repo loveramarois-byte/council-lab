@@ -24,10 +24,12 @@ test("selects a product contract and sends it with the new Run", async ({ page }
   await page.goto("/");
   await page.getByRole("button", { name: "仅体验本地演示" }).click();
   await page.getByLabel("输出契约").selectOption("product_review");
+  await page.getByLabel("发言策略").selectOption("independent");
   await page.getByRole("textbox", { name: "你的问题" }).fill("是否发布这个产品？");
   await page.getByRole("button", { name: "进入圆桌" }).click();
   await page.waitForURL("**/runs/product-contract-run");
   expect(payload.output_contract).toBe("product_review");
+  expect(payload.workflow_strategy).toBe("independent");
 });
 
 test("renders the typed product extension on a completed result", async ({ page }) => {

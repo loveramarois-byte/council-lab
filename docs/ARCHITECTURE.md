@@ -2,7 +2,7 @@
 
 Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问本地后端；后端负责 LangGraph 工作流、Provider、上下文预算、运行状态和安全边界。
 
-核心流程是可恢复的有限状态图：`dispatch -> turn x N -> awaiting_final_input -> finalize`。决策、风险和复杂任务使用四个席位；快速档的短定义与确定性算术保守路由为一个讨论席。各席按固定顺序调用保存的 Provider/model 配置并读取公开记录。讨论席完成后默认停在用户确认点，或在创建时明确开启 `auto_summarize` 后直接总结。中途和最终补充都写入公开记录。
+核心流程是可恢复的有限状态图：`dispatch -> turn x N -> awaiting_final_input -> finalize`。决策、风险和复杂任务使用四个席位；快速档的短定义与确定性算术保守路由为一个讨论席。默认连续审议按固定顺序读取公开记录；可选独立初答让每席只读取冻结基础输入。讨论席完成后默认停在用户确认点，或在创建时明确开启 `auto_summarize` 后直接总结。中途和最终补充都写入公开记录。
 
 ## Feature status
 
@@ -79,3 +79,6 @@ Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `stru
 Provider API Key 使用 `keyring` 交给平台凭据库。SQLite 只保存 `credential_saved` 标记与环境变量名，公开 Provider 响应只暴露 `has_api_key` 和 `credential_source`。运行时优先读取环境变量，其次读取系统凭据库。
 
 默认关闭第三方追踪，不记录 Authorization、Cookie、完整 API Key、用户敏感文件或隐藏思维链。Provider 地址检查会解析 DNS 并拒绝 metadata、link-local、unspecified、multicast 与 reserved 目标；自定义本地 Provider 可使用 private/loopback，CC Switch 只接受 loopback。DNS rebinding 仍是剩余风险。
+## 工作流策略
+
+`RunRecord.workflow_strategy` 目前支持 `sequential` 与 `independent`。默认的 sequential 保持逐席读取公开 Turn；independent 的初答席只读取 Run 创建时已经冻结的问题、资料快照、项目上下文和用户明确选择的记忆。独立轮中的用户插话仍作为追加 Turn 保存，但只进入最终总结，不进入剩余初答席上下文。两种策略共用现有 checkpoint、恢复、幂等、最终人工确认和高风险控制面。

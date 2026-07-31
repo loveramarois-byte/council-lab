@@ -396,6 +396,7 @@ class Orchestrator:
             id=run_id,
             question=request.question,
             mode=request.mode,
+            workflow_strategy=request.workflow_strategy,
             provider_id=primary.provider_id,
             model=primary.model,
             reasoning_effort=reasoning_effort_for_mode(request.mode),
@@ -576,6 +577,7 @@ class Orchestrator:
             RunCreate(
                 question=question,
                 mode=request.mode or source.mode,
+                workflow_strategy=source.workflow_strategy,
                 provider_id=source.provider_id,
                 model=source.model,
                 assignment_config=assignment_config,
@@ -876,9 +878,10 @@ class Orchestrator:
         participant = participants[speaker_index]
         assignment = run.seat_assignments[speaker_index]
         run.awaiting_user = False
+        context_turns = [] if run.workflow_strategy == "independent" else run.discussion_turns
         context_window = build_context_window(
             run.question,
-            run.discussion_turns,
+            context_turns,
             context_budget_for_mode(run.mode),
             self._evidence_context(run),
             run.project_context,
@@ -904,7 +907,12 @@ class Orchestrator:
             min(82, 15 + len(run.discussion_turns) * 7),
             {"speaker": participant, "provider_id": assignment.provider_id, "model": assignment.model},
         )
-        if speaker_index == 0:
+        if run.workflow_strategy == "independent":
+            debate_instruction = (
+                "这是独立初答阶段。只能依据讨论题、共同资料和固定用户上下文作答，不能读取或回应其他席位观点；"
+                "给出你自己的判断、依据、关键假设和不确定性。"
+            )
+        elif speaker_index == 0:
             debate_instruction = "你是第一位发言者。直接回答用户问题，给出清楚的初步观点和依据，为后续辩论建立起点。"
         else:
             debate_instruction = (
@@ -935,8 +943,9 @@ class Orchestrator:
             f"你是本次 {participant_count} 席圆桌中的{participant['name']}，角色是{participant['role']}：{participant['brief']}。\n"
             f"{debate_instruction}\n{role_instruction}\n本次模板要求：{template.system_guidance}\n"
             f"本次输出契约：{output_contract.system_guidance}\n{source_instruction}"
-            "这是用户全程可参与的公开讨论。必须回应记录中最新的用户插话。"
-            "不要替全体宣布最终答案，不展示隐藏思维链，控制在220字以内。"
+            "这是用户全程可参与的公开讨论。"
+            + ("独立初答阶段不要读取或回应其他席位，也不要把用户在本阶段的插话当作其他席位意见。" if run.workflow_strategy == "independent" else "必须回应记录中最新的用户插话。")
+            + "不要替全体宣布最终答案，不展示隐藏思维链，控制在220字以内。"
         )
         generation = await self._generate_with_fallback(run, assignment, backends, context_window.prompt, system)
         turn = DiscussionTurn(
@@ -947,6 +956,7 @@ class Orchestrator:
             role_label=participant["role"],
             content=generation.text.strip(),
             round=run.discussion_round,
+            stage="initial_opinion" if run.workflow_strategy == "independent" else "discussion",
             provider_id=assignment.provider_id,
             provider_name=assignment.provider_name,
             model=assignment.model,
@@ -1049,7 +1059,11 @@ class Orchestrator:
         run.final_decision = FinalDecision(
             final_answer=generation.text.strip(),
             key_reasons=[
-                f"{len(self._participants_for_run(run))} 席按顺序公开回应",
+                (
+                    f"{len(self._participants_for_run(run))} 席先独立初答，再由总结席综合"
+                    if run.workflow_strategy == "independent"
+                    else f"{len(self._participants_for_run(run))} 席按顺序公开回应"
+                ),
                 "最终综合使用了已保存的完整公开上下文",
                 *([f"本次固化了 {len(sources)} 份资料快照"] if sources else []),
             ],
@@ -1161,6 +1175,7 @@ class Orchestrator:
                 role_label="最终补充" if run.status == "awaiting_final_input" else "参与者",
                 content=prefix + action.message.strip(),
                 round=run.discussion_round,
+                stage="user_input",
             )
         )
         await self.emit(

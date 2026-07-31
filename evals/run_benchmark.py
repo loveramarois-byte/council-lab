@@ -206,6 +206,7 @@ async def run_council(
                 question=case["prompt"],
                 mode="standard",
                 assignment_config=config,
+                workflow_strategy="independent" if strategy == "independent_council" else "sequential",
                 auto_summarize=True,
                 template_id="research_synthesis",
                 output_contract=case.get("output_contract", "general_decision"),
@@ -295,7 +296,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
         if cross_config:
             profile_ids.update(item.provider_id for item in [*cross_config.seats, cross_config.finalizer])
         uses_any_real_provider, uses_only_real_providers = provider_reality(profiles, profile_ids)
-        calls_per_strategy = {"direct": 1, "extended_direct": 1, "self_refine": 2, "same_model_council": 5, "cross_model_council": 5}
+        calls_per_strategy = {"direct": 1, "extended_direct": 1, "self_refine": 2, "same_model_council": 5, "independent_council": 5, "cross_model_council": 5}
         planned_calls = len(cases) * args.repetitions * sum(calls_per_strategy[strategy] for strategy in strategies)
         if uses_any_real_provider and not args.confirm_cost:
             raise ValueError(
@@ -321,7 +322,7 @@ async def execute(args: argparse.Namespace) -> dict[str, Any]:
                     elif strategy == "self_refine":
                         outcome = await asyncio.wait_for(run_self_refine(case, profile, model), timeout=args.case_timeout)
                     else:
-                        config = same_config if strategy == "same_model_council" else cross_config
+                        config = same_config if strategy in {"same_model_council", "independent_council"} else cross_config
                         assert config is not None
                         outcome = await asyncio.wait_for(
                             run_council(case, strategy, profiles, config, temp_store), timeout=args.case_timeout

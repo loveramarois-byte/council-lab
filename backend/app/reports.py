@@ -138,6 +138,7 @@ def run_markdown(
         f"- 模板：{run.template_name}",
         f"- 资料空间：{run.project_name or '无'}",
         f"- 创建时间：{run.created_at.isoformat()}",
+        f"- 发言策略：{'先独立初答' if run.workflow_strategy == 'independent' else '连续审议'}",
         f"- 模型调用：{run.usage.model_calls}",
         f"- Token：{run.usage.input_tokens + run.usage.output_tokens}",
         "",
@@ -371,6 +372,6 @@ def run_html(
 <title>{escape(run.question)} · Council</title><style>
     body{{max-width:860px;margin:48px auto;padding:0 24px;color:#292724;font:15px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;background:#f7f3ee}}
     header,.answer,article,.sources,.review,.high-risk,.decision-brief,.decision-claims{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:18px 0 9px}}small,header p,.sources span,.support-note,.decision-claims small{{display:block;color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.decision-brief{{border-left:4px solid #456d64}}.decision-claims{{border-left:4px solid #987137}}.decision-claims li{{margin:10px 0}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
-</style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}</p></header>
+</style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape('先独立初答' if run.workflow_strategy == 'independent' else '连续审议')} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}</p></header>
     {high_risk_section}{f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
     {brief_section}{claims_section}<section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""

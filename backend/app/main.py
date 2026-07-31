@@ -973,6 +973,7 @@ async def rerun(
             RunCreate(
                 question=source.question,
                 mode=source.mode,
+                workflow_strategy=source.workflow_strategy,
                 provider_id=source.provider_id,
                 model=source.model,
                 assignment_config=assignment_config,

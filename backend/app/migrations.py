@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -79,6 +79,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "DROP TRIGGER IF EXISTS decision_outcomes_no_delete",
         "DROP TRIGGER IF EXISTS claim_outcomes_no_delete",
     ),
+    11: (),
 }
 
 

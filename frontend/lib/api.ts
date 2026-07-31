@@ -148,6 +148,7 @@ export type Run = {
   id: string;
   question: string;
   mode: "quick" | "standard" | "rigorous";
+  workflow_strategy?: "sequential" | "independent";
   provider_id: string;
   model: string;
   reasoning_effort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -382,7 +383,7 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; workflow_strategy?: "sequential" | "independent"; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   readiness: (question: string, high_risk = false) => request<DecisionReadiness>("/api/readiness", { method: "POST", body: JSON.stringify({ question, high_risk }) }),
   runs: () => request<Run[]>("/api/runs"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),

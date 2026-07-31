@@ -13,6 +13,7 @@ STRATEGIES = (
     "extended_direct",
     "self_refine",
     "same_model_council",
+    "independent_council",
     "cross_model_council",
 )
 SCORE_FIELDS = ("accuracy", "evidence_use", "critical_coverage", "actionability", "uncertainty")

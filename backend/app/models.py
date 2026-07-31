@@ -171,6 +171,7 @@ class RunLimits(BaseModel):
 class RunCreate(BaseModel):
     question: str = Field(min_length=3, max_length=12000)
     mode: Literal["quick", "standard", "rigorous"] = "standard"
+    workflow_strategy: Literal["sequential", "independent"] = "sequential"
     provider_id: str = "mock"
     model: str | None = None
     assignment_config: AgentAssignmentsPayload | None = None
@@ -211,6 +212,7 @@ class DiscussionTurn(BaseModel):
     provider_name: str | None = None
     model: str | None = None
     round: int = 1
+    stage: Literal["initial_opinion", "discussion", "user_input", "system"] = "discussion"
     reused_from_run_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -696,6 +698,7 @@ class RunRecord(BaseModel):
     id: str
     question: str
     mode: str
+    workflow_strategy: Literal["sequential", "independent"] = "sequential"
     provider_id: str
     model: str
     reasoning_effort: Literal["low", "medium", "high", "xhigh", "max", "ultra"] = "high"

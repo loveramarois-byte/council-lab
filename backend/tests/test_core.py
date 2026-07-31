@@ -1668,7 +1668,7 @@ def test_benchmark_dataset_is_balanced_and_blinding_is_deterministic():
     variants = [f"{strategy}:r{repeat}" for strategy in STRATEGIES for repeat in range(1, 4)]
     labels = blind_labels("run-1", "case-1", variants)
     assert labels == blind_labels("run-1", "case-1", variants)
-    assert len(set(labels.values())) == 15
+    assert len(set(labels.values())) == len(STRATEGIES) * 3
 
 
 def test_benchmark_execution_and_human_scores_remain_separate():
