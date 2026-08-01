@@ -69,6 +69,43 @@ def test_http_errors_do_not_expose_token(monkeypatch):
     assert "secret-token" not in str(raised.value)
 
 
+def test_asset_upload_uses_extended_timeout(monkeypatch, tmp_path):
+    asset = tmp_path / "Council.zip"
+    asset.write_bytes(b"release")
+    observed = {}
+
+    def fake_urlopen(request, timeout):
+        observed["method"] = request.get_method()
+        observed["timeout"] = timeout
+        return FakeResponse({"id": 101})
+
+    monkeypatch.setattr(publish_gitee_release.urllib.request, "urlopen", fake_urlopen)
+    publish_gitee_release.api_request("POST", "/release/attach_files", "secret-token", file_path=asset)
+
+    assert observed == {"method": "POST", "timeout": 1800}
+
+
+@pytest.mark.parametrize(
+    ("environment", "file_name", "expected"),
+    [
+        ({"GITEE_API_TIMEOUT_SECONDS": "75"}, None, 75),
+        ({"GITEE_UPLOAD_TIMEOUT_SECONDS": "2400"}, "Council.zip", 2400),
+    ],
+)
+def test_timeouts_can_be_configured(monkeypatch, tmp_path, environment, file_name, expected):
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    file_path = tmp_path / file_name if file_name else None
+    assert publish_gitee_release._timeout_seconds(file_path) == expected
+
+
+@pytest.mark.parametrize("value", ["zero", "0", "3601"])
+def test_invalid_upload_timeout_is_rejected(monkeypatch, tmp_path, value):
+    monkeypatch.setenv("GITEE_UPLOAD_TIMEOUT_SECONDS", value)
+    with pytest.raises(publish_gitee_release.GiteeApiError, match="GITEE_UPLOAD_TIMEOUT_SECONDS"):
+        publish_gitee_release._timeout_seconds(tmp_path / "Council.zip")
+
+
 def test_publish_release_replaces_existing_asset(monkeypatch, tmp_path):
     asset = tmp_path / "mac.zip"
     asset.write_bytes(b"replacement")

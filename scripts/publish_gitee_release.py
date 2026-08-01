@@ -15,10 +15,25 @@ from typing import Any
 
 
 API_ROOT = "https://gitee.com/api/v5"
+DEFAULT_API_TIMEOUT_SECONDS = 60
+DEFAULT_UPLOAD_TIMEOUT_SECONDS = 1800
 
 
 class GiteeApiError(RuntimeError):
     pass
+
+
+def _timeout_seconds(file_path: Path | None) -> int:
+    variable = "GITEE_UPLOAD_TIMEOUT_SECONDS" if file_path else "GITEE_API_TIMEOUT_SECONDS"
+    default = DEFAULT_UPLOAD_TIMEOUT_SECONDS if file_path else DEFAULT_API_TIMEOUT_SECONDS
+    raw_value = os.environ.get(variable, str(default)).strip()
+    try:
+        timeout = int(raw_value)
+    except ValueError as error:
+        raise GiteeApiError(f"{variable} must be an integer") from error
+    if timeout < 1 or timeout > 3600:
+        raise GiteeApiError(f"{variable} must be between 1 and 3600 seconds")
+    return timeout
 
 
 def _response_error(error: urllib.error.HTTPError) -> GiteeApiError:
@@ -67,7 +82,7 @@ def api_request(
         headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=300) as response:
+        with urllib.request.urlopen(request, timeout=_timeout_seconds(file_path)) as response:
             payload = response.read()
     except urllib.error.HTTPError as error:
         raise _response_error(error) from error

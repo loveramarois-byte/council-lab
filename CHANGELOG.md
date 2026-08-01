@@ -8,6 +8,10 @@
 
 - GitHub Release 完成后可使用仓库 Secret `GITEE_ACCESS_TOKEN` 自动创建或更新同版本 Gitee 发行版，上传 macOS、Windows 和 SHA-256 文件并复用 CHANGELOG 更新说明；另提供可补发历史 Tag 的手动工作流。
 
+### Fixed
+
+- Gitee Release 大附件上传使用独立的 30 分钟超时，避免约 70 MB 的 macOS/Windows 自包含安装包在默认 5 分钟写入上限到达后失败；普通 API 请求继续使用较短超时，两个超时均可通过受限环境变量调整。
+
 ## [0.13.0] - 2026-08-01
 
 ### Added
