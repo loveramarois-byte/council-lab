@@ -2,10 +2,10 @@
   <img src="desktop/Council.png" width="92" alt="Council logo">
 </p>
 
-<h1 align="center">See the disagreement before you decide.</h1>
+<h1 align="center">Turn a complex question into a decision record you can inspect.</h1>
 
 <p align="center">
-  Council Lab is a local-first AI deliberation workspace. Multiple model seats discuss one question in public, preserve disagreement and trade-offs, and wait for you before producing a final synthesis.
+  Council Lab is not another chat window. Multiple model seats think independently, challenge one another in public, compare trade-offs, and keep your confirmation, unresolved risks, and next steps with the result.
 </p>
 
 <p align="center">
@@ -27,14 +27,18 @@
 | Use a real model | Open **Settings -> Model Providers**, connect a provider, and assign models to the five seats. |
 | Use your phone | Keep Council running on the computer, then pair under **Settings -> Mobile Access**. The phone is a remote interface, not a second data store. |
 
-## What Council changes
+## The value
 
-Ordinary chat often returns a smooth answer while hiding its assumptions and unresolved alternatives. Council makes that part visible:
+The risk in a complex decision is often not having no answer. It is having **one confident answer without knowing what it missed**. Council turns a single chat into an inspectable decision path:
 
-- **Separate viewpoints**: use sequential deliberation, or let four seats answer independently before they see one another.
-- **Visible dissent**: later seats must respond to earlier arguments; objections and unresolved questions remain in the record.
-- **A human checkpoint**: after seat four, Council waits for your additions or confirmation before the final synthesis.
-- **A durable record**: public turns, usage, a structured DecisionBrief, and Markdown/HTML exports stay on the local machine.
+| From | To |
+| --- | --- |
+| One model returns a smooth conclusion | Multiple seats expose reasons, counterexamples, options, and risks |
+| Assumptions stay hidden inside prose | Assumptions, disagreement, evidence gaps, and minority views are visible |
+| The model decides when the conversation is over | The run pauses for your facts and confirmation before final synthesis |
+| The result disappears into chat history | A DecisionBrief records the choice, actions, reopen conditions, and later outcomes |
+
+Council is designed for product trade-offs, architecture, research planning, risk review, and other questions that benefit from explicit challenge. It is not a source of verified medical, legal, investment, compliance, or production instructions.
 
 Council stores public model responses and run metadata. It never displays or saves hidden chain-of-thought.
 
