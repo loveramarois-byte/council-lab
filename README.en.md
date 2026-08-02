@@ -177,4 +177,8 @@ docs/          Architecture, decisions, evaluation, and integration notes
 
 Version `0.14.0` is intended for personal research, planning, and non-binding multi-perspective decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
 
+## Community thanks
+
+Council Lab thanks the [LINUX DO](https://linux.do/) community and its members for supporting open-source exchange, software development, and the project's growth.
+
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).
