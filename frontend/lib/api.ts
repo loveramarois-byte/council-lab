@@ -53,6 +53,30 @@ export type AgentAssignment = {
 export type AgentAssignmentsConfig = { schema_version: number; seats: AgentAssignment[]; finalizer: AgentAssignment };
 export type ResolvedAssignment = AgentAssignment & { provider_name: string };
 export type RunLimits = { max_model_calls: number; max_tokens: number; timeout_seconds: number };
+export type CouncilMode = "general" | "traditional_culture";
+export type TraditionalCultureProfile = {
+  calendar_type: "solar";
+  birth_date: string;
+  birth_time: string;
+  time_precision: "exact" | "approximate";
+  gender: "male" | "female";
+  birth_place: string;
+  timezone: "Asia/Shanghai";
+  true_solar_time_applied: false;
+  focus_topics: ("temperament" | "career" | "relationships" | "timing")[];
+};
+export type TraditionalCultureSnapshot = {
+  schema_version: 1;
+  calculation_source: "local_browser";
+  calculated_at: string;
+  profile: TraditionalCultureProfile;
+  engines: { id: "lunar-javascript" | "iztro"; version: string; source_url: string; license: "MIT" }[];
+  calendar_facts: { solar_datetime: string; lunar_date: string; zodiac: string; constellation: string; eight_char: string; pillars: string[]; pillar_wuxing: string[]; heavenly_stem_ten_gods: string[] };
+  ziwei_chart: { solar_date: string; lunar_date: string; chinese_date: string; time_label: string; time_range: string; five_elements_class: string; soul_star: string; body_star: string; soul_palace_branch: string; body_palace_branch: string; palaces: { index: number; name: string; heavenly_stem: string; earthly_branch: string; is_body_palace: boolean; is_original_palace: boolean; major_stars: string[]; minor_stars: string[]; changsheng12: string; decadal_range: number[] }[] };
+  notices: string[];
+  snapshot_sha256: string;
+};
+export type RunSummary = Pick<Run, "id" | "question" | "mode" | "council_mode" | "status" | "created_at" | "provider_id" | "participant_roles" | "seat_assignments" | "usage"> & { has_final_decision: boolean };
 export type RiskTier = "normal" | "elevated" | "high" | "critical";
 export type HighRiskStatus = "DRAFT" | "RISK_ASSESSMENT_REQUIRED" | "MORE_INFORMATION_REQUIRED" | "EVIDENCE_REQUIRED" | "INDEPENDENT_ANALYSIS" | "CROSS_EXAMINATION" | "PROFESSIONAL_ESCALATION_REQUIRED" | "READY_FOR_HUMAN_REVIEW" | "APPROVAL_REQUIRED" | "APPROVED" | "REJECTED" | "ACTION_BLOCKED" | "COMPLETED" | "CANCELLED";
 export type VerificationStatus = "unverified" | "pending" | "verified" | "rejected" | "conflicting" | "expired" | "legacy_default";
@@ -155,6 +179,7 @@ export type Run = {
   id: string;
   question: string;
   mode: "quick" | "standard" | "rigorous";
+  council_mode?: CouncilMode;
   workflow_strategy?: "sequential" | "independent";
   provider_id: string;
   model: string;
@@ -186,6 +211,7 @@ export type Run = {
   scores: Score[];
   final_decision?: FinalDecision | null;
   usage: Usage;
+  provider_attempts?: ProviderAttempt[];
   degraded: boolean;
   error?: string | null;
   protocol: string;
@@ -210,6 +236,8 @@ export type Run = {
   source_snapshots?: RunSourceSnapshot[];
   memory_snapshot?: RunMemorySnapshotItem[];
   decision_review?: DecisionReview | null;
+  traditional_culture_snapshot?: TraditionalCultureSnapshot | null;
+  traditional_culture_consent?: boolean;
 };
 
 export type QuestionAnalysis = {
@@ -244,6 +272,7 @@ export type Verification = { task_id: string; claim: string; status: string; evi
 export type Revision = { candidate_id: string; revised_answer: string; accepted_critiques: string[]; remaining_uncertainties: string[] };
 export type Score = { candidate_id: string; evidence_score: number; reasoning_score: number; coverage_score: number; risk_score: number; clarity_score: number; weighted_total: number; explanation: string };
 export type Usage = { model_calls: number; tool_calls: number; input_tokens: number; output_tokens: number; estimated_cost?: number | null; duration_ms: number };
+export type ProviderAttempt = { role: string; provider_id: string; provider_name: string; model: string; endpoint: string; attempt: number; status_code?: number | null; duration_ms: number; upstream_request_id?: string | null; error_kind?: string | null };
 export type FinalDecision = { final_answer: string; key_reasons: string[]; verified_claims: string[]; partially_verified_claims: string[]; contradicted_claims: string[]; unverified_claims: string[]; disagreements: string[]; risks_and_limitations: string[]; confidence: { level: string; score?: number; explanation: string }; sources: string[]; provider_summary: { provider: string; protocol: string; model: string; used_ccswitch: boolean; degraded: boolean; seat_providers?: { role: string; provider: string; model: string }[] }; usage: Usage };
 export type DecisionBrief = {
   id: string;
@@ -390,9 +419,9 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; workflow_strategy?: "sequential" | "independent"; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; council_mode?: CouncilMode; workflow_strategy?: "sequential" | "independent"; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; traditional_culture_snapshot?: TraditionalCultureSnapshot; traditional_culture_consent?: boolean; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   readiness: (question: string, high_risk = false) => request<DecisionReadiness>("/api/readiness", { method: "POST", body: JSON.stringify({ question, high_risk }) }),
-  runs: () => request<Run[]>("/api/runs"),
+  runs: () => request<RunSummary[]>("/api/runs?summary=true"),
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   decisionBrief: (id: string) => request<DecisionBrief>(`/api/runs/${id}/decision-brief`),
   runLineage: (id: string) => request<RunForkLineage>(`/api/runs/${id}/lineage`),

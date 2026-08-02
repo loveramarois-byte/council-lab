@@ -1,0 +1,16 @@
+{
+  "version": "council-live-acceptance-v1",
+  "description": "Ten fixed, non-current cases for a 50-call (4 seats + finalizer) operational acceptance run.",
+  "case_ids": [
+    "decision-night-bus",
+    "decision-vendor-choice",
+    "decision-office-policy",
+    "fact-conflicting-metrics",
+    "fact-contract-deadline",
+    "fact-survey-generalization",
+    "risk-database-migration",
+    "risk-ai-support",
+    "risk-event-launch",
+    "planning-beta-launch"
+  ]
+}

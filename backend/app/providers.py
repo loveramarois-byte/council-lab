@@ -4,8 +4,9 @@ import asyncio
 import ipaddress
 import os
 import socket
+import time
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -15,6 +16,7 @@ import httpx
 from .credentials import get_provider_secret
 from .models import (
     ProviderCapabilities,
+    ProviderAttempt,
     ProviderProfile,
     ProviderType,
     ProtocolMode,
@@ -82,6 +84,14 @@ class Generation:
     output_tokens: int = 0
     protocol: str = "mock"
     reasoning_effort_applied: str | None = None
+    attempts: list[ProviderAttempt] = field(default_factory=list)
+
+
+class ProviderRequestError(RuntimeError):
+    def __init__(self, message: str, attempts: list[ProviderAttempt], response: httpx.Response | None = None):
+        super().__init__(message)
+        self.attempts = attempts
+        self.response = response
 
 
 class ModelBackend:
@@ -234,16 +244,44 @@ class OpenAICompatibleProvider(ModelBackend):
             headers["Authorization"] = f"Bearer {key}"
         self.client = httpx.AsyncClient(base_url=self.base_url, headers=headers, timeout=profile.timeout_seconds)
 
-    async def _post_with_retry(self, path: str, payload: dict[str, Any]) -> httpx.Response:
+    async def _post_with_retry(self, path: str, payload: dict[str, Any]) -> tuple[httpx.Response, list[ProviderAttempt]]:
         retryable = {429, 500, 502, 503, 504}
         response: httpx.Response | None = None
+        attempts: list[ProviderAttempt] = []
         for attempt in range(self.profile.max_retries + 1):
-            response = await self.client.post(path, json=payload)
+            started = time.perf_counter()
+            try:
+                response = await self.client.post(path, json=payload)
+            except httpx.HTTPError as exc:
+                attempts.append(
+                    ProviderAttempt(
+                        provider_id=self.profile.id,
+                        provider_name=self.profile.display_name,
+                        model=str(payload.get("model", "unknown")),
+                        endpoint=path,
+                        attempt=attempt + 1,
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                        error_kind=type(exc).__name__,
+                    )
+                )
+                raise ProviderRequestError("Provider request could not be completed", attempts) from exc
+            attempts.append(
+                ProviderAttempt(
+                    provider_id=self.profile.id,
+                    provider_name=self.profile.display_name,
+                    model=str(payload.get("model", "unknown")),
+                    endpoint=path,
+                    attempt=attempt + 1,
+                    status_code=response.status_code,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    upstream_request_id=(response.headers.get("x-request-id") or response.headers.get("request-id") or response.headers.get("x-correlation-id")),
+                )
+            )
             if response.status_code not in retryable or attempt >= self.profile.max_retries:
-                return response
+                return response, attempts
             await asyncio.sleep(min(1.5 * (attempt + 1), 4.0))
         assert response is not None
-        return response
+        return response, attempts
 
     async def health_check(self) -> dict[str, Any]:
         try:
@@ -269,27 +307,38 @@ class OpenAICompatibleProvider(ModelBackend):
         protocol = self.profile.protocol_mode
         if protocol in (ProtocolMode.AUTO, ProtocolMode.RESPONSES):
             effort = self.profile.reasoning_effort if self.profile.capabilities.supports_reasoning_effort else None
-            response = await self._post_with_retry(
+            response, attempts = await self._post_with_retry(
                 "/responses",
                 build_responses_payload(prompt, system, model, effort),
             )
             if response.status_code in (404, 405, 501) and protocol == ProtocolMode.AUTO:
                 protocol = ProtocolMode.CHAT_COMPLETIONS
             elif response.status_code >= 400:
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise ProviderRequestError("Provider returned an unsuccessful response", attempts, response) from exc
             else:
                 data = response.json()
                 output = extract_responses_text(data)
                 if not output:
                     raise RuntimeError("Responses 接口成功但没有返回可用文本")
                 usage = data.get("usage") or {}
-                return Generation(output, usage.get("input_tokens", 0), usage.get("output_tokens", 0), "responses", effort)
-        response = await self._post_with_retry("/chat/completions", {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}], "temperature": temperature})
-        response.raise_for_status()
+                return Generation(output, usage.get("input_tokens", 0), usage.get("output_tokens", 0), "responses", effort, attempts)
+        chat_payload = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}], "temperature": temperature}
+        try:
+            response, chat_attempts = await self._post_with_retry("/chat/completions", chat_payload)
+        except ProviderRequestError as exc:
+            raise ProviderRequestError(str(exc), (attempts if "attempts" in locals() else []) + exc.attempts, exc.response) from exc
+        attempts = (attempts if "attempts" in locals() else []) + chat_attempts
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ProviderRequestError("Provider returned an unsuccessful response", attempts, response) from exc
         data = response.json()
         text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         usage = data.get("usage") or {}
-        return Generation(text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), "chat_completions")
+        return Generation(text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), "chat_completions", None, attempts)
 
     async def aclose(self) -> None:
         await self.client.aclose()

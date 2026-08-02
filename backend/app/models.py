@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import unicodedata
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, Literal
@@ -18,6 +21,7 @@ from pydantic import (
 
 CURRENT_ASSIGNMENT_SCHEMA_VERSION = 2
 OutputContractId = Literal["general_decision", "product_review", "technical_architecture"]
+CouncilMode = Literal["general", "traditional_culture"]
 
 
 def utc_now() -> datetime:
@@ -168,9 +172,129 @@ class RunLimits(BaseModel):
     timeout_seconds: int = Field(default=120, ge=1, le=900)
 
 
+class TraditionalCultureProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    calendar_type: Literal["solar"] = "solar"
+    birth_date: date
+    birth_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    time_precision: Literal["exact", "approximate"] = "exact"
+    gender: Literal["male", "female"]
+    birth_place: str = Field(default="", max_length=120)
+    timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
+    true_solar_time_applied: Literal[False] = False
+    focus_topics: list[Literal["temperament", "career", "relationships", "timing"]] = Field(
+        default_factory=list,
+        max_length=4,
+    )
+
+    @field_validator("birth_date")
+    @classmethod
+    def validate_birth_date(cls, value: date) -> date:
+        if value < date(1900, 1, 1) or value > date.today():
+            raise ValueError("出生日期必须在 1900-01-01 至今天之间")
+        return value
+
+    @field_validator("birth_place")
+    @classmethod
+    def validate_birth_place(cls, value: str) -> str:
+        if any(unicodedata.category(character).startswith("C") for character in value):
+            raise ValueError("出生地不能包含控制字符或不可见格式字符")
+        return value
+
+
+class TraditionalCultureEngine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: Literal["lunar-javascript", "iztro"]
+    version: str = Field(min_length=1, max_length=30)
+    source_url: str = Field(pattern=r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    license: Literal["MIT"] = "MIT"
+
+
+class TraditionalCultureCalendarFacts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    solar_datetime: str = Field(min_length=10, max_length=30)
+    lunar_date: str = Field(min_length=1, max_length=80)
+    zodiac: str = Field(min_length=1, max_length=20)
+    constellation: str = Field(min_length=1, max_length=30)
+    eight_char: str = Field(min_length=7, max_length=40)
+    pillars: list[Annotated[str, Field(min_length=1, max_length=12)]] = Field(min_length=4, max_length=4)
+    pillar_wuxing: list[Annotated[str, Field(min_length=1, max_length=12)]] = Field(min_length=4, max_length=4)
+    heavenly_stem_ten_gods: list[Annotated[str, Field(min_length=1, max_length=20)]] = Field(min_length=4, max_length=4)
+
+
+class TraditionalCultureZiweiPalace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(ge=0, le=11)
+    name: str = Field(min_length=1, max_length=20)
+    heavenly_stem: str = Field(min_length=1, max_length=4)
+    earthly_branch: str = Field(min_length=1, max_length=4)
+    is_body_palace: bool = False
+    is_original_palace: bool = False
+    major_stars: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(default_factory=list, max_length=20)
+    minor_stars: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(default_factory=list, max_length=30)
+    changsheng12: str = Field(default="", max_length=20)
+    decadal_range: list[Annotated[int, Field(ge=0, le=200)]] = Field(default_factory=list, max_length=2)
+
+
+class TraditionalCultureZiweiChart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    solar_date: str = Field(min_length=8, max_length=20)
+    lunar_date: str = Field(min_length=1, max_length=80)
+    chinese_date: str = Field(min_length=1, max_length=60)
+    time_label: str = Field(min_length=1, max_length=20)
+    time_range: str = Field(min_length=1, max_length=30)
+    five_elements_class: str = Field(min_length=1, max_length=30)
+    soul_star: str = Field(min_length=1, max_length=20)
+    body_star: str = Field(min_length=1, max_length=20)
+    soul_palace_branch: str = Field(min_length=1, max_length=4)
+    body_palace_branch: str = Field(min_length=1, max_length=4)
+    palaces: list[TraditionalCultureZiweiPalace] = Field(min_length=12, max_length=12)
+
+    @model_validator(mode="after")
+    def validate_palace_indexes(self) -> "TraditionalCultureZiweiChart":
+        if sorted(item.index for item in self.palaces) != list(range(12)):
+            raise ValueError("紫微十二宫索引必须完整且不能重复")
+        return self
+
+
+class TraditionalCultureSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    calculation_source: Literal["local_browser"] = "local_browser"
+    calculated_at: datetime
+    profile: TraditionalCultureProfile
+    engines: list[TraditionalCultureEngine] = Field(min_length=2, max_length=2)
+    calendar_facts: TraditionalCultureCalendarFacts
+    ziwei_chart: TraditionalCultureZiweiChart
+    notices: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, min_length=2, max_length=12)
+    snapshot_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def validate_provenance_and_hash(self) -> "TraditionalCultureSnapshot":
+        versions = {item.id: item.version for item in self.engines}
+        if versions != {"lunar-javascript": "1.7.7", "iztro": "2.5.8"}:
+            raise ValueError("传统文化计算引擎版本与当前发行版不一致")
+        canonical = json.dumps(
+            self.model_dump(mode="json", exclude={"snapshot_sha256"}),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        if hashlib.sha256(canonical).hexdigest() != self.snapshot_sha256:
+            raise ValueError("传统文化计算快照校验失败，请重新排盘")
+        return self
+
+
 class RunCreate(BaseModel):
     question: str = Field(min_length=3, max_length=12000)
     mode: Literal["quick", "standard", "rigorous"] = "standard"
+    council_mode: CouncilMode = "general"
     workflow_strategy: Literal["sequential", "independent"] = "sequential"
     provider_id: str = "mock"
     model: str | None = None
@@ -186,12 +310,31 @@ class RunCreate(BaseModel):
     selected_memory_ids: list[str] = Field(default_factory=list, max_length=20)
     readiness_override: bool = False
     readiness_override_reason: str = Field(default="", max_length=1000)
+    traditional_culture_snapshot: TraditionalCultureSnapshot | None = None
+    traditional_culture_consent: bool = False
     limits: RunLimits = Field(default_factory=RunLimits)
 
     @model_validator(mode="after")
     def validate_readiness_override(self) -> "RunCreate":
         if self.readiness_override and len(self.readiness_override_reason.strip()) < 3:
             raise ValueError("继续准备度不足的 Run 时必须说明原因")
+        if self.council_mode == "traditional_culture":
+            if not self.traditional_culture_consent or self.traditional_culture_snapshot is None:
+                raise ValueError("传统文化联合研判需要本地排盘快照和明确的数据发送确认")
+            if self.high_risk:
+                raise ValueError("传统文化联合研判不能与高风险决策支持同时启用")
+            if self.workflow_strategy != "independent":
+                raise ValueError("传统文化联合研判必须先由四席独立初答")
+            if self.template_id != "traditional_culture_review":
+                raise ValueError("传统文化联合研判必须使用专用审议模板")
+            if self.output_contract != "general_decision":
+                raise ValueError("传统文化联合研判不能生成决策或专业评审契约")
+            if self.auto_summarize:
+                raise ValueError("传统文化联合研判必须保留用户最终确认点")
+            if self.selected_memory_ids:
+                raise ValueError("传统文化联合研判不能注入历史决策记忆")
+        elif self.traditional_culture_snapshot is not None or self.traditional_culture_consent:
+            raise ValueError("普通圆桌不能携带传统文化出生资料")
         return self
 
 
@@ -276,6 +419,21 @@ class UsageSummary(BaseModel):
     output_tokens: int = 0
     estimated_cost: float | None = None
     duration_ms: int = 0
+
+
+class ProviderAttempt(BaseModel):
+    """A non-sensitive record of one HTTP request sent to a model provider."""
+
+    role: str = Field(default="", max_length=40)
+    provider_id: str = Field(min_length=1, max_length=80)
+    provider_name: str = Field(min_length=1, max_length=120)
+    model: str = Field(min_length=1, max_length=200)
+    endpoint: str = Field(min_length=1, max_length=120)
+    attempt: int = Field(ge=1, le=20)
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    duration_ms: int = Field(default=0, ge=0)
+    upstream_request_id: str | None = Field(default=None, max_length=300)
+    error_kind: str | None = Field(default=None, max_length=120)
 
 
 class ContextSnapshot(BaseModel):
@@ -698,6 +856,7 @@ class RunRecord(BaseModel):
     id: str
     question: str
     mode: str
+    council_mode: CouncilMode = "general"
     workflow_strategy: Literal["sequential", "independent"] = "sequential"
     provider_id: str
     model: str
@@ -717,6 +876,7 @@ class RunRecord(BaseModel):
     scores: list[JudgeScore] = Field(default_factory=list)
     final_decision: FinalDecision | None = None
     usage: UsageSummary = Field(default_factory=UsageSummary)
+    provider_attempts: list[ProviderAttempt] = Field(default_factory=list)
     error: str | None = None
     degraded: bool = False
     protocol: str = "mock"
@@ -745,3 +905,5 @@ class RunRecord(BaseModel):
     source_snapshots: list[RunSourceSnapshot] = Field(default_factory=list)
     memory_snapshot: list[RunMemorySnapshotItem] = Field(default_factory=list)
     decision_review: DecisionReview | None = None
+    traditional_culture_snapshot: TraditionalCultureSnapshot | None = None
+    traditional_culture_consent: bool = False

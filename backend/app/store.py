@@ -273,8 +273,11 @@ class Store:
                 if existing:
                     self.conn.commit()
                     return [MemoryProposal.model_validate_json(row[0]) for row in existing]
-                if not self.conn.execute("SELECT 1 FROM runs WHERE id=?", (source_run_id,)).fetchone():
+                source_row = self.conn.execute("SELECT payload FROM runs WHERE id=?", (source_run_id,)).fetchone()
+                if not source_row:
                     raise ValueError("source Run does not exist")
+                if RunRecord.model_validate_json(source_row[0]).council_mode == "traditional_culture":
+                    raise ValueError("传统文化解释不能沉淀为长期决策记忆")
                 for item in proposals:
                     self.conn.execute(
                         "INSERT INTO memory_proposals(id,workspace_id,source_run_id,payload_json,created_at) VALUES(?,?,?,?,?)",
@@ -320,6 +323,11 @@ class Store:
                 if not row:
                     raise ValueError("记忆候选不存在")
                 proposal = MemoryProposal.model_validate_json(row[0])
+                source_row = self.conn.execute(
+                    "SELECT payload FROM runs WHERE id=?", (proposal.source_run_id,)
+                ).fetchone()
+                if source_row and RunRecord.model_validate_json(source_row[0]).council_mode == "traditional_culture":
+                    raise ValueError("传统文化解释不能批准为长期决策记忆")
                 latest = self.conn.execute(
                     "SELECT action,memory_id FROM memory_actions WHERE proposal_id=? "
                     "AND action IN ('approved','rejected') ORDER BY sequence DESC LIMIT 1",

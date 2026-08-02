@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Landmark, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionClaimView, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, MemoryProposalView, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun } from "../../../lib/api";
+import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionClaimView, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, MemoryProposalView, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun, TraditionalCultureSnapshot } from "../../../lib/api";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
@@ -74,7 +74,7 @@ export default function RunDetailPage() {
     try {
       const nextRun = await api.run(params.id);
       setRun(nextRun);
-      if (nextRun.status === "completed") {
+      if (nextRun.status === "completed" && nextRun.council_mode !== "traditional_culture") {
         try { setDecisionBrief(await api.decisionBrief(params.id)); }
         catch (briefError) {
           if (briefError instanceof CouncilApiError && briefError.status === 404) setDecisionBrief(null);
@@ -94,7 +94,7 @@ export default function RunDetailPage() {
           setMemoryProposals((current) => proposals.length === 0 && current.length > 0 ? current : proposals);
           setMemoryDrafts((current) => ({ ...Object.fromEntries(proposals.map((item) => [item.proposal.id, item.proposal.content])), ...current }));
         } catch {}
-      } else { setDecisionBrief(null); setComparison(null); setClaims([]); }
+      } else { setDecisionBrief(null); setComparison(null); setClaims([]); setMemoryProposals([]); }
       if (highRiskProbeRef.current.runId !== params.id) {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
       }
@@ -193,6 +193,7 @@ export default function RunDetailPage() {
   const selectedParticipant = run?.participant_roles.find((item) => item.id === target) || null;
   const agentTurnCount = run?.discussion_turns.filter((turn) => turn.speaker_type === "agent").length || 0;
   const seatCount = run?.participant_roles.length || 4;
+  const traditionalMode = run?.council_mode === "traditional_culture";
   const summaryCallNumber = seatCount + 1;
   const expectedModelCalls = run?.analysis?.expected_model_calls || summaryCallNumber;
   const discussionComplete = agentTurnCount >= seatCount;
@@ -210,6 +211,8 @@ export default function RunDetailPage() {
   const runFailed = run?.status === "failed";
   const runStopped = run?.status === "stopped";
   const providerTokens = (run?.usage.input_tokens || 0) + (run?.usage.output_tokens || 0);
+  const providerAttempts = run?.provider_attempts || [];
+  const successfulProviderAttempts = providerAttempts.filter((item) => item.status_code !== null && item.status_code !== undefined && item.status_code >= 200 && item.status_code < 300).length;
   const runLimits = run?.limits || DEFAULT_RUN_LIMITS;
   const canResumeLimit = Boolean(runStopped && ["max_tokens", "max_model_calls"].includes(run?.limit_reason || ""));
   const suggestedTokenLimit = Math.min(100000, Math.max(40000, Math.ceil((providerTokens + 20000) / 10000) * 10000));
@@ -515,7 +518,7 @@ export default function RunDetailPage() {
   return <div ref={pageRef} className={`council-page ${immersive ? "immersive" : ""}`}>
     <header className="council-topbar">
       <Link href="/" className="back-link"><ArrowLeft size={15} />退出圆桌</Link>
-      <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {highRisk ? "高风险决策支持" : run.mode === "quick" ? "引导模式" : run.mode === "rigorous" ? "深挖模式" : "圆桌模式"}</div>
+      <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {traditionalMode ? "传统文化联合研判" : highRisk ? "高风险决策支持" : run.mode === "quick" ? "引导模式" : run.mode === "rigorous" ? "深挖模式" : "圆桌模式"}</div>
       <div className="council-top-actions"><button ref={immersiveTriggerRef} className="icon-button immersive-enter" type="button" aria-label="进入沉浸模式" title="进入沉浸模式" aria-pressed={immersive} onClick={enterImmersive}><Maximize2 size={16} /></button><a className="icon-button" href={runExportUrl(run.id, "markdown")} download title="下载 Markdown 报告" aria-label="下载 Markdown 报告"><Download size={15} /></a><a className="icon-button" href={runExportUrl(run.id, "html")} download title="下载 HTML 报告" aria-label="下载 HTML 报告"><FileCheck2 size={15} /></a><button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => { if (highRisk) void api.cancelHighRiskRun(run.id).then((value) => { setHighRisk(value); void refresh(); }); else void api.cancelRun(run.id).then(setRun); }} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button></div>
     </header>
 
@@ -529,7 +532,7 @@ export default function RunDetailPage() {
       </section>
 
       <section className="council-callboard" aria-label="AI 独立调用顺序">
-        <div className="callboard-meta"><Bot size={14} /><strong>{seatCount} 席顺序调用</strong><span>{run.analysis?.short_task_route ? "短任务精简路线" : "各席独立配置"}</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="成功模型调用的实际次数和系统预计总次数"><Gauge size={12} />调用 {run.usage.model_calls} / 预计 {expectedModelCalls}</span><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
+        <div className="callboard-meta"><Bot size={14} /><strong>{seatCount} 席顺序调用</strong><span className="api-attempt-meta" title={providerAttempts.length ? "实际发出的 Provider HTTP 请求，包含可重试请求。" : "此历史记录创建于请求审计上线前。"}><Gauge size={12} />API {providerAttempts.length ? `${successfulProviderAttempts} / ${providerAttempts.length} 成功` : "旧记录未采集"}</span><span>{run.analysis?.short_task_route ? "短任务精简路线" : "各席独立配置"}</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="成功模型调用的实际次数和系统预计总次数"><Gauge size={12} />调用 {run.usage.model_calls} / 预计 {expectedModelCalls}</span><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
         {run.workflow_strategy === "independent" && <p className="section-hint" role="status">独立初答：各席只读取冻结问题与共同资料；你的中途补充保留给最终总结。</p>}
         <div className="council-seats">
           {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} assignment={run.seat_assignments?.[index]} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
@@ -556,6 +559,7 @@ export default function RunDetailPage() {
         {Boolean(run.memory_snapshot?.length) && <div className="source-strip memory-snapshot-strip" aria-label="本次已批准记忆快照"><strong>已批准记忆</strong>{run.memory_snapshot!.map((item) => <span key={item.memory_id} title={`来源 Run ${item.source_run_id}`}><b>{item.type}</b>{item.content}</span>)}</div>}
 
         <div className="dialogue-scroll" ref={transcriptRef} aria-live="polite">
+          {traditionalMode && run.traditional_culture_snapshot && <TraditionalCultureSnapshotCard snapshot={run.traditional_culture_snapshot} />}
           <article className="opening-question"><span>你提出</span><p>{run.question}</p></article>
           {run.discussion_turns.map((turn) => <article key={turn.id} className={`discussion-turn ${turn.speaker_type} speaker-${turn.speaker_id}`}>
             <header><span className="speaker-avatar">{turn.speaker_type === "user" ? <UserRound size={15} /> : turn.speaker_name.slice(0, 1)}</span><div><strong>{turn.speaker_name}</strong><small>{turn.role_label || "参与者"} · 第 {turn.round} 轮{turn.provider_name ? ` · ${turn.provider_name} / ${turn.model}` : ""}{turn.reused_from_run_id ? " · 复用父 Run" : ""}</small></div></header>
@@ -578,7 +582,7 @@ export default function RunDetailPage() {
           {run.status === "completed" && comparison && <DecisionComparisonView comparison={comparison} />}
           {run.status === "completed" && run.final_decision && (decisionBrief
             ? <details className="roundtable-summary raw-summary"><summary>查看原始综合文本</summary><RichText content={run.final_decision.final_answer} /></details>
-            : <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>未经过外部事实核验</strong><small>模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。</small></span></div><RichText content={run.final_decision.final_answer} /></article>)}
+            : <article className="roundtable-summary"><header><Check size={16} /><span><strong>{traditionalMode ? "传统文化联合研判" : "圆桌最终答案"}</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>{traditionalMode ? "传统解释不属于科学验证" : "未经过外部事实核验"}</strong><small>{traditionalMode ? "本地计算可复现，但解释、预测和流派判断不能作为高风险决策依据。" : "模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。"}</small></span></div><RichText content={run.final_decision.final_answer} /></article>)}
         </div>
 
         {runFailed && <div className="failed-actions" role="alert">
@@ -605,7 +609,7 @@ export default function RunDetailPage() {
           {(error || run.error) && <p className="discussion-error">{error || run.error}</p>}
         </div>}
 
-        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button><button className="quiet-button" onClick={openMemory}><Save size={15} />沉淀记忆</button>{lineage.parent && <Link className="quiet-button" href={`/runs/${lineage.parent.parent_run_id}`}><GitBranch size={15} />父 Run</Link>}{lineage.children.length > 0 && <span className="fork-child-count">{lineage.children.length} 个分支</span>}<span /><button className="quiet-button" onClick={() => { setForkError(""); setForkOpen(true); }}><GitBranch size={15} />创建情景分叉</button><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
+        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a>{!traditionalMode && <><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button><button className="quiet-button" onClick={openMemory}><Save size={15} />沉淀记忆</button></>}{lineage.parent && <Link className="quiet-button" href={`/runs/${lineage.parent.parent_run_id}`}><GitBranch size={15} />父 Run</Link>}{lineage.children.length > 0 && <span className="fork-child-count">{lineage.children.length} 个分支</span>}<span /><button className="quiet-button" onClick={() => { setForkError(""); setForkOpen(true); }}><GitBranch size={15} />创建情景分叉</button><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
       </section>
     </main>
     {highRisk && highRiskOpen && <div className="high-risk-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setHighRiskOpen(false); }}>
@@ -882,6 +886,16 @@ function Seat({ participant, assignment, index, selected, status, onSelect }: { 
     <span className="seat-copy"><strong>{participant.name}</strong><small title={assignment ? `${assignment.provider_name} / ${assignment.model}` : participant.role}>{assignment ? `${assignment.provider_name} · ${assignment.model}` : participant.role}</small></span>
     <span className="seat-status">{status === "completed" ? <CheckCircle2 size={12} /> : status === "active" ? <LoaderCircle className="spin" size={12} /> : status === "failed" ? <AlertTriangle size={12} /> : null}{statusLabel}</span>
   </button>;
+}
+
+function TraditionalCultureSnapshotCard({ snapshot }: { snapshot: TraditionalCultureSnapshot }) {
+  const facts = snapshot.calendar_facts;
+  const chart = snapshot.ziwei_chart;
+  return <article className="traditional-snapshot-card" aria-label="传统文化本地计算快照">
+    <header><Landmark size={17} /><div><strong>本地计算快照</strong><small>计算字段可复现 · 传统解释未经过科学验证</small></div><span>SHA-256 {snapshot.snapshot_sha256.slice(0, 12)}…</span></header>
+    <div className="traditional-facts"><section><span>四柱</span><strong>{facts.eight_char}</strong><small>{facts.pillar_wuxing.join(" · ")}</small></section><section><span>历法</span><strong>{facts.lunar_date}</strong><small>{facts.zodiac} · {facts.constellation}</small></section><section><span>紫微</span><strong>{chart.five_elements_class}</strong><small>命主 {chart.soul_star} · 身主 {chart.body_star}</small></section></div>
+    <details><summary>查看十二宫与计算来源</summary><div className="traditional-palaces">{chart.palaces.map((palace) => <section key={palace.index}><header><strong>{palace.name}</strong><span>{palace.heavenly_stem}{palace.earthly_branch}{palace.is_original_palace ? " · 来因宫" : ""}{palace.is_body_palace ? " · 身宫" : ""}</span></header><p>{palace.major_stars.join("、") || "无主星"}</p></section>)}</div><footer>{snapshot.engines.map((engine) => <a key={engine.id} href={engine.source_url} target="_blank" rel="noreferrer">{engine.id}@{engine.version} · {engine.license}</a>)}</footer></details>
+  </article>;
 }
 
 function RichText({ content }: { content: string }) {

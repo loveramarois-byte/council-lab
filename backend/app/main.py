@@ -734,8 +734,26 @@ async def delete_project_source(project_id: str, source_id: str, response: Respo
 
 
 @app.get("/api/runs")
-async def list_runs():
-    return await store.list_runs()
+async def list_runs(summary: bool = False):
+    runs = await store.list_runs()
+    if not summary:
+        return runs
+    return [
+        {
+            "id": run.id,
+            "question": run.question,
+            "mode": run.mode,
+            "council_mode": run.council_mode,
+            "status": run.status,
+            "created_at": run.created_at,
+            "provider_id": run.provider_id,
+            "participant_roles": run.participant_roles,
+            "seat_assignments": run.seat_assignments,
+            "usage": run.usage,
+            "has_final_decision": run.final_decision is not None,
+        }
+        for run in runs
+    ]
 
 
 @app.get("/api/runs/compare", response_model=DecisionBriefComparison)
@@ -801,6 +819,8 @@ async def create_run_memory_proposals(run_id: RunIdPath):
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
+    if run.council_mode == "traditional_culture":
+        raise HTTPException(409, "传统文化解释不能沉淀为长期决策记忆")
     if run.status != "completed":
         raise HTTPException(409, "Run 完成并生成结构化简报后才能提出长期记忆")
     brief = await store.get_decision_brief(run_id)
@@ -812,8 +832,11 @@ async def create_run_memory_proposals(run_id: RunIdPath):
 
 @app.get("/api/runs/{run_id}/memory-proposals", response_model=list[MemoryProposalView])
 async def list_run_memory_proposals(run_id: RunIdPath):
-    if not await store.get_run(run_id):
+    run = await store.get_run(run_id)
+    if not run:
         raise HTTPException(404, "运行记录不存在")
+    if run.council_mode == "traditional_culture":
+        raise HTTPException(409, "传统文化解释不能沉淀为长期决策记忆")
     return await store.list_memory_proposals(run_id)
 
 
@@ -936,14 +959,17 @@ async def advance_run(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     await high_risk_service.assert_normal_action_allowed(run_id, "advance", actor_header)
-    return await execute_idempotent_run_action(
-        store,
-        f"runs:{run_id}:advance",
-        idempotency_key,
-        request.model_dump(mode="json"),
-        lambda: orchestrator.advance(run_id, request),
-        response,
-    )
+    try:
+        return await execute_idempotent_run_action(
+            store,
+            f"runs:{run_id}:advance",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            lambda: orchestrator.advance(run_id, request),
+            response,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/runs/{run_id}/interject")
@@ -955,14 +981,17 @@ async def interject_run(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     await high_risk_service.assert_normal_action_allowed(run_id, "interject", actor_header)
-    return await execute_idempotent_run_action(
-        store,
-        f"runs:{run_id}:interject",
-        idempotency_key,
-        request.model_dump(mode="json"),
-        lambda: orchestrator.interject(run_id, request),
-        response,
-    )
+    try:
+        return await execute_idempotent_run_action(
+            store,
+            f"runs:{run_id}:interject",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            lambda: orchestrator.interject(run_id, request),
+            response,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/runs/{run_id}/retry-turn")
@@ -1057,6 +1086,7 @@ async def rerun(
             RunCreate(
                 question=source.question,
                 mode=source.mode,
+                council_mode=source.council_mode,
                 workflow_strategy=source.workflow_strategy,
                 provider_id=source.provider_id,
                 model=source.model,
@@ -1067,6 +1097,8 @@ async def rerun(
                 include_project_history=True,
                 template_id=source.template_id,
                 output_contract=source.output_contract,
+                traditional_culture_snapshot=source.traditional_culture_snapshot,
+                traditional_culture_consent=source.traditional_culture_consent,
             ),
             frozen_sources=source.source_snapshots,
             frozen_project_name=source.project_name,
@@ -1095,6 +1127,8 @@ async def save_decision_review(
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
+    if run.council_mode == "traditional_culture":
+        raise HTTPException(409, "传统文化解释不能记录为可验证的决策回访")
     if run.status != "completed" or not run.final_decision:
         raise HTTPException(409, "圆桌完成后才能记录结果回访")
     async def append_review():

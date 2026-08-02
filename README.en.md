@@ -13,6 +13,7 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **Independent seat configuration.** Choose a provider and model for each of the four speakers and the finalizer; the configuration is snapshotted per run.
 - **A deliberate confirmation point.** Council does not finalize after seat four until you approve or add more context.
 - **High-risk decision gates.** Medical, legal, investment, compliance, and production-incident runs require time-bounded evidence, independent verification, domain-matched professional review, a separate final approver, and append-only audit records.
+- **Traditional-culture joint analysis.** Version-pinned local engines freeze a reproducible calendar/chart snapshot before four specialist seats independently check the calculation, interpret traditions, compare schools, and challenge unfalsifiable claims.
 - **Explicit first-run setup.** Council distinguishes the local scripted demo from real AI, then guides users through connecting a Provider and assigning all five seats.
 - **Decision follow-up.** Record the decision taken, expected result, review date, actual outcome, and which seat hypotheses held up.
 - **Recoverable runs.** SQLite persistence and LangGraph checkpoints preserve progress across restarts and enforced run limits.
@@ -27,6 +28,12 @@ Council is a local-first, human-participatory AI deliberation workspace. Four se
 - **Reproducible evaluation.** A 12-case benchmark compares direct, extended-direct, self-refine, same-model Council, and cross-model Council runs with repeated, shuffled trials and execution confidence intervals. Mock or incomplete blind reviews cannot support quality claims.
 
 Council never displays or saves hidden chain-of-thought. It stores only public model responses and run metadata. It does not currently run web searches or a code sandbox, and model agreement is **not** external fact verification.
+
+## Traditional-culture mode
+
+This optional mode calculates a local snapshot with `lunar-javascript@1.7.7` and `iztro@2.5.8`, then freezes engine provenance and a SHA-256 digest with the Run. Birth data is processed in the browser first; chart fields and required birth parameters enter configured model context only after explicit consent, while the optional birthplace remains local and is never sent to model seats. The current scope uses solar dates, `Asia/Shanghai` civil time, no true-solar-time adjustment, and no name field.
+
+The mode studies traditional rules and interpretations; it does not establish scientific validity. It cannot be combined with high-risk controls, automatic finalization, prior decision memory, or specialized decision contracts. Traditional interpretations do not become DecisionBrief records, verified claims, decision follow-ups, or long-term memory. Medical, legal, investment, compliance, and production-action intent is rejected server-side. See [the mode boundary](docs/TRADITIONAL_CULTURE_MODE.md) and [third-party notices](NOTICE).
 
 ## High-risk mode
 
@@ -139,6 +146,6 @@ Council opens at <http://localhost:3000>. Linux is supported through the source 
 
 Provider keys stay in macOS Keychain, Windows Credential Manager, or Linux Secret Service. Browsers use the same-origin Next.js proxy only; every FastAPI route except health requires a launcher-generated server token and rejects foreign origins, cross-site fetch metadata, and unknown hosts. CORS is not treated as CSRF protection. Local runs and compatibility data retained from older releases may contain sensitive material; protect the local account and review content before sharing an exported report. For troubleshooting, prefer the [redacted diagnostics bundle](docs/DIAGNOSTICS.md) and inspect it before sending.
 
-Version `0.13.0` is intended for personal research, planning, and non-binding decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
+Version `0.14.0` is intended for personal research, planning, and non-binding decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
 
 Apache-2.0. See [LICENSE](LICENSE), [SECURITY.md](SECURITY.md), and [CONTRIBUTING.md](CONTRIBUTING.md).

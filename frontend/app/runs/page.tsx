@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { ArrowUpRight, Filter, LoaderCircle, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, Run } from "../../lib/api";
+import { api, Run, RunSummary } from "../../lib/api";
 
 const PAGE_SIZE = 30;
 
 export default function RunsPage() {
-  const [runs, setRuns] = useState<Run[] | null>(null);
+  const [runs, setRuns] = useState<RunSummary[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -50,13 +50,13 @@ export default function RunsPage() {
       {runs === null ? <div className="empty-state run-loading" role="status"><LoaderCircle className="spin" size={22} /><h2>正在读取历史记录</h2><p>本地记录较多时可能需要片刻。</p></div>
         : loadError ? <div className="empty-state"><span className="empty-number">!</span><h2>历史记录暂时无法读取</h2><p>{loadError}</p><button className="text-action" onClick={load}>重新读取</button></div>
         : filtered.length === 0 ? <div className="empty-state"><span className="empty-number">00</span><h2>{runs.length === 0 ? "还没有审议记录" : "没有匹配的审议记录"}</h2><p>{runs.length === 0 ? "从一个具体问题开始，答案会在这里留下轨迹。" : "调整搜索词或状态筛选后再试。"}</p>{runs.length === 0 && <Link href="/" className="text-action">开始第一份审议 <ArrowUpRight size={14} /></Link>}</div>
-        : <>{visibleRuns.map((run) => <article key={run.id} className="run-row"><div className="row-marker"><span className={`status-pill-dot status-${run.status}`} /></div><div className="row-main"><Link href={`/runs/${run.id}`} className="row-question">{run.question}</Link><div className="row-meta"><span>{run.mode === "standard" ? "标准" : run.mode === "quick" ? "快速" : "严谨"}</span><span>{new Date(run.created_at).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span><span>{activeProviderCount(run)} 个 Provider</span></div></div><div className="row-status">{runStatusLabel(run.status)}<small>{run.final_decision ? "未外部核验 · " : ""}{run.usage.model_calls} 次调用 · {(run.usage.input_tokens + run.usage.output_tokens).toLocaleString()} Token</small></div><button className="icon-button row-delete" onClick={() => remove(run.id)} title="删除记录"><Trash2 size={15} /></button><ArrowUpRight className="row-arrow" size={17} /></article>)}
+        : <>{visibleRuns.map((run) => <article key={run.id} className="run-row"><div className="row-marker"><span className={`status-pill-dot status-${run.status}`} /></div><div className="row-main"><Link href={`/runs/${run.id}`} className="row-question">{run.question}</Link><div className="row-meta"><span>{run.mode === "standard" ? "标准" : run.mode === "quick" ? "快速" : "严谨"}</span><span>{new Date(run.created_at).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span><span>{activeProviderCount(run)} 个 Provider</span></div></div><div className="row-status">{runStatusLabel(run.status)}<small>{run.has_final_decision ? "未外部核验 · " : ""}{run.usage.model_calls} 次调用 · {(run.usage.input_tokens + run.usage.output_tokens).toLocaleString()} Token</small></div><button className="icon-button row-delete" onClick={() => remove(run.id)} title="删除记录"><Trash2 size={15} /></button><ArrowUpRight className="row-arrow" size={17} /></article>)}
           {visibleCount < filtered.length && <div className="run-load-more"><button className="text-action" onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}>加载更多（已显示 {visibleRuns.length} / {filtered.length}）</button></div>}</>}
     </div>
   </div>;
 }
 
-function activeProviderCount(run: Run): number {
+function activeProviderCount(run: RunSummary): number {
   const activeRoles = new Set(run.participant_roles.map((participant) => participant.id));
   const assignments = run.seat_assignments?.filter((assignment) => activeRoles.size === 0 || activeRoles.has(assignment.role)) || [];
   return new Set(assignments.length > 0 ? assignments.map((assignment) => assignment.provider_id) : [run.provider_id]).size;

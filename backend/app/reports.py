@@ -124,12 +124,47 @@ def _decision_claims_markdown(claims: list[DecisionClaimView]) -> list[str]:
     return lines
 
 
+def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
+    snapshot = run.traditional_culture_snapshot
+    if snapshot is None:
+        return []
+    profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
+    lines = [
+        "## 传统文化本地计算快照",
+        "",
+        "> 排盘字段来自版本化本地开源引擎，可按相同输入复现；传统解释、预测和流派判断不属于科学验证，不得用于医疗、法律、投资、合规或生产决策。",
+        "",
+        f"- 输入：{profile.birth_date.isoformat()} {profile.birth_time}；排盘参数：{'男' if profile.gender == 'male' else '女'}；时间精度：{'准确' if profile.time_precision == 'exact' else '约数'}",
+        f"- 时区：{profile.timezone} 民用时；真太阳时：未应用；出生地记录：{profile.birth_place or '未提供'}",
+        f"- 公历：{facts.solar_datetime}",
+        f"- 农历：{facts.lunar_date}；生肖：{facts.zodiac}；星座：{facts.constellation}",
+        f"- 四柱：{facts.eight_char}",
+        f"- 柱五行：{' / '.join(facts.pillar_wuxing)}",
+        f"- 天干十神：{' / '.join(facts.heavenly_stem_ten_gods)}",
+        f"- 紫微：{chart.five_elements_class}；命主：{chart.soul_star}；身主：{chart.body_star}；命宫地支：{chart.soul_palace_branch}；身宫地支：{chart.body_palace_branch}",
+        f"- 快照 SHA-256：`{snapshot.snapshot_sha256}`",
+        "",
+        "### 计算引擎与来源",
+        "",
+        *[f"- [{engine.id}@{engine.version}]({engine.source_url}) · {engine.license}" for engine in snapshot.engines],
+        "",
+        "### 紫微十二宫",
+        "",
+    ]
+    for palace in chart.palaces:
+        markers = [label for enabled, label in ((palace.is_original_palace, "来因宫"), (palace.is_body_palace, "身宫")) if enabled]
+        marker = f"（{'、'.join(markers)}）" if markers else ""
+        lines.append(f"- {palace.name}{marker} · {palace.heavenly_stem}{palace.earthly_branch} · {('、'.join(palace.major_stars) or '无主星')}")
+    return [*lines, ""]
+
+
 def run_markdown(
     run: RunRecord,
     high_risk: HighRiskRun | None = None,
     decision_brief: DecisionBrief | None = None,
     decision_claims: list[DecisionClaimView] | None = None,
 ) -> str:
+    successful_attempts = sum(1 for item in run.provider_attempts if item.status_code is not None and 200 <= item.status_code < 300)
     lines = [
         f"# {run.question}",
         "",
@@ -140,6 +175,7 @@ def run_markdown(
         f"- 创建时间：{run.created_at.isoformat()}",
         f"- 发言策略：{'先独立初答' if run.workflow_strategy == 'independent' else '连续审议'}",
         f"- 模型调用：{run.usage.model_calls}",
+        f"- 实际 API 请求：{len(run.provider_attempts)}（成功 {successful_attempts}）" if run.provider_attempts else "- 实际 API 请求：旧记录未采集",
         f"- Token：{run.usage.input_tokens + run.usage.output_tokens}",
         "",
     ]
@@ -167,6 +203,7 @@ def run_markdown(
             lines.append(f"- {fact.name}：{fact.verification_status}；来源：{source}；时间：{timestamp}")
         if high_risk.required_facts:
             lines.append("")
+    lines.extend(_traditional_snapshot_markdown(run))
     if run.source_snapshots:
         lines.extend(["## 资料快照", ""])
         for index, source in enumerate(run.source_snapshots, 1):
@@ -188,10 +225,13 @@ def run_markdown(
         provider = f" · {turn.provider_name} / {turn.model}" if turn.provider_name else ""
         lines.extend([f"### {turn.speaker_name} · {turn.role_label}{provider}", "", turn.content, ""])
     if run.final_decision:
+        traditional = run.council_mode == "traditional_culture"
         lines.extend([
-            "## 圆桌最终答案",
+            "## 传统文化联合研判" if traditional else "## 圆桌最终答案",
             "",
-            "> **未经过外部事实核验。** 模型共识不等于事实；关键结论请使用第一方资料或可复现测试核对。",
+            "> **传统解释不属于科学验证。** 本地计算可复现，但解释、预测和流派判断不能作为高风险决策依据。"
+            if traditional
+            else "> **未经过外部事实核验。** 模型共识不等于事实；关键结论请使用第一方资料或可复现测试核对。",
             "",
             run.final_decision.final_answer,
             "",
@@ -222,6 +262,37 @@ def run_markdown(
         "",
     ])
     return "\n".join(lines)
+
+
+def _traditional_snapshot_html(run: RunRecord) -> str:
+    snapshot = run.traditional_culture_snapshot
+    if snapshot is None:
+        return ""
+    profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
+    engines = "".join(
+        f"<li><a href='{escape(engine.source_url)}'>{escape(engine.id)}@{escape(engine.version)}</a> · {escape(engine.license)}</li>"
+        for engine in snapshot.engines
+    )
+    palaces = "".join(
+        "<li>"
+        f"<strong>{escape(palace.name)}</strong>"
+        f"{'（来因宫）' if palace.is_original_palace else ''}{'（身宫）' if palace.is_body_palace else ''} · "
+        f"{escape(palace.heavenly_stem + palace.earthly_branch)} · {escape('、'.join(palace.major_stars) or '无主星')}</li>"
+        for palace in chart.palaces
+    )
+    return (
+        "<section class='traditional-snapshot'><h2>传统文化本地计算快照</h2>"
+        "<aside class='verification-warning'><strong>计算字段可复现，传统解释不属于科学验证。</strong> "
+        "不得用于医疗、法律、投资、合规或生产决策。</aside>"
+        f"<p><strong>输入：</strong>{profile.birth_date.isoformat()} {escape(profile.birth_time)} · {'男' if profile.gender == 'male' else '女'} · "
+        f"{'准确时间' if profile.time_precision == 'exact' else '约数时间'} · {escape(profile.timezone)} 民用时 · 未应用真太阳时</p>"
+        f"<p><strong>出生地记录：</strong>{escape(profile.birth_place or '未提供')}</p>"
+        f"<p><strong>公历：</strong>{escape(facts.solar_datetime)}<br><strong>农历：</strong>{escape(facts.lunar_date)} · {escape(facts.zodiac)} · {escape(facts.constellation)}</p>"
+        f"<p><strong>四柱：</strong>{escape(facts.eight_char)}<br><strong>柱五行：</strong>{escape(' / '.join(facts.pillar_wuxing))}<br><strong>天干十神：</strong>{escape(' / '.join(facts.heavenly_stem_ten_gods))}</p>"
+        f"<p><strong>紫微：</strong>{escape(chart.five_elements_class)} · 命主 {escape(chart.soul_star)} · 身主 {escape(chart.body_star)} · 命宫 {escape(chart.soul_palace_branch)} · 身宫 {escape(chart.body_palace_branch)}</p>"
+        f"<p><strong>快照 SHA-256：</strong><code>{escape(snapshot.snapshot_sha256)}</code></p>"
+        f"<h3>计算引擎与来源</h3><ul>{engines}</ul><h3>紫微十二宫</h3><ul>{palaces}</ul></section>"
+    )
 
 
 def _decision_brief_html(brief: DecisionBrief) -> str:
@@ -340,11 +411,23 @@ def run_html(
         f"<br><code>{escape(source.sha256)}</code><pre>{escape(source.content)}</pre></article>"
         for index, source in enumerate(run.source_snapshots, 1)
     )
+    traditional = run.council_mode == "traditional_culture"
+    successful_attempts = sum(1 for item in run.provider_attempts if item.status_code is not None and 200 <= item.status_code < 300)
+    request_summary = (
+        f" · 实际 API 请求 {len(run.provider_attempts)}（成功 {successful_attempts}）"
+        if run.provider_attempts
+        else " · 实际 API 请求：旧记录未采集"
+    )
     answer = (
-        "<section class='answer'><h2>圆桌最终答案</h2>"
-        "<aside class='verification-warning'><strong>未经过外部事实核验。</strong> "
-        "模型共识不等于事实；关键结论请使用第一方资料或可复现测试核对。</aside>"
-        f"<p>{escape(run.final_decision.final_answer).replace(chr(10), '<br>')}</p></section>"
+        f"<section class='answer'><h2>{'传统文化联合研判' if traditional else '圆桌最终答案'}</h2>"
+        + (
+            "<aside class='verification-warning'><strong>传统解释不属于科学验证。</strong> "
+            "本地计算可复现，但解释、预测和流派判断不能作为高风险决策依据。</aside>"
+            if traditional
+            else "<aside class='verification-warning'><strong>未经过外部事实核验。</strong> "
+            "模型共识不等于事实；关键结论请使用第一方资料或可复现测试核对。</aside>"
+        )
+        + f"<p>{escape(run.final_decision.final_answer).replace(chr(10), '<br>')}</p></section>"
         if run.final_decision
         else ""
     )
@@ -388,11 +471,12 @@ def run_html(
         )
     brief_section = _decision_brief_html(decision_brief) if decision_brief else ""
     claims_section = _decision_claims_html(decision_claims or [])
+    traditional_section = _traditional_snapshot_html(run)
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(run.question)} · Council</title><style>
     body{{max-width:860px;margin:48px auto;padding:0 24px;color:#292724;font:15px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;background:#f7f3ee}}
-    header,.answer,article,.sources,.review,.high-risk,.decision-brief,.decision-claims{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:18px 0 9px}}small,header p,.sources span,.support-note,.decision-claims small{{display:block;color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.decision-brief{{border-left:4px solid #456d64}}.decision-claims{{border-left:4px solid #987137}}.decision-claims li{{margin:10px 0}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
-</style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape('先独立初答' if run.workflow_strategy == 'independent' else '连续审议')} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}</p></header>
-    {high_risk_section}{f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
+    header,.answer,article,.sources,.review,.high-risk,.decision-brief,.decision-claims,.traditional-snapshot{{background:#fffdf9;border:1px solid #ded7cd;padding:22px 26px;margin:0 0 14px;border-radius:7px}}h1{{font:400 30px/1.25 Georgia,serif}}h2{{font:500 20px Georgia,serif}}h3{{font-size:15px;margin:18px 0 9px}}small,header p,.sources span,.support-note,.decision-claims small{{display:block;color:#756f67}}p{{white-space:normal}}.answer{{border-left:4px solid #c76645}}.traditional-snapshot{{border-left:4px solid #8b7247}}.decision-brief{{border-left:4px solid #456d64}}.decision-claims{{border-left:4px solid #987137}}.decision-claims li{{margin:10px 0}}.verification-warning{{background:#fff4df;border:1px solid #d9a54b;color:#61420d;padding:12px 14px;margin:0 0 16px;border-radius:5px}}.high-risk{{border-left:4px solid #a8333e}}code{{font-size:11px;color:#756f67;overflow-wrap:anywhere}}pre{{white-space:pre-wrap;font:13px/1.6 ui-monospace,monospace;border-top:1px solid #e6dfd5;padding-top:14px}}footer{{color:#756f67;font-size:12px;padding:18px 0}}
+</style></head><body><header><h1>{escape(run.question)}</h1><p>{escape(run.template_name)} · {escape('先独立初答' if run.workflow_strategy == 'independent' else '连续审议')} · {escape(run.project_name or '独立审议')} · {run.created_at.date().isoformat()}{escape(request_summary)}</p></header>
+    {high_risk_section}{traditional_section}{f"<section class='sources'><h2>资料快照</h2>{sources}</section>" if sources else ""}
     {brief_section}{claims_section}<section><h2>公开讨论</h2>{transcript}</section>{answer}{review}<footer>由 Council Lab 导出。模型共识不等于事实验证；关键结论请核对第一方资料。</footer></body></html>"""

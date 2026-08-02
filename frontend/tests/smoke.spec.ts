@@ -91,7 +91,7 @@ test("创建请求断线后使用同一幂等键重试", async ({ page }) => {
   await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
   const keys: string[] = [];
   let attempts = 0;
-  await page.route("**/api/runs", async (route) => {
+  await page.route(/\/api\/runs$/, async (route) => {
     attempts += 1;
     keys.push(route.request().headers()["idempotency-key"] || "");
     if (attempts === 1) return route.abort("connectionreset");
@@ -1192,7 +1192,7 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
     id: "decision-brief-fixture", question: "是否应该发布这个版本？", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "high",
     status: "completed", created_at: now, updated_at: now, analysis: null, candidates: [], critiques: [], verifications: [], revisions: [], scores: [],
     final_decision: { final_answer: "先做小范围发布，并保留回滚开关。", key_reasons: [], verified_claims: [], partially_verified_claims: [], contradicted_claims: [], unverified_claims: ["需求未核验"], disagreements: ["预算不足"], risks_and_limitations: ["模型共识不等于事实验证。"], confidence: { level: "unverified", explanation: "不提供百分比置信度" }, sources: [], provider_summary: { provider: "Mock", protocol: "mock", model: "council-mock", used_ccswitch: false, degraded: false }, usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 100 } },
-    usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 100 }, degraded: false, protocol: "mock", workflow_engine: "langgraph", checkpoint_count: 4,
+    usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 100 }, provider_attempts: Array.from({ length: 5 }, (_, index) => ({ role: "analyst", provider_id: "compatible", provider_name: "Compatible", model: "test-model", endpoint: "/responses", attempt: index + 1, status_code: 200, duration_ms: 20 })), degraded: false, protocol: "mock", workflow_engine: "langgraph", checkpoint_count: 4,
     context_snapshot: { strategy: "deterministic_context_clipping", token_budget: 4000, estimated_tokens: 300, included_turns: 4, total_turns: 4, compacted: false, summary: "" },
     limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, discussion_turns: [], participant_roles: [{ id: "analyst", name: "析理", role: "拆解者", brief: "拆解" }, { id: "challenger", name: "诘问", role: "挑战者", brief: "反例" }],
     seat_assignments: [], finalizer_assignment: null, current_speaker_index: 2, discussion_round: 1, awaiting_user: false, auto_summarize: false, high_risk_control: false, recoverable: false, limit_reason: null,
@@ -1218,6 +1218,7 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
   await expect(card).toContainText("预算上限尚未确认");
   await expect(card).toContainText("少数意见");
   await expect(card).toContainText("不代表事实正确概率");
+  await expect(page.getByText("API 5 / 5 成功", { exact: true })).toBeVisible();
   await expect(page.getByText("查看原始综合文本")).toBeVisible();
   await expect(page.locator(".completed-actions").getByRole("link", { name: "Markdown" })).toHaveAttribute("href", `/api/runs/${run.id}/export?format=markdown`);
   const viewport = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
@@ -1285,7 +1286,7 @@ test("大量历史记录分批显示且加载期间不闪烁空状态", async ({
   }));
   let releaseResponse: (() => void) | undefined;
   const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
-  await page.route("**/api/runs", async (route) => {
+  await page.route(/\/api\/runs\?summary=true$/, async (route) => {
     await responseGate;
     return route.fulfill({ json: runs });
   });
@@ -1311,7 +1312,7 @@ test("历史页明确区分空记录、无匹配和读取失败", async ({ page 
     limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, seat_assignments: [], auto_summarize: false, high_risk_control: false, recoverable: false,
   }];
   let responseMode: "empty" | "one" | "error" = "empty";
-  await page.route("**/api/runs", (route) => responseMode === "error"
+  await page.route(/\/api\/runs\?summary=true$/, (route) => responseMode === "error"
     ? route.fulfill({ status: 503, json: { error: { message: "本地数据库暂时忙" } } })
     : route.fulfill({ json: responseMode === "one" ? oneRun : [] }));
 
