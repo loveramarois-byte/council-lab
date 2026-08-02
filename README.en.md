@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/data-local--first-2f855a" alt="Local first">
 </p>
 
-<p align="center"><a href="README.md">中文说明</a> · <a href="https://github.com/loveramarois-byte/council-lab">GitHub</a> · <a href="https://gitee.com/bbbbo-liu/council-lab">Gitee</a> · <a href="#download-and-run">Download</a> · <a href="docs/INSTALL.md">Install guide</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
+<p align="center"><a href="README.md">中文说明</a> · <a href="https://github.com/loveramarois-byte/council-lab">GitHub</a> · <a href="https://gitee.com/bbbbo-liu/council-lab">Gitee</a> · <a href="#traditional-culture-council">Traditional culture</a> · <a href="#download-and-run">Download</a> · <a href="docs/INSTALL.md">Install guide</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
 ![Council Lab workspace: four AI seats deliberating one question](docs/images/roundtable-v2.png)
 
@@ -82,6 +82,21 @@ Short definitions and deterministic arithmetic can use one discussion seat plus 
 | **Local Demo** | First launch and offline testing | Fixed Mock responses; it is not evidence of real-model quality. |
 | **Real provider** | Research, planning, and complex discussions | Your question and public context go to the selected service and may incur charges. Agreement is not fact verification. |
 | **CC Switch** | Existing local model routing | Council only uses route state it can observe; it does not read or modify CC Switch credentials. |
+
+## Traditional Culture Council
+
+Instead of asking one model for a definitive reading, Council turns traditional-culture research into an inspectable workflow that ends with human confirmation:
+
+`local chart snapshot -> select reference directions -> four-seat research -> calendar check -> source comparison -> school comparison -> falsification -> your confirmation`
+
+- **Local and reproducible**: the calendar and chart snapshot are generated in the browser and version-pinned. Birthplace is not sent to model seats.
+- **Four-seat review**: seats inspect the same snapshot, compare sources and interpretive schools, and actively look for counterexamples.
+- **Selectable references**: chosen directions become part of the frozen snapshot, model context, result page, and exported report.
+- **No invented sourcing**: Council sends title, topic, and school metadata only. It does not bundle classical texts or present an index as a quotation.
+
+Available directions include *Qiong Tong Bao Dian* (also known as *Qiong Tong Bao Jian*), *San Ming Tong Hui*, *Di Tian Sui*, *Yuan Hai Zi Ping*, *Qian Li Ming Gao*, *Xie Ji Bian Fang Shu*, *Guo Lao Xing Zong*, *Zi Ping Zhen Quan*, *Shen Feng Tong Kao*, *Zhou Yi*, *Zi Wei Dou Shu Quan Shu*, *Xing Ping Hui Hai*, *Ming Li Yue Yan*, *Zao Hua Yuan Yue*, and *Bu Shi Zheng Zong*.
+
+These are research indexes, not bundled full text, automatic citations, or scientific validation. Traditional interpretation and prediction must not be used as medical, legal, investment, compliance, or production guidance. See the full [Traditional Culture Mode boundary](docs/TRADITIONAL_CULTURE_MODE.md).
 
 ## Read the boundaries first
 

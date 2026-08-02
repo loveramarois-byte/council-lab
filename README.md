@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/data-local--first-2f855a" alt="Local first">
 </p>
 
-<p align="center"><a href="README.en.md">English</a> · <a href="https://github.com/loveramarois-byte/council-lab">GitHub</a> · <a href="https://gitee.com/bbbbo-liu/council-lab">Gitee</a> · <a href="#下载使用">下载</a> · <a href="docs/INSTALL.md">安装文档</a> · <a href="CONTRIBUTING.md">参与贡献</a></p>
+<p align="center"><a href="README.en.md">English</a> · <a href="https://github.com/loveramarois-byte/council-lab">GitHub</a> · <a href="https://gitee.com/bbbbo-liu/council-lab">Gitee</a> · <a href="#传统文化联合研判">传统文化</a> · <a href="#下载使用">下载</a> · <a href="docs/INSTALL.md">安装文档</a> · <a href="CONTRIBUTING.md">参与贡献</a></p>
 
 ![Council Lab 工作台：四个 AI 席位围绕同一问题公开审议](docs/images/roundtable-v2.png)
 
@@ -99,6 +99,37 @@ cd council-lab
 | **本地演示** | 第一次体验、离线测试 | 固定 Mock，不代表真实模型效果。 |
 | **真实 Provider** | 研究、规划、复杂问题讨论 | 问题和公开讨论上下文会发送给所选服务，可能产生费用；模型共识不等于事实核验。 |
 | **CC Switch** | 已有本机模型路由 | Council 只使用 CC Switch 能直接观察到的路由状态，不读取或修改其凭据数据库。 |
+
+## 传统文化联合研判
+
+Council 把传统文化研究从“让一个模型直接下结论”，改造成一条可检查、可追溯、由用户确认的联合研判流程：
+
+`本地排盘 → 选择典籍方向 → 四席独立研究 → 校历 → 辨典 → 参派 → 证伪 → 用户确认`
+
+- **本地可复现**：历法和排盘快照在浏览器本地生成并冻结版本，出生地不发送给模型。
+- **四席联合研判**：不同席位围绕同一份快照核对历法、辨析典籍、比较流派并主动寻找反例。
+- **典籍方向可选**：你决定本次重点参考哪些传统文献，选项会进入冻结快照、模型上下文、结果页和导出报告。
+- **不伪造出处**：系统只传递书名、主题和流派元数据，不内置古籍全文，也不会把索引包装成原文引证。
+
+| 典籍 | 研究方向 |
+| --- | --- |
+| 《穷通宝典》（常见作《穷通宝鉴》） | 日主调候 |
+| 《三命通会》 | 格局神煞 |
+| 《滴天髓》 | 五行旺衰 |
+| 《渊海子平》 | 十神六亲 |
+| 《千里命稿》 | 命例实证 |
+| 《协纪辨方书》 | 择日神煞 |
+| 《果老星宗》 | 星命合参 |
+| 《子平真诠》 | 用神格局 |
+| 《神峰通考》 | 命理辨误 |
+| 《周易》 | 卦象与象数 |
+| 《紫微斗数全书》 | 星曜与宫位 |
+| 《星平会海》 | 星命合参与格局 |
+| 《命理约言》 | 取用与格局 |
+| 《造化元钥》 | 调候与五行气势 |
+| 《卜筮正宗》 | 六爻卦法 |
+
+这些典籍是研究方向索引，不代表系统内置全文、自动引文或科学验证。传统解释、预测和流派判断不能作为医疗、法律、投资、合规或生产决策依据。完整设计和使用边界见 [传统文化模式说明](docs/TRADITIONAL_CULTURE_MODE.md)。
 
 ## 先读边界
 
