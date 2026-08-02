@@ -15,22 +15,28 @@ export const TRADITIONAL_REFERENCE_BOOKS: {
   alias: string;
   focus: string;
   tradition: string;
+  source: {
+    level: "index_only" | "upstream_summary" | "upstream_excerpt";
+    label: string;
+    url?: string;
+    note: string;
+  };
 }[] = [
-  { id: "qiong_tong_bao_dian", title: "《穷通宝典》", alias: "常见作《穷通宝鉴》", focus: "论日主调候", tradition: "子平命理" },
-  { id: "san_ming_tong_hui", title: "《三命通会》", alias: "", focus: "论格局神煞", tradition: "子平命理" },
-  { id: "di_tian_sui", title: "《滴天髓》", alias: "", focus: "论五行旺衰", tradition: "子平命理" },
-  { id: "yuan_hai_zi_ping", title: "《渊海子平》", alias: "", focus: "论十神六亲", tradition: "子平命理" },
-  { id: "qian_li_ming_gao", title: "《千里命稿》", alias: "", focus: "论命例实证", tradition: "子平命理" },
-  { id: "xie_ji_bian_fang_shu", title: "《协纪辨方书》", alias: "", focus: "论择日神煞", tradition: "历法择日" },
-  { id: "guo_lao_xing_zong", title: "《果老星宗》", alias: "", focus: "论星命合参", tradition: "星命术" },
-  { id: "zi_ping_zhen_quan", title: "《子平真诠》", alias: "", focus: "论用神格局", tradition: "子平命理" },
-  { id: "shen_feng_tong_kao", title: "《神峰通考》", alias: "", focus: "论命理辨误", tradition: "子平命理" },
-  { id: "zhou_yi", title: "《周易》", alias: "", focus: "论卦象与象数", tradition: "经学象数" },
-  { id: "ziwei_doushu_quan_shu", title: "《紫微斗数全书》", alias: "", focus: "论星曜与宫位", tradition: "紫微斗数" },
-  { id: "xing_ping_hui_hai", title: "《星平会海》", alias: "", focus: "论星命合参与格局", tradition: "星命术" },
-  { id: "ming_li_yue_yan", title: "《命理约言》", alias: "", focus: "论取用与格局", tradition: "子平命理" },
-  { id: "zao_hua_yuan_yuan", title: "《造化元钥》", alias: "", focus: "论调候与五行气势", tradition: "子平命理" },
-  { id: "bu_shi_zheng_zong", title: "《卜筮正宗》", alias: "", focus: "论六爻卦法", tradition: "卜筮" },
+  { id: "qiong_tong_bao_dian", title: "《穷通宝典》", alias: "常见作《穷通宝鉴》", focus: "论日主调候", tradition: "子平命理", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "san_ming_tong_hui", title: "《三命通会》", alias: "", focus: "论格局神煞", tradition: "子平命理", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "di_tian_sui", title: "《滴天髓》", alias: "", focus: "论五行旺衰", tradition: "子平命理", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "yuan_hai_zi_ping", title: "《渊海子平》", alias: "", focus: "论十神六亲", tradition: "子平命理", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "qian_li_ming_gao", title: "《千里命稿》", alias: "", focus: "论命例实证", tradition: "子平命理", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "xie_ji_bian_fang_shu", title: "《协纪辨方书》", alias: "", focus: "论择日神煞", tradition: "历法择日", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "guo_lao_xing_zong", title: "《果老星宗》", alias: "", focus: "论星命合参", tradition: "星命术", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "zi_ping_zhen_quan", title: "《子平真诠》", alias: "", focus: "论用神格局", tradition: "子平命理", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "shen_feng_tong_kao", title: "《神峰通考》", alias: "", focus: "论命理辨误", tradition: "子平命理", source: { level: "upstream_summary", label: "上游规则摘要", url: "https://github.com/jinchenma94/bazi-skill/blob/bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c/references/classical-texts.md", note: "上游是规则摘要和示例，不是经校勘的完整原文。" } },
+  { id: "zhou_yi", title: "《周易》", alias: "", focus: "论卦象与象数", tradition: "经学象数", source: { level: "index_only", label: "仅索引", note: "Council 只记录书名、主题和流派元数据，未载入原文。" } },
+  { id: "ziwei_doushu_quan_shu", title: "《紫微斗数全书》", alias: "", focus: "论星曜与宫位", tradition: "紫微斗数", source: { level: "upstream_excerpt", label: "上游精选片段", url: "https://github.com/Renhuai123/ziwei-doushu/blob/88194a404242bfe5c6d5cc512e4117e3e245cdd5/lib/classics/data/quanshu.ts", note: "上游是结构化精选片段，不是完整古籍原文。" } },
+  { id: "xing_ping_hui_hai", title: "《星平会海》", alias: "", focus: "论星命合参与格局", tradition: "星命术", source: { level: "index_only", label: "仅索引", note: "Council 只记录书名、主题和流派元数据，未载入原文。" } },
+  { id: "ming_li_yue_yan", title: "《命理约言》", alias: "", focus: "论取用与格局", tradition: "子平命理", source: { level: "index_only", label: "仅索引", note: "Council 只记录书名、主题和流派元数据，未载入原文。" } },
+  { id: "zao_hua_yuan_yuan", title: "《造化元钥》", alias: "", focus: "论调候与五行气势", tradition: "子平命理", source: { level: "index_only", label: "仅索引", note: "Council 只记录书名、主题和流派元数据，未载入原文。" } },
+  { id: "bu_shi_zheng_zong", title: "《卜筮正宗》", alias: "", focus: "论六爻卦法", tradition: "卜筮", source: { level: "index_only", label: "仅索引", note: "Council 只记录书名、主题和流派元数据，未载入原文。" } },
 ];
 
 const NOTICES = [

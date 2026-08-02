@@ -47,6 +47,9 @@ test("creates a traditional-culture Run only after local profile consent", async
   await page.getByRole("button", { name: "仅体验本地演示" }).click();
   await page.getByRole("button", { name: "传统文化" }).click();
   await expect(page.getByLabel("本地排盘资料")).toBeVisible();
+  await expect(page.getByText("上游规则摘要").first()).toBeVisible();
+  await expect(page.getByText("仅索引").first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /滴天髓.*固定来源/ })).toBeVisible();
   await expect(page.getByText("高风险决策支持", { exact: true })).toHaveCount(0);
   await expect(page.getByText("自动总结", { exact: true })).toHaveCount(0);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, Info, LockKeyhole } from "lucide-react";
+import { CalendarDays, ExternalLink, Info, LockKeyhole } from "lucide-react";
 import type { TraditionalCultureProfile, TraditionalCultureReferenceId } from "../lib/api";
 import { TRADITIONAL_REFERENCE_BOOKS } from "../lib/traditional-culture";
 
@@ -46,14 +46,17 @@ export function TraditionalCultureForm({ profile, consent, onProfileChange, onCo
     <fieldset className="culture-topics"><legend>研究主题</legend><div>{TOPICS.map((topic) => <label key={topic.id} className={profile.focus_topics.includes(topic.id) ? "selected" : ""}><input type="checkbox" checked={profile.focus_topics.includes(topic.id)} onChange={(event) => update("focus_topics", event.target.checked ? [...profile.focus_topics, topic.id] : profile.focus_topics.filter((item) => item !== topic.id))} />{topic.label}</label>)}</div></fieldset>
     <details className="culture-references" open>
       <summary><span>参考典籍索引</span><small>{selectedReferenceIds.length ? `已选 ${selectedReferenceIds.length} 部` : "可选 · 不内置全文"}</small></summary>
-      <p>选择研究方向即可；模型只会收到书名、主题和“未引用原文”的边界，不会伪造引文。</p>
+      <p>先看资料等级再选择：当前只带来源标签，不会把摘要或精选片段冒充完整原文。模型不会收到未明确载入的书文。</p>
       <div className="culture-reference-grid">
         {TRADITIONAL_REFERENCE_BOOKS.map((reference) => {
           const selected = selectedReferenceIds.includes(reference.id);
-          return <label key={reference.id} className={`culture-reference ${selected ? "selected" : ""}`}>
-            <input type="checkbox" checked={selected} onChange={(event) => toggleReference(reference.id, event.target.checked)} />
-            <span><strong>{reference.title}</strong><small>{reference.focus} · {reference.tradition}</small>{reference.alias && <em>{reference.alias}</em>}</span>
-          </label>;
+          return <div key={reference.id} className={`culture-reference ${selected ? "selected" : ""}`}>
+            <label>
+              <input type="checkbox" checked={selected} onChange={(event) => toggleReference(reference.id, event.target.checked)} />
+              <span><strong>{reference.title}</strong><small>{reference.focus} · {reference.tradition}</small>{reference.alias && <em>{reference.alias}</em>}<em className={`culture-reference-source ${reference.source.level}`}>{reference.source.label}</em></span>
+            </label>
+            {reference.source.url && <a href={reference.source.url} target="_blank" rel="noreferrer" title={reference.source.note} aria-label={`${reference.title} 的固定来源`}><ExternalLink size={11} aria-hidden="true" /></a>}
+          </div>;
         })}
       </div>
     </details>

@@ -131,10 +131,17 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
         return []
     profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
     references = [TRADITIONAL_REFERENCE_BOOKS_BY_ID[item] for item in profile.reference_book_ids]
-    reference_lines = [
-        f"- {item['title']}{('（' + item['alias'] + '）') if item['alias'] else ''}：{item['focus']} · {item['tradition']}"
-        for item in references
-    ] or ["- 未选择参考典籍"]
+    reference_lines = []
+    for item in references:
+        alias = f"（{item['alias']}）" if item["alias"] else ""
+        source = item["source"]
+        source_link = f" ([来源]({source['url']}))" if source["url"] else ""
+        reference_lines.append(
+            f"- {item['title']}{alias}：{item['focus']} · {item['tradition']} · "
+            f"资料状态：{source['label']}{source_link}"
+        )
+    if not reference_lines:
+        reference_lines = ["- 未选择参考典籍"]
     lines = [
         "## 传统文化本地计算快照",
         "",
@@ -295,8 +302,11 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
     reference_items = []
     for item in references:
         alias = f"（{escape(item['alias'])}）" if item["alias"] else ""
+        source = item["source"]
+        source_link = f" · <a href='{escape(source['url'], quote=True)}'>查看来源</a>" if source["url"] else ""
         reference_items.append(
-            f"<li>{escape(item['title'])}{alias} · {escape(item['focus'])} · {escape(item['tradition'])}</li>"
+            f"<li>{escape(item['title'])}{alias} · {escape(item['focus'])} · {escape(item['tradition'])} · "
+            f"资料状态：{escape(source['label'])}{source_link}</li>"
         )
     reference_html = "".join(reference_items) or "<li>未选择参考典籍</li>"
     return (

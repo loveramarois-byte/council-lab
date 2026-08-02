@@ -46,7 +46,12 @@ describe("traditional culture local calculation", () => {
     });
 
     expect(snapshot.profile.reference_book_ids).toEqual(["di_tian_sui", "zhou_yi"]);
-    expect(TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === "di_tian_sui")).toMatchObject({ focus: "论五行旺衰" });
+    expect(TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === "di_tian_sui")).toMatchObject({
+      focus: "论五行旺衰",
+      source: { level: "upstream_summary", label: "上游规则摘要", url: expect.stringContaining("bdd7f863d4450bf0e2fac84579ad6b45cfdfa25c") },
+    });
+    expect(TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === "zhou_yi")?.source).toMatchObject({ level: "index_only", label: "仅索引" });
+    expect(TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === "ziwei_doushu_quan_shu")?.source).toMatchObject({ level: "upstream_excerpt", label: "上游精选片段" });
     expect(JSON.stringify(snapshot)).not.toContain("原文");
   });
 });

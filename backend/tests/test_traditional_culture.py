@@ -164,6 +164,9 @@ def test_reference_book_index_is_validated_and_included_in_snapshot_context():
     assert "《周易》" in rendered
     assert "《穷通宝典》" in rendered
     assert "不代表已读取或引用原文" in rendered
+    assert "上游规则摘要" in rendered
+    assert "仅索引" in rendered
+    assert "本项目未复制其正文" in rendered
 
     with pytest.raises(ValidationError, match="不能重复选择"):
         TraditionalCultureProfile.model_validate({**payload["profile"], "reference_book_ids": ["zhou_yi", "zhou_yi"]})

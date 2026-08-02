@@ -174,8 +174,10 @@ def render_snapshot_context(snapshot: "TraditionalCultureSnapshot") -> str:
         for reference_id in profile.reference_book_ids:
             reference = TRADITIONAL_REFERENCE_BOOKS_BY_ID[reference_id]
             alias = f"；{reference['alias']}" if reference["alias"] else ""
+            source = reference["source"]
             reference_lines.append(
-                f"  - {reference['title']}{alias}：{reference['focus']}（{reference['tradition']}）"
+                f"  - {reference['title']}{alias}：{reference['focus']}（{reference['tradition']}）；"
+                f"资料状态：{source['label']}。{source['note']}"
             )
     else:
         reference_lines.append("  - 未选择；请仅依据冻结计算快照和用户提供的资料进行解释。")
