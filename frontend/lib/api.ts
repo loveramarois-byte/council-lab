@@ -70,6 +70,7 @@ export type TraditionalCultureReferenceId =
   | "ming_li_yue_yan"
   | "zao_hua_yuan_yuan"
   | "bu_shi_zheng_zong";
+export type TraditionalInterpretationFramework = "comparative_research" | "bazi_classical" | "ziwei_classical";
 export type TraditionalCultureProfile = {
   calendar_type: "solar";
   birth_date: string;
@@ -80,6 +81,7 @@ export type TraditionalCultureProfile = {
   timezone: "Asia/Shanghai";
   true_solar_time_applied: false;
   focus_topics: ("temperament" | "career" | "relationships" | "timing")[];
+  interpretation_framework?: TraditionalInterpretationFramework;
   reference_book_ids?: TraditionalCultureReferenceId[];
 };
 export type TraditionalCultureSnapshot = {

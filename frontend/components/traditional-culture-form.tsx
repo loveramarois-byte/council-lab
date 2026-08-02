@@ -2,7 +2,7 @@
 
 import { CalendarDays, ExternalLink, Info, LockKeyhole } from "lucide-react";
 import type { TraditionalCultureProfile, TraditionalCultureReferenceId } from "../lib/api";
-import { TRADITIONAL_REFERENCE_BOOKS } from "../lib/traditional-culture";
+import { TRADITIONAL_REFERENCE_BOOKS, TRADITIONAL_RULE_PROFILES } from "../lib/traditional-culture";
 
 const TOPICS: { id: TraditionalCultureProfile["focus_topics"][number]; label: string }[] = [
   { id: "temperament", label: "性情结构" },
@@ -42,7 +42,9 @@ export function TraditionalCultureForm({ profile, consent, onProfileChange, onCo
       <label><span>时间精度</span><select aria-label="时间精度" value={profile.time_precision} onChange={(event) => update("time_precision", event.target.value as TraditionalCultureProfile["time_precision"])}><option value="exact">准确</option><option value="approximate">约数</option></select></label>
       <fieldset><legend>排盘参数</legend><div className="culture-inline-options"><label><input type="radio" name="culture-gender" checked={profile.gender === "male"} onChange={() => update("gender", "male")} />男</label><label><input type="radio" name="culture-gender" checked={profile.gender === "female"} onChange={() => update("gender", "female")} />女</label></div></fieldset>
       <label className="culture-place"><span>出生地 <small>可选，仅本地记录</small></span><input aria-label="出生地" type="text" maxLength={120} autoComplete="off" placeholder="例如：江苏南京" value={profile.birth_place} onChange={(event) => update("birth_place", event.target.value)} /></label>
+      <label className="culture-framework"><span>解释体系</span><select aria-label="解释体系" value={profile.interpretation_framework || "comparative_research"} onChange={(event) => update("interpretation_framework", event.target.value as TraditionalCultureProfile["interpretation_framework"])}>{TRADITIONAL_RULE_PROFILES.map((framework) => <option key={framework.id} value={framework.id}>{framework.label}</option>)}</select></label>
     </div>
+    <p className="culture-framework-note">固定先核对本地快照，再按选定体系解释；不代表预测准确率。六爻暂未开放，避免没有确定性起卦引擎时让模型猜盘。</p>
     <fieldset className="culture-topics"><legend>研究主题</legend><div>{TOPICS.map((topic) => <label key={topic.id} className={profile.focus_topics.includes(topic.id) ? "selected" : ""}><input type="checkbox" checked={profile.focus_topics.includes(topic.id)} onChange={(event) => update("focus_topics", event.target.checked ? [...profile.focus_topics, topic.id] : profile.focus_topics.filter((item) => item !== topic.id))} />{topic.label}</label>)}</div></fieldset>
     <details className="culture-references" open>
       <summary><span>参考典籍索引</span><small>{selectedReferenceIds.length ? `已选 ${selectedReferenceIds.length} 部` : "可选 · 不内置全文"}</small></summary>

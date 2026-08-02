@@ -28,7 +28,7 @@ export default function HomePage() {
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState("standard");
   const [councilMode, setCouncilMode] = useState<CouncilMode>("general");
-  const [traditionalProfile, setTraditionalProfile] = useState<TraditionalCultureProfile>({ calendar_type: "solar", birth_date: "", birth_time: "", time_precision: "exact", gender: "male", birth_place: "", timezone: "Asia/Shanghai", true_solar_time_applied: false, focus_topics: [], reference_book_ids: [] });
+  const [traditionalProfile, setTraditionalProfile] = useState<TraditionalCultureProfile>({ calendar_type: "solar", birth_date: "", birth_time: "", time_precision: "exact", gender: "male", birth_place: "", timezone: "Asia/Shanghai", true_solar_time_applied: false, focus_topics: [], interpretation_framework: "comparative_research", reference_book_ids: [] });
   const [traditionalConsent, setTraditionalConsent] = useState(false);
   const [workflowStrategy, setWorkflowStrategy] = useState<"sequential" | "independent">("sequential");
   const [highRisk, setHighRisk] = useState(false);

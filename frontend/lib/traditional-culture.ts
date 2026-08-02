@@ -2,11 +2,21 @@ import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { astro } from "iztro";
 import { Solar } from "lunar-javascript";
-import type { TraditionalCultureProfile, TraditionalCultureReferenceId, TraditionalCultureSnapshot } from "./api";
+import type { TraditionalCultureProfile, TraditionalCultureReferenceId, TraditionalCultureSnapshot, TraditionalInterpretationFramework } from "./api";
 
 const ENGINE_METADATA = [
   { id: "lunar-javascript" as const, version: "1.7.7", source_url: "https://github.com/6tail/lunar-javascript", license: "MIT" as const },
   { id: "iztro" as const, version: "2.5.8", source_url: "https://github.com/SylarLong/iztro", license: "MIT" as const },
+];
+
+export const TRADITIONAL_RULE_PROFILES: {
+  id: TraditionalInterpretationFramework;
+  label: string;
+  description: string;
+}[] = [
+  { id: "comparative_research", label: "比较研读（八字 + 紫微）", description: "两套体系并列解释并标出冲突" },
+  { id: "bazi_classical", label: "八字规则优先", description: "四柱、五行和十神为主，紫微作对照" },
+  { id: "ziwei_classical", label: "紫微规则优先", description: "命身宫和星曜为主，四柱作对照" },
 ];
 
 export const TRADITIONAL_REFERENCE_BOOKS: {
@@ -80,7 +90,11 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
   const eightChar = lunarDate.getEightChar();
   const chart = astro.bySolar(`${year}-${month}-${day}`, timeIndexFor(hour), profile.gender === "male" ? "男" : "女", true, "zh-CN");
   const calculatedAt = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace(".000Z", "Z");
-  let normalizedProfile: TraditionalCultureProfile = { ...profile, birth_place: profile.birth_place.trim() };
+  let normalizedProfile: TraditionalCultureProfile = {
+    ...profile,
+    birth_place: profile.birth_place.trim(),
+    interpretation_framework: profile.interpretation_framework || "comparative_research",
+  };
   if (!normalizedProfile.reference_book_ids?.length) {
     const { reference_book_ids: _referenceBookIds, ...legacyProfile } = normalizedProfile;
     normalizedProfile = legacyProfile;

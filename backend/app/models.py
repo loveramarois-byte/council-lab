@@ -19,6 +19,7 @@ from pydantic import (
 )
 
 from .traditional_references import TRADITIONAL_REFERENCE_BOOK_IDS
+from .traditional_rules import TRADITIONAL_RULE_PROFILE_IDS
 
 
 CURRENT_ASSIGNMENT_SCHEMA_VERSION = 2
@@ -189,6 +190,7 @@ class TraditionalCultureProfile(BaseModel):
         default_factory=list,
         max_length=4,
     )
+    interpretation_framework: Literal["comparative_research", "bazi_classical", "ziwei_classical"] = "comparative_research"
     reference_book_ids: list[str] = Field(default_factory=list, max_length=15)
 
     @field_validator("birth_date")
@@ -213,6 +215,13 @@ class TraditionalCultureProfile(BaseModel):
         unknown = sorted(set(value) - TRADITIONAL_REFERENCE_BOOK_IDS)
         if unknown:
             raise ValueError("传统文化参考典籍 ID 无效")
+        return value
+
+    @field_validator("interpretation_framework", mode="before")
+    @classmethod
+    def validate_interpretation_framework(cls, value: str) -> str:
+        if value not in TRADITIONAL_RULE_PROFILE_IDS:
+            raise ValueError("传统文化解释体系 ID 无效")
         return value
 
 
@@ -296,13 +305,23 @@ class TraditionalCultureSnapshot(BaseModel):
         payload = self.model_dump(mode="json", exclude={"snapshot_sha256"})
         canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
         valid_hashes = {hashlib.sha256(canonical).hexdigest()}
-        # Older v1 snapshots predate the optional reference index. Accept their
-        # original digest even after Pydantic fills the new field with [].
+        # Older v1 snapshots predate the optional reference index and default
+        # comparative framework. Keep compatibility for those default-only
+        # shapes; non-default framework selections remain hash-bound.
         if not self.profile.reference_book_ids:
             legacy_payload = json.loads(json.dumps(payload, ensure_ascii=False))
             legacy_payload["profile"].pop("reference_book_ids", None)
             legacy_canonical = json.dumps(legacy_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
             valid_hashes.add(hashlib.sha256(legacy_canonical).hexdigest())
+        if self.profile.interpretation_framework == "comparative_research":
+            legacy_payload = json.loads(json.dumps(payload, ensure_ascii=False))
+            legacy_payload["profile"].pop("interpretation_framework", None)
+            legacy_canonical = json.dumps(legacy_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            valid_hashes.add(hashlib.sha256(legacy_canonical).hexdigest())
+            if not self.profile.reference_book_ids:
+                legacy_payload["profile"].pop("reference_book_ids", None)
+                legacy_canonical = json.dumps(legacy_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+                valid_hashes.add(hashlib.sha256(legacy_canonical).hexdigest())
         if self.snapshot_sha256 not in valid_hashes:
             raise ValueError("传统文化计算快照校验失败，请重新排盘")
         return self

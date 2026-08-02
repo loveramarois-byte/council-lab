@@ -6,6 +6,7 @@ from .decision_assurance import DecisionClaimView
 from .models import DecisionBrief, RunRecord
 from .risk.schemas import HighRiskRun
 from .traditional_references import TRADITIONAL_REFERENCE_BOOKS_BY_ID
+from .traditional_rules import get_traditional_rule_profile
 
 
 def _high_risk_summary(case: HighRiskRun) -> tuple[int, int, str]:
@@ -130,6 +131,7 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
     if snapshot is None:
         return []
     profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
+    framework = get_traditional_rule_profile(profile.interpretation_framework)
     references = [TRADITIONAL_REFERENCE_BOOKS_BY_ID[item] for item in profile.reference_book_ids]
     reference_lines = []
     for item in references:
@@ -149,6 +151,7 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
         "",
         f"- 输入：{profile.birth_date.isoformat()} {profile.birth_time}；排盘参数：{'男' if profile.gender == 'male' else '女'}；时间精度：{'准确' if profile.time_precision == 'exact' else '约数'}",
         f"- 时区：{profile.timezone} 民用时；真太阳时：未应用；出生地记录：{profile.birth_place or '未提供'}",
+        f"- 固定解释体系：{framework['label']}（{framework['version']}）",
         f"- 公历：{facts.solar_datetime}",
         f"- 农历：{facts.lunar_date}；生肖：{facts.zodiac}；星座：{facts.constellation}",
         f"- 四柱：{facts.eight_char}",
@@ -160,6 +163,13 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
         "",
         "> 仅记录研究方向，不代表 Council 已读取或引用典籍原文。",
         *reference_lines,
+        "",
+        "### 固定解释规则",
+        "",
+        f"- 适用范围：{framework['scope']}",
+        *[f"- {index + 1}. {step}" for index, step in enumerate(framework["steps"])],
+        f"- 体系要求：{framework['instruction']}",
+        *[f"- 限制：{item}" for item in framework["limitations"]],
         f"- 快照 SHA-256：`{snapshot.snapshot_sha256}`",
         "",
         "### 计算引擎与来源",
@@ -287,6 +297,7 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
     if snapshot is None:
         return ""
     profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
+    framework = get_traditional_rule_profile(profile.interpretation_framework)
     references = [TRADITIONAL_REFERENCE_BOOKS_BY_ID[item] for item in profile.reference_book_ids]
     engines = "".join(
         f"<li><a href='{escape(engine.source_url)}'>{escape(engine.id)}@{escape(engine.version)}</a> · {escape(engine.license)}</li>"
@@ -309,6 +320,8 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
             f"资料状态：{escape(source['label'])}{source_link}</li>"
         )
     reference_html = "".join(reference_items) or "<li>未选择参考典籍</li>"
+    framework_steps = "".join(f"<li>{escape(step)}</li>" for step in framework["steps"])
+    framework_limits = "".join(f"<li>{escape(item)}</li>" for item in framework["limitations"])
     return (
         "<section class='traditional-snapshot'><h2>传统文化本地计算快照</h2>"
         "<aside class='verification-warning'><strong>计算字段可复现，传统解释不属于科学验证。</strong> "
@@ -316,11 +329,14 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
         f"<p><strong>输入：</strong>{profile.birth_date.isoformat()} {escape(profile.birth_time)} · {'男' if profile.gender == 'male' else '女'} · "
         f"{'准确时间' if profile.time_precision == 'exact' else '约数时间'} · {escape(profile.timezone)} 民用时 · 未应用真太阳时</p>"
         f"<p><strong>出生地记录：</strong>{escape(profile.birth_place or '未提供')}</p>"
+        f"<p><strong>固定解释体系：</strong>{escape(framework['label'])}（{escape(framework['version'])}）</p>"
         f"<p><strong>公历：</strong>{escape(facts.solar_datetime)}<br><strong>农历：</strong>{escape(facts.lunar_date)} · {escape(facts.zodiac)} · {escape(facts.constellation)}</p>"
         f"<p><strong>四柱：</strong>{escape(facts.eight_char)}<br><strong>柱五行：</strong>{escape(' / '.join(facts.pillar_wuxing))}<br><strong>天干十神：</strong>{escape(' / '.join(facts.heavenly_stem_ten_gods))}</p>"
         f"<p><strong>紫微：</strong>{escape(chart.five_elements_class)} · 命主 {escape(chart.soul_star)} · 身主 {escape(chart.body_star)} · 命宫 {escape(chart.soul_palace_branch)} · 身宫 {escape(chart.body_palace_branch)}</p>"
         "<h3>参考典籍索引</h3><p><small>仅记录研究方向，不代表 Council 已读取或引用典籍原文。</small></p>"
         f"<ul>{reference_html}</ul>"
+        f"<h3>固定解释规则</h3><p>{escape(framework['scope'])}</p><ol>{framework_steps}</ol>"
+        f"<p><strong>体系要求：</strong>{escape(framework['instruction'])}</p><ul>{framework_limits}</ul>"
         f"<p><strong>快照 SHA-256：</strong><code>{escape(snapshot.snapshot_sha256)}</code></p>"
         f"<h3>计算引擎与来源</h3><ul>{engines}</ul><h3>紫微十二宫</h3><ul>{palaces}</ul></section>"
     )
