@@ -87,7 +87,7 @@ Short definitions and deterministic arithmetic can use one discussion seat plus 
 
 - **No external verification yet**: Council does not run web search or a code sandbox, and it does not produce percentage fact confidence. The final answer is a synthesis of the public discussion.
 - **High-risk is decision support only**: Medical, legal, investment, compliance, and production-incident modes require evidence, independent verification, domain review, and separation of duties. They do not verify licenses or execute prescriptions, trades, filings, releases, or production changes. See [SECURITY.md](SECURITY.md).
-- **Traditional culture is not a scientific claim**: The optional mode creates a version-pinned calendar/chart snapshot locally and studies traditional rules and interpretations. Birthplace stays local and is not sent to model seats. See [the mode boundary](docs/TRADITIONAL_CULTURE_MODE.md) and [third-party notices](NOTICE).
+- **Traditional culture is not a scientific claim**: The optional mode creates a version-pinned calendar/chart snapshot locally and offers research indexes for works such as *Qiong Tong Bao Dian*, *San Ming Tong Hui*, *Di Tian Sui*, *Yuan Hai Zi Ping*, *Xie Ji Bian Fang Shu*, *Guo Lao Xing Zong*, *Zi Ping Zhen Quan*, and *Shen Feng Tong Kao*. These are title/topic metadata, not bundled full text or fabricated citations. Birthplace stays local and is not sent to model seats. See [the mode boundary](docs/TRADITIONAL_CULTURE_MODE.md) and [third-party notices](NOTICE).
 - **Local-first is not automatic backup**: Keys use the operating-system credential store and run data stays on the machine. Inspect reports and diagnostic bundles before sharing them.
 
 ## Download and run

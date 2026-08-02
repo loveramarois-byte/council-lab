@@ -5,6 +5,7 @@ from html import escape
 from .decision_assurance import DecisionClaimView
 from .models import DecisionBrief, RunRecord
 from .risk.schemas import HighRiskRun
+from .traditional_references import TRADITIONAL_REFERENCE_BOOKS_BY_ID
 
 
 def _high_risk_summary(case: HighRiskRun) -> tuple[int, int, str]:
@@ -129,6 +130,11 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
     if snapshot is None:
         return []
     profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
+    references = [TRADITIONAL_REFERENCE_BOOKS_BY_ID[item] for item in profile.reference_book_ids]
+    reference_lines = [
+        f"- {item['title']}{('（' + item['alias'] + '）') if item['alias'] else ''}：{item['focus']} · {item['tradition']}"
+        for item in references
+    ] or ["- 未选择参考典籍"]
     lines = [
         "## 传统文化本地计算快照",
         "",
@@ -142,6 +148,11 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
         f"- 柱五行：{' / '.join(facts.pillar_wuxing)}",
         f"- 天干十神：{' / '.join(facts.heavenly_stem_ten_gods)}",
         f"- 紫微：{chart.five_elements_class}；命主：{chart.soul_star}；身主：{chart.body_star}；命宫地支：{chart.soul_palace_branch}；身宫地支：{chart.body_palace_branch}",
+        "",
+        "### 参考典籍索引",
+        "",
+        "> 仅记录研究方向，不代表 Council 已读取或引用典籍原文。",
+        *reference_lines,
         f"- 快照 SHA-256：`{snapshot.snapshot_sha256}`",
         "",
         "### 计算引擎与来源",
@@ -269,6 +280,7 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
     if snapshot is None:
         return ""
     profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
+    references = [TRADITIONAL_REFERENCE_BOOKS_BY_ID[item] for item in profile.reference_book_ids]
     engines = "".join(
         f"<li><a href='{escape(engine.source_url)}'>{escape(engine.id)}@{escape(engine.version)}</a> · {escape(engine.license)}</li>"
         for engine in snapshot.engines
@@ -280,6 +292,13 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
         f"{escape(palace.heavenly_stem + palace.earthly_branch)} · {escape('、'.join(palace.major_stars) or '无主星')}</li>"
         for palace in chart.palaces
     )
+    reference_items = []
+    for item in references:
+        alias = f"（{escape(item['alias'])}）" if item["alias"] else ""
+        reference_items.append(
+            f"<li>{escape(item['title'])}{alias} · {escape(item['focus'])} · {escape(item['tradition'])}</li>"
+        )
+    reference_html = "".join(reference_items) or "<li>未选择参考典籍</li>"
     return (
         "<section class='traditional-snapshot'><h2>传统文化本地计算快照</h2>"
         "<aside class='verification-warning'><strong>计算字段可复现，传统解释不属于科学验证。</strong> "
@@ -290,6 +309,8 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
         f"<p><strong>公历：</strong>{escape(facts.solar_datetime)}<br><strong>农历：</strong>{escape(facts.lunar_date)} · {escape(facts.zodiac)} · {escape(facts.constellation)}</p>"
         f"<p><strong>四柱：</strong>{escape(facts.eight_char)}<br><strong>柱五行：</strong>{escape(' / '.join(facts.pillar_wuxing))}<br><strong>天干十神：</strong>{escape(' / '.join(facts.heavenly_stem_ten_gods))}</p>"
         f"<p><strong>紫微：</strong>{escape(chart.five_elements_class)} · 命主 {escape(chart.soul_star)} · 身主 {escape(chart.body_star)} · 命宫 {escape(chart.soul_palace_branch)} · 身宫 {escape(chart.body_palace_branch)}</p>"
+        "<h3>参考典籍索引</h3><p><small>仅记录研究方向，不代表 Council 已读取或引用典籍原文。</small></p>"
+        f"<ul>{reference_html}</ul>"
         f"<p><strong>快照 SHA-256：</strong><code>{escape(snapshot.snapshot_sha256)}</code></p>"
         f"<h3>计算引擎与来源</h3><ul>{engines}</ul><h3>紫微十二宫</h3><ul>{palaces}</ul></section>"
     )

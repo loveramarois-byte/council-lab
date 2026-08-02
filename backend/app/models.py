@@ -18,6 +18,8 @@ from pydantic import (
     model_validator,
 )
 
+from .traditional_references import TRADITIONAL_REFERENCE_BOOK_IDS
+
 
 CURRENT_ASSIGNMENT_SCHEMA_VERSION = 2
 OutputContractId = Literal["general_decision", "product_review", "technical_architecture"]
@@ -187,6 +189,7 @@ class TraditionalCultureProfile(BaseModel):
         default_factory=list,
         max_length=4,
     )
+    reference_book_ids: list[str] = Field(default_factory=list, max_length=15)
 
     @field_validator("birth_date")
     @classmethod
@@ -200,6 +203,16 @@ class TraditionalCultureProfile(BaseModel):
     def validate_birth_place(cls, value: str) -> str:
         if any(unicodedata.category(character).startswith("C") for character in value):
             raise ValueError("出生地不能包含控制字符或不可见格式字符")
+        return value
+
+    @field_validator("reference_book_ids")
+    @classmethod
+    def validate_reference_book_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("传统文化参考典籍不能重复选择")
+        unknown = sorted(set(value) - TRADITIONAL_REFERENCE_BOOK_IDS)
+        if unknown:
+            raise ValueError("传统文化参考典籍 ID 无效")
         return value
 
 
@@ -280,13 +293,17 @@ class TraditionalCultureSnapshot(BaseModel):
         versions = {item.id: item.version for item in self.engines}
         if versions != {"lunar-javascript": "1.7.7", "iztro": "2.5.8"}:
             raise ValueError("传统文化计算引擎版本与当前发行版不一致")
-        canonical = json.dumps(
-            self.model_dump(mode="json", exclude={"snapshot_sha256"}),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-        if hashlib.sha256(canonical).hexdigest() != self.snapshot_sha256:
+        payload = self.model_dump(mode="json", exclude={"snapshot_sha256"})
+        canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        valid_hashes = {hashlib.sha256(canonical).hexdigest()}
+        # Older v1 snapshots predate the optional reference index. Accept their
+        # original digest even after Pydantic fills the new field with [].
+        if not self.profile.reference_book_ids:
+            legacy_payload = json.loads(json.dumps(payload, ensure_ascii=False))
+            legacy_payload["profile"].pop("reference_book_ids", None)
+            legacy_canonical = json.dumps(legacy_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            valid_hashes.add(hashlib.sha256(legacy_canonical).hexdigest())
+        if self.snapshot_sha256 not in valid_hashes:
             raise ValueError("传统文化计算快照校验失败，请重新排盘")
         return self
 

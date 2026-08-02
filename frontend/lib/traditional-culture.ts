@@ -2,11 +2,35 @@ import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { astro } from "iztro";
 import { Solar } from "lunar-javascript";
-import type { TraditionalCultureProfile, TraditionalCultureSnapshot } from "./api";
+import type { TraditionalCultureProfile, TraditionalCultureReferenceId, TraditionalCultureSnapshot } from "./api";
 
 const ENGINE_METADATA = [
   { id: "lunar-javascript" as const, version: "1.7.7", source_url: "https://github.com/6tail/lunar-javascript", license: "MIT" as const },
   { id: "iztro" as const, version: "2.5.8", source_url: "https://github.com/SylarLong/iztro", license: "MIT" as const },
+];
+
+export const TRADITIONAL_REFERENCE_BOOKS: {
+  id: TraditionalCultureReferenceId;
+  title: string;
+  alias: string;
+  focus: string;
+  tradition: string;
+}[] = [
+  { id: "qiong_tong_bao_dian", title: "《穷通宝典》", alias: "常见作《穷通宝鉴》", focus: "论日主调候", tradition: "子平命理" },
+  { id: "san_ming_tong_hui", title: "《三命通会》", alias: "", focus: "论格局神煞", tradition: "子平命理" },
+  { id: "di_tian_sui", title: "《滴天髓》", alias: "", focus: "论五行旺衰", tradition: "子平命理" },
+  { id: "yuan_hai_zi_ping", title: "《渊海子平》", alias: "", focus: "论十神六亲", tradition: "子平命理" },
+  { id: "qian_li_ming_gao", title: "《千里命稿》", alias: "", focus: "论命例实证", tradition: "子平命理" },
+  { id: "xie_ji_bian_fang_shu", title: "《协纪辨方书》", alias: "", focus: "论择日神煞", tradition: "历法择日" },
+  { id: "guo_lao_xing_zong", title: "《果老星宗》", alias: "", focus: "论星命合参", tradition: "星命术" },
+  { id: "zi_ping_zhen_quan", title: "《子平真诠》", alias: "", focus: "论用神格局", tradition: "子平命理" },
+  { id: "shen_feng_tong_kao", title: "《神峰通考》", alias: "", focus: "论命理辨误", tradition: "子平命理" },
+  { id: "zhou_yi", title: "《周易》", alias: "", focus: "论卦象与象数", tradition: "经学象数" },
+  { id: "ziwei_doushu_quan_shu", title: "《紫微斗数全书》", alias: "", focus: "论星曜与宫位", tradition: "紫微斗数" },
+  { id: "xing_ping_hui_hai", title: "《星平会海》", alias: "", focus: "论星命合参与格局", tradition: "星命术" },
+  { id: "ming_li_yue_yan", title: "《命理约言》", alias: "", focus: "论取用与格局", tradition: "子平命理" },
+  { id: "zao_hua_yuan_yuan", title: "《造化元钥》", alias: "", focus: "论调候与五行气势", tradition: "子平命理" },
+  { id: "bu_shi_zheng_zong", title: "《卜筮正宗》", alias: "", focus: "论六爻卦法", tradition: "卜筮" },
 ];
 
 const NOTICES = [
@@ -50,7 +74,11 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
   const eightChar = lunarDate.getEightChar();
   const chart = astro.bySolar(`${year}-${month}-${day}`, timeIndexFor(hour), profile.gender === "male" ? "男" : "女", true, "zh-CN");
   const calculatedAt = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace(".000Z", "Z");
-  const normalizedProfile = { ...profile, birth_place: profile.birth_place.trim() };
+  let normalizedProfile: TraditionalCultureProfile = { ...profile, birth_place: profile.birth_place.trim() };
+  if (!normalizedProfile.reference_book_ids?.length) {
+    const { reference_book_ids: _referenceBookIds, ...legacyProfile } = normalizedProfile;
+    normalizedProfile = legacyProfile;
+  }
   const snapshotWithoutHash = {
     schema_version: 1 as const,
     calculation_source: "local_browser" as const,

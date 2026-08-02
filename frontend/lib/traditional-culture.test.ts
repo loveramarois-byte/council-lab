@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildTraditionalCultureSnapshot } from "./traditional-culture";
+import { buildTraditionalCultureSnapshot, TRADITIONAL_REFERENCE_BOOKS } from "./traditional-culture";
 
 
 describe("traditional culture local calculation", () => {
@@ -29,5 +29,24 @@ describe("traditional culture local calculation", () => {
     expect(snapshot.ziwei_chart.palaces).toHaveLength(12);
     expect(snapshot.engines.map((engine) => `${engine.id}@${engine.version}`)).toEqual(["lunar-javascript@1.7.7", "iztro@2.5.8"]);
     expect(snapshot.snapshot_sha256).toBe("0c281caafaafe14a94824ab728821e27e20c6d874c74b7038ff6441677f55d83");
+  });
+
+  it("records selected reference-book metadata without bundling source text", async () => {
+    const snapshot = await buildTraditionalCultureSnapshot({
+      calendar_type: "solar",
+      birth_date: "2000-08-16",
+      birth_time: "03:30",
+      time_precision: "exact",
+      gender: "male",
+      birth_place: "",
+      timezone: "Asia/Shanghai",
+      true_solar_time_applied: false,
+      focus_topics: ["temperament"],
+      reference_book_ids: ["di_tian_sui", "zhou_yi"],
+    });
+
+    expect(snapshot.profile.reference_book_ids).toEqual(["di_tian_sui", "zhou_yi"]);
+    expect(TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === "di_tian_sui")).toMatchObject({ focus: "论五行旺衰" });
+    expect(JSON.stringify(snapshot)).not.toContain("原文");
   });
 });

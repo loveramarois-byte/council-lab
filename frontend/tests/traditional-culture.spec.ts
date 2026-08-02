@@ -24,7 +24,7 @@ function snapshot() {
     schema_version: 1,
     calculation_source: "local_browser",
     calculated_at: now,
-    profile: { calendar_type: "solar", birth_date: "2000-08-16", birth_time: "03:30", time_precision: "exact", gender: "male", birth_place: "", timezone: "Asia/Shanghai", true_solar_time_applied: false, focus_topics: ["temperament"] },
+    profile: { calendar_type: "solar", birth_date: "2000-08-16", birth_time: "03:30", time_precision: "exact", gender: "male", birth_place: "", timezone: "Asia/Shanghai", true_solar_time_applied: false, focus_topics: ["temperament"], reference_book_ids: ["di_tian_sui", "zhou_yi"] },
     engines: [
       { id: "lunar-javascript", version: "1.7.7", source_url: "https://github.com/6tail/lunar-javascript", license: "MIT" },
       { id: "iztro", version: "2.5.8", source_url: "https://github.com/SylarLong/iztro", license: "MIT" },
@@ -56,6 +56,7 @@ test("creates a traditional-culture Run only after local profile consent", async
   await page.getByLabel("出生时间").fill("03:30");
   await page.getByRole("textbox", { name: "你的问题" }).fill("比较性情结构，并指出不可验证之处");
   await page.getByText("性情结构", { exact: true }).click();
+  await page.getByText("《滴天髓》", { exact: true }).click();
   await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click();
   await expect(create).toBeEnabled();
   await create.click();
@@ -67,6 +68,7 @@ test("creates a traditional-culture Run only after local profile consent", async
   expect(payload).not.toHaveProperty("auto_summarize");
   expect(payload).not.toHaveProperty("selected_memory_ids");
   expect(payload.traditional_culture_snapshot.calendar_facts.eight_char).toBe("庚辰 甲申 丙午 庚寅");
+  expect(payload.traditional_culture_snapshot.profile.reference_book_ids).toEqual(["di_tian_sui"]);
   expect(payload.traditional_culture_snapshot.engines.map((engine: any) => `${engine.id}@${engine.version}`)).toEqual(["lunar-javascript@1.7.7", "iztro@2.5.8"]);
   expect(payload.traditional_culture_snapshot.snapshot_sha256).toMatch(/^[a-f0-9]{64}$/);
 });
@@ -87,6 +89,8 @@ test("renders provenance and boundaries on a mobile result without decision asse
   await expect(page.getByRole("button", { name: "结果回访" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "沉淀记忆" })).toHaveCount(0);
   await card.locator("summary").click();
+  await expect(card).toContainText("《滴天髓》");
+  await expect(card).toContainText("《周易》");
   await expect(card.locator(".traditional-palaces section")).toHaveCount(12);
   await expect(card.getByRole("link", { name: /lunar-javascript@1.7.7/ })).toBeVisible();
   await expect.poll(() => assetRequests).toEqual([]);

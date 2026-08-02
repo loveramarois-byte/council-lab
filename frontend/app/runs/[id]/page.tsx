@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clo
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionClaimView, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, MemoryProposalView, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun, TraditionalCultureSnapshot } from "../../../lib/api";
+import { TRADITIONAL_REFERENCE_BOOKS } from "../../../lib/traditional-culture";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
@@ -891,10 +892,11 @@ function Seat({ participant, assignment, index, selected, status, onSelect }: { 
 function TraditionalCultureSnapshotCard({ snapshot }: { snapshot: TraditionalCultureSnapshot }) {
   const facts = snapshot.calendar_facts;
   const chart = snapshot.ziwei_chart;
+  const references = (snapshot.profile.reference_book_ids || []).map((id) => TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === id)).filter(Boolean);
   return <article className="traditional-snapshot-card" aria-label="传统文化本地计算快照">
     <header><Landmark size={17} /><div><strong>本地计算快照</strong><small>计算字段可复现 · 传统解释未经过科学验证</small></div><span>SHA-256 {snapshot.snapshot_sha256.slice(0, 12)}…</span></header>
     <div className="traditional-facts"><section><span>四柱</span><strong>{facts.eight_char}</strong><small>{facts.pillar_wuxing.join(" · ")}</small></section><section><span>历法</span><strong>{facts.lunar_date}</strong><small>{facts.zodiac} · {facts.constellation}</small></section><section><span>紫微</span><strong>{chart.five_elements_class}</strong><small>命主 {chart.soul_star} · 身主 {chart.body_star}</small></section></div>
-    <details><summary>查看十二宫与计算来源</summary><div className="traditional-palaces">{chart.palaces.map((palace) => <section key={palace.index}><header><strong>{palace.name}</strong><span>{palace.heavenly_stem}{palace.earthly_branch}{palace.is_original_palace ? " · 来因宫" : ""}{palace.is_body_palace ? " · 身宫" : ""}</span></header><p>{palace.major_stars.join("、") || "无主星"}</p></section>)}</div><footer>{snapshot.engines.map((engine) => <a key={engine.id} href={engine.source_url} target="_blank" rel="noreferrer">{engine.id}@{engine.version} · {engine.license}</a>)}</footer></details>
+    <details><summary>查看典籍索引、十二宫与计算来源</summary>{references.length > 0 && <section className="traditional-reference-summary" aria-label="本次参考典籍"><strong>本次参考典籍</strong><small>仅为研究方向，不代表已读取或引用原文</small><div>{references.map((reference) => reference && <span key={reference.id} title={`${reference.focus} · ${reference.tradition}`}>{reference.title}</span>)}</div></section>}<div className="traditional-palaces">{chart.palaces.map((palace) => <section key={palace.index}><header><strong>{palace.name}</strong><span>{palace.heavenly_stem}{palace.earthly_branch}{palace.is_original_palace ? " · 来因宫" : ""}{palace.is_body_palace ? " · 身宫" : ""}</span></header><p>{palace.major_stars.join("、") || "无主星"}</p></section>)}</div><footer>{snapshot.engines.map((engine) => <a key={engine.id} href={engine.source_url} target="_blank" rel="noreferrer">{engine.id}@{engine.version} · {engine.license}</a>)}</footer></details>
   </article>;
 }
 

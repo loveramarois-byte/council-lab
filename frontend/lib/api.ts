@@ -54,6 +54,22 @@ export type AgentAssignmentsConfig = { schema_version: number; seats: AgentAssig
 export type ResolvedAssignment = AgentAssignment & { provider_name: string };
 export type RunLimits = { max_model_calls: number; max_tokens: number; timeout_seconds: number };
 export type CouncilMode = "general" | "traditional_culture";
+export type TraditionalCultureReferenceId =
+  | "qiong_tong_bao_dian"
+  | "san_ming_tong_hui"
+  | "di_tian_sui"
+  | "yuan_hai_zi_ping"
+  | "qian_li_ming_gao"
+  | "xie_ji_bian_fang_shu"
+  | "guo_lao_xing_zong"
+  | "zi_ping_zhen_quan"
+  | "shen_feng_tong_kao"
+  | "zhou_yi"
+  | "ziwei_doushu_quan_shu"
+  | "xing_ping_hui_hai"
+  | "ming_li_yue_yan"
+  | "zao_hua_yuan_yuan"
+  | "bu_shi_zheng_zong";
 export type TraditionalCultureProfile = {
   calendar_type: "solar";
   birth_date: string;
@@ -64,6 +80,7 @@ export type TraditionalCultureProfile = {
   timezone: "Asia/Shanghai";
   true_solar_time_applied: false;
   focus_topics: ("temperament" | "career" | "relationships" | "timing")[];
+  reference_book_ids?: TraditionalCultureReferenceId[];
 };
 export type TraditionalCultureSnapshot = {
   schema_version: 1;
