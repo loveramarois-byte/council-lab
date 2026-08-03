@@ -196,7 +196,7 @@ docs/          Architecture, decisions, evaluation, and integration notes
 
 ## Status and license
 
-Version `0.15.1` is intended for personal research, planning, and non-binding multi-perspective decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
+Version `0.15.2` is intended for personal research, planning, and non-binding multi-perspective decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
 
 ## Community thanks
 

@@ -49,7 +49,7 @@ from app.paths import data_dir, database_path
 from app.provider_catalog import builtin_providers
 from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, ProviderRequestError, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
 from app.reports import run_html, run_markdown
-from app.runtime_config import assignment_config_is_valid, restore_provider_profiles
+from app.runtime_config import assignment_config_is_valid, restore_provider_profiles, select_active_profile
 from app.store import Store, serialize_public_provider
 from evals.scoring import STRATEGIES, aggregate_execution, blind_labels, load_dataset, summarize_human_reviews
 from evals.run_benchmark import estimate_provider_cost, provider_reality
@@ -219,6 +219,40 @@ def test_runtime_restore_preserves_ccswitch_models_verified_by_success_history()
 
     valid.seats[0].model = "deepseek-v4-flash"
     assert assignment_config_is_valid(valid, profiles) is False
+
+
+def test_runtime_active_profile_prefers_a_viable_ccswitch_without_assuming_it_exists():
+    profiles = builtin_providers()
+    profiles["ccswitch"].default_model = "verified-model"
+
+    selected = select_active_profile(profiles)
+
+    assert selected.id == "ccswitch"
+    assert [profile.id for profile in profiles.values() if profile.is_active] == ["ccswitch"]
+
+
+def test_runtime_active_profile_falls_back_when_builtin_provider_ids_are_missing():
+    custom = ProviderProfile(
+        id="self-hosted",
+        display_name="Self hosted",
+        provider_type=ProviderType.COMPATIBLE,
+        default_model="local-model",
+    )
+
+    selected = select_active_profile({custom.id: custom})
+
+    assert selected is custom
+    assert custom.is_active is True
+
+
+def test_runtime_active_profile_uses_mock_when_ccswitch_has_no_verified_model():
+    profiles = builtin_providers()
+
+    selected = select_active_profile(profiles)
+
+    assert selected.id == "mock"
+    assert profiles["mock"].is_active is True
+    assert profiles["ccswitch"].is_active is False
 
 
 def test_ccswitch_model_discovery_uses_recent_successful_requests(tmp_path):

@@ -40,6 +40,14 @@ def test_release_metadata_is_consistent():
     assert result.returncode == 0, result.stderr
 
 
+def test_make_backend_test_uses_the_repository_virtual_environment_from_root():
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    backend_target = makefile.split("backend-test:\n", 1)[1].split("\n\n", 1)[0]
+
+    assert "backend/.venv/bin/python -m pytest -q backend/tests" in backend_target
+    assert "cd backend" not in backend_target
+
+
 def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_builds():
     next_config = (ROOT / "frontend/next.config.ts").read_text(encoding="utf-8")
     mac_launcher = (ROOT / "desktop/start-council.sh").read_text(encoding="utf-8")

@@ -54,6 +54,31 @@ def restore_provider_profiles(saved_profiles: Iterable[ProviderProfile]) -> dict
     return profiles
 
 
+def select_active_profile(profiles: dict[str, ProviderProfile]) -> ProviderProfile:
+    active = next((profile for profile in profiles.values() if profile.is_active and profile.default_model), None)
+    if active is not None:
+        return active
+
+    had_active_profile = any(profile.is_active for profile in profiles.values())
+    preferred_ids = ("mock", "ccswitch") if had_active_profile else ("ccswitch", "mock")
+    fallback = next(
+        (
+            profiles[provider_id]
+            for provider_id in preferred_ids
+            if provider_id in profiles and profiles[provider_id].default_model
+        ),
+        None,
+    )
+    if fallback is None:
+        fallback = next((profile for profile in profiles.values() if profile.default_model), None)
+    if fallback is None:
+        raise RuntimeError("No provider with a configured default model is available")
+
+    for profile in profiles.values():
+        profile.is_active = profile is fallback
+    return fallback
+
+
 def assignment_config_is_valid(config: AgentAssignmentsConfig | None, profiles: dict[str, ProviderProfile]) -> bool:
     if config is None:
         return False

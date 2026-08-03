@@ -7,6 +7,22 @@
 - Gitee Release 大附件改用系统 `curl` 执行 multipart 上传，提供真实的端到端总耗时上限和持续传输进度；访问令牌只经标准输入配置传递，不出现在进程参数、日志或异常文本中。
 - Gitee 历史版本补发工作流增加一次性本机 runner 路由，海外 GitHub runner 到 Gitee 出现极低速或连接超时时，可在国内网络完成上传；默认仍使用 GitHub 托管 runner。
 
+## [0.15.2] - 2026-08-03
+
+### Changed
+
+- 将结果页高风险控制面拆为独立展示组件，父页面继续持有 API 调用、授权信息和状态机，降低高风险界面的维护与审查复杂度，不改变用户流程。
+- 移除未使用的 React Query 生产依赖，缩小前端依赖面。
+
+### Fixed
+
+- 修复 `make backend-test` 对调用目录和全局 `pytest` 的隐式依赖；命令现在固定使用仓库虚拟环境，并从仓库根目录运行完整后端测试集。
+- Provider 启动回退不再假定 `ccswitch` 或 `mock` 键一定存在；缺少内置 Provider、未验证 CC Switch 模型或已有可用自托管 Provider 时均会选择可用配置，找不到任何带默认模型的 Provider 时明确失败。
+
+### Testing
+
+- 通过 386 项后端测试，覆盖率 84.07%；通过 36 项前端单元测试、TypeScript、Next.js 生产构建、npm 生产依赖审计（0 漏洞）、100 项 Chromium E2E，以及 macOS 启动器语法、Info.plist 与代码签名验证。
+
 ## [0.15.1] - 2026-08-03
 
 ### Fixed

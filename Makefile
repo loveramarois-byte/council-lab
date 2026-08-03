@@ -5,7 +5,7 @@ start:
 	./start.sh
 
 backend-test:
-	cd backend && PYTHONPATH=. pytest -q
+	PYTHONPATH=backend:. backend/.venv/bin/python -m pytest -q backend/tests
 
 frontend-build:
 	cd frontend && npm run build

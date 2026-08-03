@@ -32,7 +32,7 @@ from .risk.schemas import ApprovalDecisionRequest, ApprovalRecord, ApprovalReque
 from .risk.service import HighRiskService
 from .reports import run_html, run_markdown
 from .request_boundary import load_internal_api_token, token_identifier
-from .runtime_config import assignment_config_is_valid, restore_provider_profiles
+from .runtime_config import assignment_config_is_valid, restore_provider_profiles, select_active_profile
 from .store import Store, serialize_public_provider
 from .templates import list_templates
 from .time_sync import fetch_trusted_time, verify_snapshot_proof, issue_time_proof, verify_time_proof
@@ -41,15 +41,9 @@ from .updater import UpdateError, current_version, fetch_release, install_reques
 
 store = Store(database_path())
 providers = restore_provider_profiles(store.load_providers())
-if not any(profile.is_active for profile in providers.values()):
-    providers["ccswitch"].is_active = True
 high_risk_service = HighRiskService(store)
 orchestrator = Orchestrator(store, providers, high_risk_service)
-active_profile = next((profile for profile in providers.values() if profile.is_active and profile.default_model), None)
-if active_profile is None:
-    for profile in providers.values():
-        profile.is_active = profile.id == "mock"
-    active_profile = providers["mock"]
+active_profile = select_active_profile(providers)
 saved_assignments = store.load_assignment_config()
 saved_assignments_valid = assignment_config_is_valid(saved_assignments, providers)
 assignments = saved_assignments if saved_assignments_valid else orchestrator.default_assignment_config(active_profile.id, active_profile.default_model)
