@@ -44,6 +44,25 @@ function snapshot(): any {
   };
 }
 
+test("keeps the traditional research question visible before the profile form", async ({ page }) => {
+  await mockHome(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "传统文化" }).click();
+
+  const question = page.getByRole("textbox", { name: "研究问题" });
+  const profile = page.getByLabel("本地排盘资料");
+  await expect(question).toBeVisible();
+  await expect(profile).toBeVisible();
+  const [questionBox, profileBox] = await Promise.all([question.boundingBox(), profile.boundingBox()]);
+
+  expect(questionBox).not.toBeNull();
+  expect(profileBox).not.toBeNull();
+  expect(questionBox!.height).toBeGreaterThanOrEqual(88);
+  expect(questionBox!.y).toBeLessThan(profileBox!.y);
+  expect(questionBox!.y + questionBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+});
+
 test("creates a traditional-culture Run only after local profile consent", async ({ page }) => {
   await mockHome(page);
   let payload: Record<string, any> = {};
@@ -69,7 +88,7 @@ test("creates a traditional-culture Run only after local profile consent", async
   await page.getByLabel("出生地").fill("山东青岛");
   await expect(page.getByText(/已识别 青岛/)).toBeVisible();
   await expect(page.getByLabel("应用真太阳时校正")).toBeChecked();
-  await page.getByRole("textbox", { name: "你的问题" }).fill("比较性情结构，并指出不可验证之处");
+  await page.getByRole("textbox", { name: "研究问题" }).fill("比较性情结构，并指出不可验证之处");
   await page.getByText("性情结构", { exact: true }).click();
   await page.getByText("《滴天髓》", { exact: true }).click();
   await page.getByLabel("解释体系").selectOption("bazi_classical");

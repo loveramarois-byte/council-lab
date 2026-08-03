@@ -407,7 +407,9 @@ body:has(.council-page) .sidebar-rule, body:has(.council-page) .provider-presenc
 .template-select { display: flex; align-items: center; gap: 7px; margin-left: auto; margin-right: 18px; color: var(--muted); font-size: 9px; }.template-select > span { white-space: nowrap; }.template-select select { height: 29px; max-width: 170px; border: 1px solid var(--border); border-radius: 5px; background: #fffdfa; padding: 0 7px; color: var(--foreground); font-size: 9px; }
 .contract-select { margin-left: 0; }.contract-select select { max-width: 145px; }
 
-.traditional-composer { grid-template-rows: auto auto minmax(90px, 1fr) auto; }
+.traditional-composer { grid-template-rows: auto minmax(112px, auto) auto auto auto auto; align-content: start; overflow-y: auto; }
+.traditional-composer > textarea { width: calc(100% - 34px); min-height: 112px; margin: 0 17px 12px; border: 1px solid var(--border-strong); border-radius: 7px; background: #fffdfa; padding: 14px 15px; }
+.traditional-composer > textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .culture-profile { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 10px 17px 11px; background: linear-gradient(90deg, #f8f6ef, #fbfaf6); }
 .culture-profile > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .culture-profile-mark { width: 28px; height: 28px; flex: 0 0 28px; display: grid; place-items: center; border: 1px solid #d9cfb9; border-radius: 50%; background: #fffdf7; color: #7b6541; }

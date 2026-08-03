@@ -59,7 +59,7 @@ async function openTraditional(page: Page, memories: unknown[] = []) {
 async function fillRequiredProfile(page: Page) {
   await page.getByLabel("出生日期").fill("2000-08-16");
   await page.getByLabel("出生时间").fill("03:30");
-  await page.getByRole("textbox", { name: "你的问题" }).fill("比较传统解释并指出不可验证之处");
+  await page.getByRole("textbox", { name: "研究问题" }).fill("比较传统解释并指出不可验证之处");
   await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click();
 }
 
@@ -90,7 +90,7 @@ for (const [index, sample] of creationSamples.entries()) {
     await page.getByLabel("出生时间").fill(sample.time);
     if (sample.gender === "female") await page.getByLabel("女").check();
     await page.getByLabel("时间精度").selectOption(sample.precision);
-    await page.getByRole("textbox", { name: "你的问题" }).fill("比较传统解释，并明确标出不可验证之处");
+    await page.getByRole("textbox", { name: "研究问题" }).fill("比较传统解释，并明确标出不可验证之处");
     await page.getByText("性情结构", { exact: true }).click();
     await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click();
     await page.getByRole("button", { name: "排盘并进入研判" }).click();
@@ -158,7 +158,7 @@ for (const [index, question] of prohibitedQuestions.entries()) {
       await openTraditional(page);
       await page.getByLabel("出生日期").fill("2000-08-16");
       await page.getByLabel("出生时间").fill("03:30");
-      await page.getByRole("textbox", { name: "你的问题" }).fill(question);
+      await page.getByRole("textbox", { name: "研究问题" }).fill(question);
       await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click();
       await page.getByRole("button", { name: "排盘并进入研判" }).click();
       await expect(page.locator(".form-error")).toContainText("不能用于医疗、法律、投资、合规或生产事故决策");
@@ -172,12 +172,12 @@ for (const [index, question] of prohibitedQuestions.entries()) {
 
 const formGateCases = [
   { name: "全部为空", fill: async (_page: Page) => {} },
-  { name: "缺出生时间", fill: async (page: Page) => { await page.getByLabel("出生日期").fill("2000-08-16"); await page.getByRole("textbox", { name: "你的问题" }).fill("比较传统解释"); await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click(); } },
-  { name: "缺出生日期", fill: async (page: Page) => { await page.getByLabel("出生时间").fill("03:30"); await page.getByRole("textbox", { name: "你的问题" }).fill("比较传统解释"); await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click(); } },
-  { name: "问题不足三字", fill: async (page: Page) => { await page.getByLabel("出生日期").fill("2000-08-16"); await page.getByLabel("出生时间").fill("03:30"); await page.getByRole("textbox", { name: "你的问题" }).fill("解释"); await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click(); } },
-  { name: "没有发送同意", fill: async (page: Page) => { await page.getByLabel("出生日期").fill("2000-08-16"); await page.getByLabel("出生时间").fill("03:30"); await page.getByRole("textbox", { name: "你的问题" }).fill("比较传统解释"); } },
+  { name: "缺出生时间", fill: async (page: Page) => { await page.getByLabel("出生日期").fill("2000-08-16"); await page.getByRole("textbox", { name: "研究问题" }).fill("比较传统解释"); await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click(); } },
+  { name: "缺出生日期", fill: async (page: Page) => { await page.getByLabel("出生时间").fill("03:30"); await page.getByRole("textbox", { name: "研究问题" }).fill("比较传统解释"); await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click(); } },
+  { name: "问题不足三字", fill: async (page: Page) => { await page.getByLabel("出生日期").fill("2000-08-16"); await page.getByLabel("出生时间").fill("03:30"); await page.getByRole("textbox", { name: "研究问题" }).fill("解释"); await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click(); } },
+  { name: "没有发送同意", fill: async (page: Page) => { await page.getByLabel("出生日期").fill("2000-08-16"); await page.getByLabel("出生时间").fill("03:30"); await page.getByRole("textbox", { name: "研究问题" }).fill("比较传统解释"); } },
   { name: "取消发送同意", fill: async (page: Page) => { await fillRequiredProfile(page); await page.getByText("我同意将排盘字段和必要出生参数发送给本次已配置的五个模型席位").click(); } },
-  { name: "键盘快捷键不能绕过", fill: async (page: Page) => { await page.getByRole("textbox", { name: "你的问题" }).fill("比较传统解释"); await page.getByRole("textbox", { name: "你的问题" }).press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter"); } },
+  { name: "键盘快捷键不能绕过", fill: async (page: Page) => { await page.getByRole("textbox", { name: "研究问题" }).fill("比较传统解释"); await page.getByRole("textbox", { name: "研究问题" }).press(process.platform === "darwin" ? "Meta+Enter" : "Control+Enter"); } },
   { name: "出生地限制 120 字", fill: async (page: Page) => { await page.getByRole("textbox", { name: "出生地" }).fill("地".repeat(121)); } },
 ] as const;
 
