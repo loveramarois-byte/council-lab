@@ -19,6 +19,14 @@ declare module "lunar-javascript" {
     toString(): string;
     getYearShengXiao(): string;
     getEightChar(): EightChar;
+    getJieQi(): string;
+    getPrevJieQi(): SolarTerm;
+    getNextJieQi(): SolarTerm;
+  };
+
+  type SolarTerm = {
+    getName(): string;
+    getSolar(): SolarDate;
   };
 
   type SolarDate = {

@@ -71,6 +71,16 @@ export type TraditionalCultureReferenceId =
   | "zao_hua_yuan_yuan"
   | "bu_shi_zheng_zong";
 export type TraditionalInterpretationFramework = "comparative_research" | "bazi_classical" | "ziwei_classical";
+export type TrustedTime = {
+  utc_datetime: string;
+  local_datetime: string;
+  timezone: "Asia/Shanghai";
+  source: "network" | "local_fallback";
+  provider: "https_consensus" | "timeapi.io" | "system_clock";
+  source_url: string;
+  time_proof?: string;
+  synced: boolean;
+};
 export type TraditionalCultureProfile = {
   calendar_type: "solar";
   birth_date: string;
@@ -78,19 +88,24 @@ export type TraditionalCultureProfile = {
   time_precision: "exact" | "approximate";
   gender: "male" | "female";
   birth_place: string;
+  birth_place_normalized?: string | null;
+  birth_latitude?: number | null;
+  birth_longitude?: number | null;
+  birth_place_source?: "offline_city_catalog" | "manual_coordinates" | "unresolved";
   timezone: "Asia/Shanghai";
-  true_solar_time_applied: false;
+  true_solar_time_applied: boolean;
   focus_topics: ("temperament" | "career" | "relationships" | "timing")[];
   interpretation_framework?: TraditionalInterpretationFramework;
   reference_book_ids?: TraditionalCultureReferenceId[];
 };
 export type TraditionalCultureSnapshot = {
-  schema_version: 1;
+  schema_version: 1 | 2;
   calculation_source: "local_browser";
   calculated_at: string;
   profile: TraditionalCultureProfile;
   engines: { id: "lunar-javascript" | "iztro"; version: string; source_url: string; license: "MIT" }[];
-  calendar_facts: { solar_datetime: string; lunar_date: string; zodiac: string; constellation: string; eight_char: string; pillars: string[]; pillar_wuxing: string[]; heavenly_stem_ten_gods: string[] };
+  calendar_facts: { solar_datetime: string; civil_solar_datetime?: string | null; true_solar_datetime?: string | null; true_solar_time_offset_minutes?: number | null; lunar_date: string; zodiac: string; constellation: string; eight_char: string; pillars: string[]; pillar_wuxing: string[]; heavenly_stem_ten_gods: string[] };
+  timing_facts?: { reference_civil_datetime: string; reference_true_solar_datetime: string; reference_true_solar_offset_minutes: number; timezone: "Asia/Shanghai"; time_source: "network" | "local_fallback"; time_provider: "https_consensus" | "timeapi.io" | "system_clock"; time_source_url: string; time_proof?: string; synced: boolean; lunar_date: string; year_pillar: string; month_pillar: string; day_pillar: string; hour_pillar: string; current_solar_term: string; previous_solar_term: { name: string; datetime: string }; next_solar_term: { name: string; datetime: string } } | null;
   ziwei_chart: { solar_date: string; lunar_date: string; chinese_date: string; time_label: string; time_range: string; five_elements_class: string; soul_star: string; body_star: string; soul_palace_branch: string; body_palace_branch: string; palaces: { index: number; name: string; heavenly_stem: string; earthly_branch: string; is_body_palace: boolean; is_original_palace: boolean; major_stars: string[]; minor_stars: string[]; changsheng12: string; decadal_range: number[] }[] };
   notices: string[];
   snapshot_sha256: string;
@@ -409,6 +424,7 @@ async function download(path: string, init?: RequestInit): Promise<{ blob: Blob;
 }
 
 export const api = {
+  trustedTime: () => request<TrustedTime>("/api/time", { cache: "no-store" }),
   downloadDiagnostics: () => download("/api/diagnostics/export", { headers: { "X-Council-Request": "app" } }),
   checkUpdate: (refresh = false) => request<UpdateInfo>(`/api/update/check${refresh ? "?refresh=true" : ""}`, refresh ? { headers: { "X-Council-Request": "app" } } : undefined),
   updateStatus: () => request<UpdateStatus>("/api/update/status"),

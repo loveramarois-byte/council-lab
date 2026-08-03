@@ -45,6 +45,7 @@ from .traditional_culture import (
     TRADITIONAL_PARTICIPANTS,
     contains_prohibited_intent,
     render_snapshot_context,
+    sanitized_question_for_risk,
     without_snapshot_context,
 )
 from .traditional_rules import render_rule_profile_context
@@ -59,6 +60,9 @@ MODE_WORKFLOW_EFFORT = {
 CCSWITCH_EFFORT_FALLBACKS = {
     "ultra": ["ultra", "high", "low"],
     "high": ["high", "low"],
+    "medium": ["medium", "low"],
+    "xhigh": ["xhigh", "high", "low"],
+    "max": ["max", "high", "low"],
     "low": ["low"],
 }
 
@@ -336,7 +340,12 @@ class Orchestrator:
         fork_request: RunForkCreate | None = None,
     ) -> RunRecord:
         seats, finalizer = self._resolve_config(request)
-        analysis = analyze_question(request.question, request.mode, request.limits.max_tokens)
+        analysis_question = (
+            sanitized_question_for_risk(request.question)
+            if request.council_mode == "traditional_culture"
+            else request.question
+        )
+        analysis = analyze_question(analysis_question, request.mode, request.limits.max_tokens)
         if request.council_mode == "traditional_culture":
             if contains_prohibited_intent(request.question) or analysis.high_risk_domain:
                 raise ValueError("传统文化联合研判不能用于医疗、法律、投资、合规或生产事故决策")
@@ -857,7 +866,16 @@ class Orchestrator:
             if self.high_risk_service:
                 await self.high_risk_service.assert_model_call_allowed(run.id)
             self._check_call_limits(run)
-            attempt_profile = assignment.provider_snapshot.model_copy(update={"reasoning_effort": effort})
+            attempt_profile = assignment.provider_snapshot.model_copy(
+                update={
+                    "reasoning_effort": effort,
+                    # The assignment is the user-visible timeout contract for
+                    # this seat. Keep the provider client from silently using
+                    # an older profile default (for example 30s) when the seat
+                    # explicitly allows a longer upstream wait.
+                    "timeout_seconds": min(assignment.timeout_seconds, run.limits.timeout_seconds),
+                }
+            )
             backend_key = f"{assignment.role}:{assignment.provider_id}:{assignment.model}:{effort}"
             if backend_key not in backends:
                 backends[backend_key] = build_backend(attempt_profile)
@@ -1001,6 +1019,11 @@ class Orchestrator:
             )
         template = get_template(run.template_id)
         output_contract = get_output_contract(run.output_contract)
+        output_contract_guidance = (
+            "传统文化模式使用专用五段结构；只按计算快照、传统解释、流派分歧、反证与限制、非约束性观察输出。"
+            if run.council_mode == "traditional_culture"
+            else output_contract.system_guidance
+        )
         source_instruction = (
             "已提供带 [S编号] 的资料。涉及资料中的事实时引用对应编号；没有资料支持的内容必须标为推断或未知，禁止编造来源。"
             if run.source_snapshots
@@ -1010,7 +1033,7 @@ class Orchestrator:
         system = (
             f"你是本次 {participant_count} 席圆桌中的{participant['name']}，角色是{participant['role']}：{participant['brief']}。\n"
             f"{debate_instruction}\n{role_instruction}\n本次模板要求：{template.system_guidance}\n"
-            f"本次输出契约：{output_contract.system_guidance}\n{source_instruction}"
+            f"本次输出契约：{output_contract_guidance}\n{source_instruction}"
             "这是用户全程可参与的公开讨论。"
             + ("独立初答阶段不要读取或回应其他席位，也不要把用户在本阶段的插话当作其他席位意见。" if run.workflow_strategy == "independent" else "必须回应记录中最新的用户插话。")
             + "不要替全体宣布最终答案，不展示隐藏思维链，控制在220字以内。"
@@ -1110,6 +1133,11 @@ class Orchestrator:
         )
         template = get_template(run.template_id)
         output_contract = get_output_contract(run.output_contract)
+        output_contract_guidance = (
+            "传统文化模式使用专用五段结构；只按计算快照、传统解释、流派分歧、反证与限制、非约束性观察输出。"
+            if run.council_mode == "traditional_culture"
+            else output_contract.system_guidance
+        )
         citation_instruction = (
             "附加资料使用 [S编号] 引用；只引用上下文中真实存在的编号。资料没有覆盖的事实必须保留为未知。"
             if run.source_snapshots
@@ -1130,7 +1158,7 @@ class Orchestrator:
             context_window.prompt,
             "你是圆桌记录员。根据本次全部参与席位和用户的完整公开讨论，直接给出最终答案。"
             "先综合已经形成的共识，再处理明确分歧，最后给出可执行答案和必要边界。"
-            f"本次模板要求：{template.system_guidance} 本次输出契约：{output_contract.system_guidance} {citation_instruction}"
+            f"本次模板要求：{template.system_guidance} 本次输出契约：{output_contract_guidance} {citation_instruction}"
             f" {finalizer_instruction}"
             "不要声称不存在的共识，不展示隐藏思维链。",
         )

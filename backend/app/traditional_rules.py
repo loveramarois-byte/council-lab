@@ -51,7 +51,7 @@ TRADITIONAL_RULE_PROFILES: Final[tuple[TraditionalRuleProfile, ...]] = (
         ),
         "instruction": "八字是主框架；不得用紫微宫位补齐八字缺失，也不得把古籍摘要写成原文引文。",
         "limitations": (
-            "当前没有大运、流年和真太阳时校正输入",
+            "当前仍没有大运字段；新版快照只提供可复现的流年、流月、流日、流时和真太阳时状态",
             "不代表任何流派的唯一标准答案",
         ),
     },

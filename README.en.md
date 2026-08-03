@@ -89,7 +89,9 @@ Instead of asking one model for a definitive reading, Council turns traditional-
 
 `local chart snapshot -> select reference directions -> four-seat research -> calendar check -> source comparison -> school comparison -> falsification -> your confirmation`
 
-- **Local and reproducible**: the calendar and chart snapshot are generated in the browser and version-pinned. Birthplace is not sent to model seats.
+- **Local and reproducible**: the calendar and chart snapshot are generated in the browser and version-pinned. Raw birthplace text is neither sent to model seats nor written into reports; only a city-level resolution and computed values leave the local snapshot.
+- **Network time and true solar time**: when online, Council requires at least two agreeing HTTPS `Date` responses from Cloudflare, Google, and Baidu, then binds that result to a short-lived proof issued by the current backend. A recognized city can apply longitude and equation-of-time correction.
+- **Explicit timing fields**: the snapshot lists the birth day/hour pillars, the consultation year's/month's/day's/hour's pillars, and the adjacent solar-term transition times.
 - **Four-seat review**: seats inspect the same snapshot, compare sources and interpretive schools, and actively look for counterexamples.
 - **Selectable references**: chosen directions become part of the frozen snapshot, model context, result page, and exported report.
 - **No invented sourcing**: Council sends title, topic, and school metadata only. It does not bundle classical texts or present an index as a quotation.
@@ -102,7 +104,7 @@ These are research indexes, not bundled full text, automatic citations, or scien
 
 - **No external verification yet**: Council does not run web search or a code sandbox, and it does not produce percentage fact confidence. The final answer is a synthesis of the public discussion.
 - **High-risk is decision support only**: Medical, legal, investment, compliance, and production-incident modes require evidence, independent verification, domain review, and separation of duties. They do not verify licenses or execute prescriptions, trades, filings, releases, or production changes. See [SECURITY.md](SECURITY.md).
-- **Traditional culture is not a scientific claim**: The optional mode creates a version-pinned calendar/chart snapshot locally and offers research indexes for works such as *Qiong Tong Bao Dian*, *San Ming Tong Hui*, *Di Tian Sui*, *Yuan Hai Zi Ping*, *Xie Ji Bian Fang Shu*, *Guo Lao Xing Zong*, *Zi Ping Zhen Quan*, and *Shen Feng Tong Kao*. These are title/topic metadata, not bundled full text or fabricated citations. Birthplace stays local and is not sent to model seats. See [the mode boundary](docs/TRADITIONAL_CULTURE_MODE.md) and [third-party notices](NOTICE).
+- **Traditional culture is not a scientific claim**: The optional mode creates a version-pinned calendar/chart snapshot locally and offers research indexes for works such as *Qiong Tong Bao Dian*, *San Ming Tong Hui*, *Di Tian Sui*, *Yuan Hai Zi Ping*, *Xie Ji Bian Fang Shu*, *Guo Lao Xing Zong*, *Zi Ping Zhen Quan*, and *Shen Feng Tong Kao*. These are title/topic metadata, not bundled full text or fabricated citations. Raw birthplace text stays on the local machine and is excluded from reports; model seats receive only a city-level resolution and computed values. HTTPS consensus is second-level network time with a short-lived server proof, not dedicated NTP or observatory time. See [the mode boundary](docs/TRADITIONAL_CULTURE_MODE.md) and [third-party notices](NOTICE).
 - **Local-first is not automatic backup**: Keys use the operating-system credential store and run data stays on the machine. Inspect reports and diagnostic bundles before sharing them.
 
 ## Download and run
@@ -194,7 +196,7 @@ docs/          Architecture, decisions, evaluation, and integration notes
 
 ## Status and license
 
-Version `0.14.0` is intended for personal research, planning, and non-binding multi-perspective decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
+Version `0.15.0` is intended for personal research, planning, and non-binding multi-perspective decision support. High-risk mode records evidence verification and professional attestations but does not verify licenses or constitute regulated professional advice. Do not use its output directly for high-risk execution.
 
 ## Community thanks
 

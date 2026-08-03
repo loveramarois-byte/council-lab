@@ -2,7 +2,8 @@ import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { astro } from "iztro";
 import { Solar } from "lunar-javascript";
-import type { TraditionalCultureProfile, TraditionalCultureReferenceId, TraditionalCultureSnapshot, TraditionalInterpretationFramework } from "./api";
+import type { TraditionalCultureProfile, TraditionalCultureReferenceId, TraditionalCultureSnapshot, TraditionalInterpretationFramework, TrustedTime } from "./api";
+import { resolveTraditionalLocation } from "./traditional-locations";
 
 const ENGINE_METADATA = [
   { id: "lunar-javascript" as const, version: "1.7.7", source_url: "https://github.com/6tail/lunar-javascript", license: "MIT" as const },
@@ -49,12 +50,18 @@ export const TRADITIONAL_REFERENCE_BOOKS: {
   { id: "bu_shi_zheng_zong", title: "《卜筮正宗》", alias: "", focus: "论六爻卦法", tradition: "卜筮", source: { level: "index_only", label: "仅索引", note: "Council 只记录书名、主题和流派元数据，未载入原文。" } },
 ];
 
-const NOTICES = [
-  "排盘由版本化本地开源引擎计算，不会调用第三方命理 API。",
-  "传统文化解释不属于科学验证，不得作为医疗、法律、投资、合规或生产决策依据。",
-  "当前按 Asia/Shanghai 民用时计算，未应用真太阳时校正；临界时刻可能因流派口径产生不同结果。",
-  "ziwei-doushu 的开源实现依赖 iztro 与 lunar-javascript，共享底层结果不能视为独立交叉验证。",
-];
+type WallClock = { year: number; month: number; day: number; hour: number; minute: number; second: number };
+
+const SHANGHAI_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
 
 function canonicalize(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
@@ -76,23 +83,100 @@ function timeIndexFor(hour: number) {
   return hour === 23 ? 0 : Math.floor((hour + 1) / 2) % 12;
 }
 
+function wallClockFromDate(value: Date): WallClock {
+  const parts = Object.fromEntries(SHANGHAI_FORMATTER.formatToParts(value).map((part) => [part.type, part.value]));
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+}
+
+function formatWallClock(value: WallClock) {
+  const pad = (item: number) => String(item).padStart(2, "0");
+  return `${value.year}-${pad(value.month)}-${pad(value.day)} ${pad(value.hour)}:${pad(value.minute)}:${pad(value.second)}`;
+}
+
+function shiftWallClock(value: WallClock, minutes: number): WallClock {
+  const shifted = new Date(Date.UTC(value.year, value.month - 1, value.day, value.hour, value.minute + minutes, value.second));
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    second: shifted.getUTCSeconds(),
+  };
+}
+
+function trueSolarOffsetMinutes(value: WallClock, longitude: number) {
+  const start = Date.UTC(value.year, 0, 1);
+  const current = Date.UTC(value.year, value.month - 1, value.day);
+  const dayOfYear = Math.floor((current - start) / 86_400_000) + 1;
+  const angle = (2 * Math.PI * (dayOfYear - 81)) / 364;
+  const equationOfTime = 9.87 * Math.sin(2 * angle) - 7.53 * Math.cos(angle) - 1.5 * Math.sin(angle);
+  return Math.round(4 * (longitude - 120) + equationOfTime);
+}
+
+function solarFromWallClock(value: WallClock) {
+  return Solar.fromYmdHms(value.year, value.month, value.day, value.hour, value.minute, value.second);
+}
+
+function solarTermFact(term: { getName(): string; getSolar(): { toYmdHms(): string } }) {
+  return { name: term.getName(), datetime: term.getSolar().toYmdHms() };
+}
+
+export function localFallbackTime(value = new Date()): TrustedTime {
+  const rounded = new Date(Math.floor(value.getTime() / 1000) * 1000);
+  const local = formatWallClock(wallClockFromDate(rounded)).replace(" ", "T");
+  return {
+    utc_datetime: rounded.toISOString().replace(".000Z", "Z"),
+    local_datetime: `${local}+08:00`,
+    timezone: "Asia/Shanghai",
+    source: "local_fallback",
+    provider: "system_clock",
+    source_url: "",
+    synced: false,
+  };
+}
+
 function starLabel(star: { name: string; brightness?: string; mutagen?: string }) {
   const suffix = [star.brightness, star.mutagen ? `化${star.mutagen}` : ""].filter(Boolean).join("·");
   return suffix ? `${star.name}（${suffix}）` : star.name;
 }
 
-export async function buildTraditionalCultureSnapshot(profile: TraditionalCultureProfile): Promise<TraditionalCultureSnapshot> {
+export async function buildTraditionalCultureSnapshot(profile: TraditionalCultureProfile, trustedTime = localFallbackTime()): Promise<TraditionalCultureSnapshot> {
   const [yearText, monthText, dayText] = profile.birth_date.split("-");
   const [hourText, minuteText] = profile.birth_time.split(":");
   const [year, month, day, hour, minute] = [yearText, monthText, dayText, hourText, minuteText].map(Number);
-  const calendarDate = Solar.fromYmdHms(year, month, day, hour, minute, 0);
+  const location = resolveTraditionalLocation(profile.birth_place);
+  const trueSolarTimeApplied = Boolean(profile.true_solar_time_applied && location);
+  const birthCivil: WallClock = { year, month, day, hour, minute, second: 0 };
+  const birthOffset = trueSolarTimeApplied && location ? trueSolarOffsetMinutes(birthCivil, location.longitude) : 0;
+  const birthCalculation = shiftWallClock(birthCivil, birthOffset);
+  const calendarDate = solarFromWallClock(birthCalculation);
   const lunarDate = calendarDate.getLunar();
   const eightChar = lunarDate.getEightChar();
-  const chart = astro.bySolar(`${year}-${month}-${day}`, timeIndexFor(hour), profile.gender === "male" ? "男" : "女", true, "zh-CN");
-  const calculatedAt = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString().replace(".000Z", "Z");
+  const chart = astro.bySolar(`${birthCalculation.year}-${birthCalculation.month}-${birthCalculation.day}`, timeIndexFor(birthCalculation.hour), profile.gender === "male" ? "男" : "女", true, "zh-CN");
+  const referenceInstant = new Date(trustedTime.utc_datetime);
+  if (Number.isNaN(referenceInstant.getTime())) throw new Error("联网校时结果无效，请重试");
+  const referenceCivil = wallClockFromDate(referenceInstant);
+  const referenceOffset = trueSolarTimeApplied && location ? trueSolarOffsetMinutes(referenceCivil, location.longitude) : 0;
+  const referenceCalculation = shiftWallClock(referenceCivil, referenceOffset);
+  const referenceSolar = solarFromWallClock(referenceCalculation);
+  const referenceLunar = referenceSolar.getLunar();
+  const referenceEightChar = referenceLunar.getEightChar();
   let normalizedProfile: TraditionalCultureProfile = {
     ...profile,
     birth_place: profile.birth_place.trim(),
+    birth_place_normalized: location?.name || null,
+    birth_latitude: location?.latitude ?? null,
+    birth_longitude: location?.longitude ?? null,
+    birth_place_source: location?.source || "unresolved",
+    true_solar_time_applied: trueSolarTimeApplied,
     interpretation_framework: profile.interpretation_framework || "comparative_research",
   };
   if (!normalizedProfile.reference_book_ids?.length) {
@@ -100,13 +184,16 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
     normalizedProfile = legacyProfile;
   }
   const snapshotWithoutHash = {
-    schema_version: 1 as const,
+    schema_version: 2 as const,
     calculation_source: "local_browser" as const,
-    calculated_at: calculatedAt,
+    calculated_at: trustedTime.utc_datetime,
     profile: normalizedProfile,
     engines: ENGINE_METADATA,
     calendar_facts: {
       solar_datetime: calendarDate.toYmdHms(),
+      civil_solar_datetime: formatWallClock(birthCivil),
+      true_solar_datetime: trueSolarTimeApplied ? formatWallClock(birthCalculation) : null,
+      true_solar_time_offset_minutes: trueSolarTimeApplied ? birthOffset : null,
       lunar_date: lunarDate.toString(),
       zodiac: lunarDate.getYearShengXiao(),
       constellation: calendarDate.getXingZuo(),
@@ -114,6 +201,25 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
       pillars: [eightChar.getYear(), eightChar.getMonth(), eightChar.getDay(), eightChar.getTime()],
       pillar_wuxing: [eightChar.getYearWuXing(), eightChar.getMonthWuXing(), eightChar.getDayWuXing(), eightChar.getTimeWuXing()],
       heavenly_stem_ten_gods: [eightChar.getYearShiShenGan(), eightChar.getMonthShiShenGan(), eightChar.getDayShiShenGan(), eightChar.getTimeShiShenGan()],
+    },
+    timing_facts: {
+      reference_civil_datetime: formatWallClock(referenceCivil),
+      reference_true_solar_datetime: formatWallClock(referenceCalculation),
+      reference_true_solar_offset_minutes: referenceOffset,
+      timezone: "Asia/Shanghai" as const,
+      time_source: trustedTime.source,
+      time_provider: trustedTime.provider,
+      time_source_url: trustedTime.source_url,
+      ...(trustedTime.time_proof ? { time_proof: trustedTime.time_proof } : {}),
+      synced: trustedTime.synced,
+      lunar_date: referenceLunar.toString(),
+      year_pillar: referenceEightChar.getYear(),
+      month_pillar: referenceEightChar.getMonth(),
+      day_pillar: referenceEightChar.getDay(),
+      hour_pillar: referenceEightChar.getTime(),
+      current_solar_term: referenceLunar.getJieQi(),
+      previous_solar_term: solarTermFact(referenceLunar.getPrevJieQi()),
+      next_solar_term: solarTermFact(referenceLunar.getNextJieQi()),
     },
     ziwei_chart: {
       solar_date: chart.solarDate,
@@ -139,7 +245,18 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
         decadal_range: palace.decadal.range,
       })),
     },
-    notices: NOTICES,
+    notices: [
+      "排盘由版本化本地开源引擎计算，不会调用第三方命理 API。",
+      "传统文化解释不属于科学验证，不得作为医疗、法律、投资、合规或生产决策依据。",
+      trueSolarTimeApplied
+        ? `已按${location?.name}城市级经度应用真太阳时校正；临界时刻仍可能因流派口径产生不同结果。`
+        : "未应用真太阳时校正；临界时刻可能因出生地或流派口径产生不同结果。",
+      trustedTime.synced ? "咨询时刻已通过至少两个一致的 HTTPS 时间源联网校时。" : "联网校时失败，本次明确使用本机时钟回退。",
+      "ziwei-doushu 的开源实现依赖 iztro 与 lunar-javascript，共享底层结果不能视为独立交叉验证。",
+    ],
   };
-  return { ...snapshotWithoutHash, snapshot_sha256: sha256(snapshotWithoutHash) };
+  const timingFactsForHash = { ...snapshotWithoutHash.timing_facts };
+  delete timingFactsForHash.time_proof;
+  const hashPayload = { ...snapshotWithoutHash, timing_facts: timingFactsForHash };
+  return { ...snapshotWithoutHash, snapshot_sha256: sha256(hashPayload) };
 }

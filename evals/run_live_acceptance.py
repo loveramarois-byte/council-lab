@@ -14,6 +14,17 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 TERMINAL_STATUSES = {"completed", "failed", "stopped", "cancelled"}
+PUBLIC_ATTEMPT_FIELDS = (
+    "role",
+    "provider_id",
+    "provider_name",
+    "model",
+    "endpoint",
+    "attempt",
+    "status_code",
+    "duration_ms",
+    "error_kind",
+)
 
 
 def load_cases(dataset_path: Path, acceptance_path: Path) -> list[dict[str, Any]]:
@@ -116,10 +127,50 @@ def public_run_record(run: dict[str, Any], case: dict[str, Any], wall_time_ms: i
         "error": run.get("error"),
         "wall_time_ms": wall_time_ms,
         "usage": run.get("usage", {}),
+        # Run-level attempts are authoritative for this acceptance session.
+        # Keep only the non-sensitive audit fields; never export prompts, keys,
+        # response bodies, or full upstream request identifiers.
+        "provider_attempts": [
+            {field: attempt.get(field) for field in PUBLIC_ATTEMPT_FIELDS}
+            for attempt in run.get("provider_attempts", [])
+            if isinstance(attempt, dict)
+        ],
         "turns": turns,
         "final_decision": run.get("final_decision"),
         "reference_points": case.get("reference_points", []),
         "forbidden_claims": case.get("forbidden_claims", []),
+    }
+
+
+def summarize_provider_attempts(attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    durations = sorted(int(item.get("duration_ms") or 0) for item in attempts)
+
+    def percentile(fraction: float) -> int:
+        if not durations:
+            return 0
+        index = min(len(durations) - 1, int((len(durations) - 1) * fraction))
+        return durations[index]
+
+    return {
+        "attribution": "authoritative_run_provider_attempts",
+        "requests": len(attempts),
+        "successful_requests": sum(
+            1 for item in attempts if 200 <= int(item.get("status_code") or 0) < 300
+        ),
+        "failed_requests": sum(
+            1 for item in attempts if not 200 <= int(item.get("status_code") or 0) < 300
+        ),
+        "retry_attempts": sum(1 for item in attempts if int(item.get("attempt") or 1) > 1),
+        "status_codes": {
+            str(status): sum(1 for item in attempts if int(item.get("status_code") or 0) == status)
+            for status in sorted({int(item.get("status_code") or 0) for item in attempts})
+        },
+        "latency_ms": {
+            "p50": percentile(0.50),
+            "p95": percentile(0.95),
+            "max": durations[-1] if durations else 0,
+            "mean": round(sum(durations) / len(durations), 2) if durations else 0,
+        },
     }
 
 
@@ -228,6 +279,9 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             "expected_logical_calls": args.max_calls,
             "logical_calls": logical_calls,
             "assignments": public_assignments,
+            "provider_attempts": summarize_provider_attempts(
+                [attempt for item in results for attempt in item.get("provider_attempts", [])]
+            ),
             "cases": results,
             "complete": False,
         }
@@ -236,6 +290,11 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             break
 
     completed_at = datetime.now(timezone.utc)
+    provider_attempts = [
+        attempt
+        for record in results
+        for attempt in record.get("provider_attempts", [])
+    ]
     all_rows = read_ccswitch_rows(args.ccswitch_db, model, started_epoch)
     session_rows = [row for row in all_rows if row["request_id"] not in baseline_ids]
     result = {
@@ -246,6 +305,7 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
         "expected_logical_calls": args.max_calls,
         "logical_calls": logical_calls,
         "assignments": public_assignments,
+        "provider_attempts": summarize_provider_attempts(provider_attempts),
         # CC Switch can be shared by other local clients. This time-window view
         # is diagnostic only; Run usage remains the authoritative call count.
         "ccswitch_shared_log_window": {

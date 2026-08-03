@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import json
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from statistics import median
+from typing import Mapping
+from zoneinfo import ZoneInfo
+
+import httpx
+
+
+TIMEZONE_NAME = "Asia/Shanghai"
+TIME_PROVIDER = "https_consensus"
+TIME_SOURCES = (
+    ("cloudflare", "https://www.cloudflare.com/"),
+    ("google", "https://www.google.com/generate_204"),
+    ("baidu", "https://www.baidu.com/"),
+)
+TIME_SOURCE_URL = ",".join(url for _, url in TIME_SOURCES)
+_SHANGHAI = ZoneInfo(TIMEZONE_NAME)
+_MAX_CONSENSUS_SKEW_SECONDS = 5
+_MAX_PROOF_AGE_SECONDS = 10 * 60
+_TIME_PROOF_VERSION = "v1"
+
+
+def _seconds_iso(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _parse_http_date(value: str | None) -> datetime:
+    if not value:
+        raise ValueError("联网时间响应缺少 Date")
+    parsed = parsedate_to_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).replace(microsecond=0)
+
+
+def _fallback_time(now: datetime) -> dict[str, object]:
+    utc_now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    utc_now = utc_now.astimezone(timezone.utc).replace(microsecond=0)
+    local_now = utc_now.astimezone(_SHANGHAI)
+    return {
+        "utc_datetime": _seconds_iso(utc_now),
+        "local_datetime": local_now.isoformat(timespec="seconds"),
+        "timezone": TIMEZONE_NAME,
+        "source": "local_fallback",
+        "provider": "system_clock",
+        "source_url": "",
+        "synced": False,
+    }
+
+
+def _reference_civil_datetime(utc_datetime: object) -> str:
+    if not isinstance(utc_datetime, str):
+        raise ValueError("联网校时结果缺少 UTC 时间")
+    try:
+        parsed = datetime.fromisoformat(utc_datetime.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("联网校时 UTC 时间无效") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("联网校时 UTC 时间缺少时区")
+    return parsed.astimezone(_SHANGHAI).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _proof_payload_from_trusted_time(payload: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "reference_civil_datetime": _reference_civil_datetime(payload.get("utc_datetime")),
+        "timezone": payload.get("timezone"),
+        "time_source": payload.get("source"),
+        "time_provider": payload.get("provider"),
+        "time_source_url": payload.get("source_url"),
+        "synced": payload.get("synced"),
+    }
+
+
+def _proof_payload_from_timing(payload: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "reference_civil_datetime": payload.get("reference_civil_datetime"),
+        "timezone": payload.get("timezone"),
+        "time_source": payload.get("time_source"),
+        "time_provider": payload.get("time_provider"),
+        "time_source_url": payload.get("time_source_url"),
+        "synced": payload.get("synced"),
+    }
+
+
+def _proof_digest(payload: Mapping[str, object], secret: str) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+
+
+def issue_time_proof(payload: Mapping[str, object], secret: str) -> str:
+    """Bind the browser-visible consensus timestamp to this backend instance."""
+    proof_payload = _proof_payload_from_trusted_time(payload)
+    if not (
+        proof_payload["time_source"] == "network"
+        and proof_payload["time_provider"] == TIME_PROVIDER
+        and proof_payload["synced"] is True
+    ):
+        raise ValueError("只有 HTTPS 多源校时结果可以签发证明")
+    return f"{_TIME_PROOF_VERSION}.{_proof_digest(proof_payload, secret)}"
+
+
+def verify_time_proof(
+    payload: Mapping[str, object],
+    secret: str,
+    *,
+    now: datetime | None = None,
+) -> None:
+    proof = payload.get("time_proof")
+    if not isinstance(proof, str) or not proof.startswith(f"{_TIME_PROOF_VERSION}."):
+        raise ValueError("联网校时证明缺失或格式无效，请重新校时")
+    proof_payload = _proof_payload_from_timing(payload)
+    expected = f"{_TIME_PROOF_VERSION}.{_proof_digest(proof_payload, secret)}"
+    if not hmac.compare_digest(proof, expected):
+        raise ValueError("联网校时证明无效，请重新校时")
+    try:
+        reference = datetime.strptime(
+            str(proof_payload["reference_civil_datetime"]), "%Y-%m-%d %H:%M:%S"
+        ).replace(tzinfo=_SHANGHAI)
+    except ValueError as exc:
+        raise ValueError("联网校时时刻格式无效，请重新校时") from exc
+    utc_now = now or datetime.now(timezone.utc)
+    if utc_now.tzinfo is None:
+        utc_now = utc_now.replace(tzinfo=timezone.utc)
+    age = abs((utc_now.astimezone(timezone.utc) - reference.astimezone(timezone.utc)).total_seconds())
+    if age > _MAX_PROOF_AGE_SECONDS:
+        raise ValueError("联网校时证明已过期，请重新校时")
+
+
+async def _sample_source(client: httpx.AsyncClient, name: str, url: str) -> tuple[str, str, datetime] | None:
+    try:
+        response = await client.head(url, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
+        response.raise_for_status()
+        return name, url, _parse_http_date(response.headers.get("Date"))
+    except (httpx.HTTPError, ValueError, TypeError):
+        return None
+
+
+def _consensus_samples(samples: list[tuple[str, str, datetime]]) -> list[tuple[str, str, datetime]]:
+    best: list[tuple[str, str, datetime]] = []
+    for sample in samples:
+        cluster = [
+            candidate
+            for candidate in samples
+            if abs((candidate[2] - sample[2]).total_seconds()) <= _MAX_CONSENSUS_SKEW_SECONDS
+        ]
+        if len(cluster) > len(best):
+            best = cluster
+    return best if len(best) >= 2 else []
+
+
+async def fetch_trusted_time(
+    *,
+    client: httpx.AsyncClient | None = None,
+    fallback_now: datetime | None = None,
+) -> dict[str, object]:
+    """Use agreeing HTTPS origin clocks; never call a single source trusted."""
+    owns_client = client is None
+    active_client = client or httpx.AsyncClient(
+        timeout=5,
+        follow_redirects=False,
+        headers={"Accept": "*/*", "User-Agent": "Council-Lab/time-sync"},
+    )
+    try:
+        sampled = await asyncio.gather(
+            *(_sample_source(active_client, name, url) for name, url in TIME_SOURCES)
+        )
+        consensus = _consensus_samples([sample for sample in sampled if sample is not None])
+        if not consensus:
+            return _fallback_time(fallback_now or datetime.now(timezone.utc))
+        consensus_timestamp = median(sample[2].timestamp() for sample in consensus)
+        utc_now = datetime.fromtimestamp(consensus_timestamp, timezone.utc).replace(microsecond=0)
+        local_now = utc_now.astimezone(_SHANGHAI)
+        return {
+            "utc_datetime": _seconds_iso(utc_now),
+            "local_datetime": local_now.isoformat(timespec="seconds"),
+            "timezone": TIMEZONE_NAME,
+            "source": "network",
+            "provider": TIME_PROVIDER,
+            "source_url": ",".join(sample[1] for sample in consensus),
+            "synced": True,
+        }
+    finally:
+        if owns_client:
+            await active_client.aclose()

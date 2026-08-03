@@ -709,6 +709,63 @@ async def test_ccswitch_timeout_downgrades_reasoning_and_completes(tmp_path, mon
     ]
 
 
+async def test_ccswitch_medium_timeout_downgrades_to_low(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    class EffortBackend:
+        def __init__(self, effort: str):
+            self.effort = effort
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            calls.append(self.effort)
+            if self.effort == "medium":
+                raise asyncio.TimeoutError
+            return Generation(text="席位发言")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: EffortBackend(profile.reasoning_effort))
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(
+        id="ccswitch",
+        display_name="CC Switch",
+        provider_type=ProviderType.CCSWITCH,
+        reasoning_effort="medium",
+        capabilities=ProviderCapabilities(supports_reasoning_effort=True),
+    )
+    orchestrator = Orchestrator(store, {"ccswitch": profile})
+    run = await orchestrator.start(
+        RunCreate(
+            question="验证 Medium 超时降档",
+            provider_id="ccswitch",
+            assignment_config=AgentAssignmentsConfig(
+                seats=[
+                    AgentModelAssignment(
+                        role=role,
+                        provider_id="ccswitch",
+                        model="test-model",
+                        reasoning_effort="medium",
+                    )
+                    for role in ("analyst", "challenger", "builder", "observer")
+                ],
+                finalizer=AgentModelAssignment(
+                    role="finalizer",
+                    provider_id="ccswitch",
+                    model="test-model",
+                    reasoning_effort="medium",
+                ),
+            ),
+        )
+    )
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None and current.status == "awaiting_final_input"
+    assert current.degraded is True
+    assert current.reasoning_effort == "low"
+    assert calls[:2] == ["medium", "low"]
+    route_turns = [turn for turn in current.discussion_turns if turn.speaker_type == "system"]
+    assert route_turns[0].content == "Medium 原生推理档上游超时，已自动降为 Low 档重试当前席位。"
+
+
 async def test_ccswitch_fallbacks_share_one_seat_timeout(tmp_path, monkeypatch):
     calls: list[str] = []
 
@@ -1055,6 +1112,36 @@ async def test_stale_assignment_timeout_is_upgraded_before_finalizer(tmp_path, m
     orchestrator._ensure_run_assignments(current)
     assert [assignment.timeout_seconds for assignment in current.seat_assignments] == [120, 120, 120, 120]
     assert current.finalizer_assignment.timeout_seconds == 120
+
+
+async def test_explicit_assignment_timeout_overrides_provider_profile_timeout(tmp_path, monkeypatch):
+    backend_timeouts: list[float] = []
+
+    class CapturingBackend:
+        def __init__(self, profile):
+            backend_timeouts.append(profile.timeout_seconds)
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            return Generation(text="席位发言")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", CapturingBackend)
+    store = Store(tmp_path / "assignment-timeout.sqlite3")
+    profile = ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK, timeout_seconds=30)
+    orchestrator = Orchestrator(store, {"mock": profile})
+    assignments = orchestrator.default_assignment_config("mock", "council-mock", "standard")
+    for item in [*assignments.seats, assignments.finalizer]:
+        item.timeout_seconds = 120
+
+    run = await orchestrator.start(
+        RunCreate(
+            question="验证显式席位时限",
+            provider_id="mock",
+            assignment_config=assignments,
+            limits=RunLimits(timeout_seconds=120),
+        )
+    )
+    await orchestrator.tasks[run.id]
+    assert backend_timeouts == [120, 120, 120, 120]
 
 
 async def test_explicit_v2_thirty_second_assignment_is_preserved(tmp_path):

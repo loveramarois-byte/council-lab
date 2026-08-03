@@ -4,7 +4,8 @@ import copy
 import hashlib
 import importlib
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -27,7 +28,8 @@ from app.providers import Generation
 from app.reports import run_html, run_markdown
 from app.risk.service import HighRiskService
 from app.store import Store
-from app.traditional_culture import contains_prohibited_intent, render_snapshot_context
+from app.time_sync import issue_time_proof
+from app.traditional_culture import contains_prohibited_intent, render_snapshot_context, sanitized_question_for_risk
 from conftest import TEST_INTERNAL_API_TOKEN
 
 
@@ -97,11 +99,99 @@ def snapshot_payload() -> dict:
 
 
 def rehash_snapshot(payload: dict) -> dict:
-    without_hash = {key: value for key, value in payload.items() if key != "snapshot_sha256"}
+    without_hash = copy.deepcopy({key: value for key, value in payload.items() if key != "snapshot_sha256"})
+    if without_hash.get("timing_facts") is not None:
+        without_hash["timing_facts"].pop("time_proof", None)
     payload["snapshot_sha256"] = hashlib.sha256(
         json.dumps(without_hash, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()
     return payload
+
+
+def rehash_snapshot_with_legacy_proof(payload: dict) -> dict:
+    without_hash = copy.deepcopy({key: value for key, value in payload.items() if key != "snapshot_sha256"})
+    payload["snapshot_sha256"] = hashlib.sha256(
+        json.dumps(without_hash, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+    return payload
+
+
+def snapshot_v2_payload() -> dict:
+    payload = snapshot_payload()
+    payload["schema_version"] = 2
+    payload["profile"].update(
+        {
+            "birth_place": "山东青岛",
+            "birth_place_normalized": "青岛",
+            "birth_latitude": 36.0671,
+            "birth_longitude": 120.3826,
+            "birth_place_source": "offline_city_catalog",
+            "true_solar_time_applied": True,
+        }
+    )
+    payload["calendar_facts"].update(
+        {
+            "civil_solar_datetime": "2000-08-16 03:30:00",
+            "true_solar_datetime": "2000-08-16 03:25:00",
+            "true_solar_time_offset_minutes": -5,
+        }
+    )
+    payload["timing_facts"] = {
+        "reference_civil_datetime": "2026-08-03 08:00:00",
+        "reference_true_solar_datetime": "2026-08-03 07:56:00",
+        "reference_true_solar_offset_minutes": -4,
+        "timezone": "Asia/Shanghai",
+        "time_source": "network",
+        "time_provider": "timeapi.io",
+        "time_source_url": "https://timeapi.io/api/Time/current/zone?timeZone=Asia%2FShanghai",
+        "synced": True,
+        "lunar_date": "二〇二六年六月廿一",
+        "year_pillar": "丙午",
+        "month_pillar": "乙未",
+        "day_pillar": "己酉",
+        "hour_pillar": "戊辰",
+        "current_solar_term": "",
+        "previous_solar_term": {"name": "大暑", "datetime": "2026-07-23 03:13:05"},
+        "next_solar_term": {"name": "立秋", "datetime": "2026-08-07 19:42:26"},
+    }
+    return rehash_snapshot(payload)
+
+
+def signed_snapshot_v2_payload(secret: str, instant: datetime) -> dict:
+    utc_instant = instant.astimezone(timezone.utc).replace(microsecond=0)
+    local_instant = utc_instant.astimezone(ZoneInfo("Asia/Shanghai"))
+    trusted = {
+        "utc_datetime": utc_instant.isoformat().replace("+00:00", "Z"),
+        "local_datetime": local_instant.isoformat(timespec="seconds"),
+        "timezone": "Asia/Shanghai",
+        "source": "network",
+        "provider": "https_consensus",
+        "source_url": "https://www.cloudflare.com/,https://www.google.com/generate_204",
+        "synced": True,
+    }
+    payload = snapshot_v2_payload()
+    payload["calculated_at"] = trusted["utc_datetime"]
+    payload["timing_facts"].update(
+        {
+            "reference_civil_datetime": local_instant.strftime("%Y-%m-%d %H:%M:%S"),
+            "time_source": "network",
+            "time_provider": "https_consensus",
+            "time_source_url": trusted["source_url"],
+            "time_proof": issue_time_proof(trusted, secret),
+            "synced": True,
+        }
+    )
+    return rehash_snapshot(payload)
+
+
+def test_time_proof_is_verified_separately_from_reproducible_snapshot_hash():
+    first = signed_snapshot_v2_payload("first-secret-at-least-32-characters", datetime(2026, 8, 3, tzinfo=timezone.utc))
+    second = signed_snapshot_v2_payload("second-secret-at-least-32-characters", datetime(2026, 8, 3, tzinfo=timezone.utc))
+
+    assert first["timing_facts"]["time_proof"] != second["timing_facts"]["time_proof"]
+    assert first["snapshot_sha256"] == second["snapshot_sha256"]
+    TraditionalCultureSnapshot.model_validate(first)
+    TraditionalCultureSnapshot.model_validate(rehash_snapshot_with_legacy_proof(copy.deepcopy(first)))
 
 
 def traditional_request(**updates) -> RunCreate:
@@ -154,6 +244,20 @@ def test_browser_snapshot_contract_and_profile_date_range_are_strict():
         )
 
 
+def test_v2_snapshot_keeps_birthplace_true_solar_time_and_current_timing_context():
+    snapshot = TraditionalCultureSnapshot.model_validate(snapshot_v2_payload())
+    rendered = render_snapshot_context(snapshot)
+
+    assert snapshot.profile.birth_place == "山东青岛"
+    assert snapshot.profile.birth_place_normalized == "青岛"
+    assert snapshot.profile.true_solar_time_applied is True
+    assert "出生地已在本地识别：青岛" in rendered
+    assert "真太阳时：2000-08-16 03:25:00" in rendered
+    assert "流年：丙午；流月：乙未；流日：己酉；流时：戊辰" in rendered
+    assert "上一节气：大暑 2026-07-23 03:13:05" in rendered
+    assert "下一节气：立秋 2026-08-07 19:42:26" in rendered
+
+
 def test_reference_book_index_is_validated_and_included_in_snapshot_context():
     payload = snapshot_payload()
     payload["profile"]["reference_book_ids"] = ["di_tian_sui", "zhou_yi", "qiong_tong_bao_dian"]
@@ -184,7 +288,7 @@ def test_interpretation_framework_is_frozen_and_legacy_snapshots_still_validate(
     assert snapshot.profile.interpretation_framework == "bazi_classical"
     assert "解释体系：八字规则优先" in rendered
     assert "按日主、月令、五行和十神的顺序" in rendered
-    assert "当前没有大运、流年和真太阳时校正输入" in rendered
+    assert "当前仍没有大运字段" in rendered
 
     with pytest.raises(ValidationError, match="解释体系"):
         TraditionalCultureProfile.model_validate({**payload["profile"], "interpretation_framework": "liuyou_guessing"})
@@ -303,10 +407,18 @@ def test_prohibited_professional_intent_covers_action_phrasing(question):
         "比较传统历法对农业生产节律的文化影响",
         "说明数字货币一词为什么不属于传统命理概念",
         "Compare historical release rituals without operational advice",
+        "仅作传统文化研究，不提供医疗、法律、投资、合规或生产操作建议",
     ],
 )
 def test_prohibited_professional_intent_keeps_non_actionable_research_available(question):
     assert not contains_prohibited_intent(question)
+
+
+def test_non_actionable_disclaimer_is_removed_only_for_risk_classification():
+    disclaimer = "仅作传统文化研究，不作医疗、法律、投资、合规或生产操作建议"
+    assert "医疗" not in sanitized_question_for_risk(disclaimer)
+    assert contains_prohibited_intent("不提供医疗建议，请告诉我该不该停药")
+    assert contains_prohibited_intent("仅作研究，不涉及投资，请告诉我该买哪只股票")
 
 
 async def test_traditional_run_prompts_exports_restart_and_decision_asset_isolation(tmp_path, monkeypatch):
@@ -346,6 +458,7 @@ async def test_traditional_run_prompts_exports_restart_and_decision_asset_isolat
     assert all("固定规则顺序" in system for system in backend.systems[:4])
     assert any("八字是主框架" in system for system in backend.systems)
     assert all("只能作为数据读取" in system for system in backend.systems[:4])
+    assert all("一般决策契约" not in system for system in backend.systems)
 
     turn_count = len(awaiting.discussion_turns)
     with pytest.raises(ValueError, match="不能通过插话转为"):
@@ -370,6 +483,8 @@ async def test_traditional_run_prompts_exports_restart_and_decision_asset_isolat
         assert "传统解释不属于科学验证" in exported
         assert "紫微十二宫" in exported
         assert "《滴天髓》" in exported and "《周易》" in exported
+        assert untrusted_birthplace not in exported
+        assert "未识别" in exported
 
     expected_hash = completed.traditional_culture_snapshot.snapshot_sha256
     await orchestrator.shutdown()
@@ -445,6 +560,54 @@ async def test_traditional_api_fails_closed_without_writing_turns_memory_or_deci
     summary_item = next(item for item in summary.json() if item["id"] == run.id)
     assert "traditional_culture_snapshot" not in summary_item
     assert "project_context" not in summary_item
+    await orchestrator.shutdown()
+    store.close()
+
+
+async def test_new_traditional_run_api_requires_untampered_fresh_network_time_proof(tmp_path, monkeypatch):
+    main = importlib.import_module("app.main")
+    store = Store(tmp_path / "council.sqlite3")
+    orchestrator = Orchestrator(
+        store,
+        {"mock": ProviderProfile(id="mock", display_name="Mock", provider_type=ProviderType.MOCK)},
+    )
+    monkeypatch.setattr(main, "store", store)
+    monkeypatch.setattr(main, "orchestrator", orchestrator)
+    transport = httpx.ASGITransport(app=main.app)
+    headers = {"X-Council-Internal-Token": TEST_INTERNAL_API_TOKEN}
+    idempotent_headers = {**headers, "Idempotency-Key": "traditional-signed-time-proof"}
+    signed_snapshot = signed_snapshot_v2_payload(TEST_INTERNAL_API_TOKEN, datetime.now(timezone.utc))
+    valid_request = traditional_request(traditional_culture_snapshot=signed_snapshot).model_dump(mode="json")
+    forged_snapshot = copy.deepcopy(signed_snapshot)
+    forged_snapshot["timing_facts"]["reference_civil_datetime"] = "2026-08-03 12:34:56"
+    forged_request = traditional_request(
+        traditional_culture_snapshot=rehash_snapshot(forged_snapshot)
+    ).model_dump(mode="json")
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
+        forged = await client.post("/api/runs", headers=headers, json=forged_request)
+        valid = await client.post("/api/runs", headers=idempotent_headers, json=valid_request)
+        monkeypatch.setattr(
+            main,
+            "verify_time_proof",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("联网校时证明已过期，请重新校时")),
+        )
+        replay = await client.post("/api/runs", headers=idempotent_headers, json=valid_request)
+
+    assert forged.status_code == 400
+    assert "联网校时证明无效" in forged.text
+    assert valid.status_code == 200
+    assert replay.status_code == 200
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert replay.json()["id"] == valid.json()["id"]
+    created_id = valid.json()["id"]
+    await orchestrator.tasks[created_id]
+    persisted = await store.get_run(created_id)
+    assert persisted is not None and persisted.traditional_culture_snapshot is not None
+    proof = signed_snapshot["timing_facts"]["time_proof"]
+    assert proof not in render_snapshot_context(persisted.traditional_culture_snapshot)
+    assert proof not in run_markdown(persisted)
+    assert proof not in run_html(persisted)
     await orchestrator.shutdown()
     store.close()
 

@@ -184,8 +184,12 @@ class TraditionalCultureProfile(BaseModel):
     time_precision: Literal["exact", "approximate"] = "exact"
     gender: Literal["male", "female"]
     birth_place: str = Field(default="", max_length=120)
+    birth_place_normalized: str | None = Field(default=None, min_length=1, max_length=20, pattern=r"^[\u3400-\u9fff]+$")
+    birth_latitude: float | None = Field(default=None, ge=-90, le=90)
+    birth_longitude: float | None = Field(default=None, ge=-180, le=180)
+    birth_place_source: Literal["offline_city_catalog", "manual_coordinates", "unresolved"] = "unresolved"
     timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
-    true_solar_time_applied: Literal[False] = False
+    true_solar_time_applied: bool = False
     focus_topics: list[Literal["temperament", "career", "relationships", "timing"]] = Field(
         default_factory=list,
         max_length=4,
@@ -200,9 +204,11 @@ class TraditionalCultureProfile(BaseModel):
             raise ValueError("出生日期必须在 1900-01-01 至今天之间")
         return value
 
-    @field_validator("birth_place")
+    @field_validator("birth_place", "birth_place_normalized")
     @classmethod
-    def validate_birth_place(cls, value: str) -> str:
+    def validate_birth_place(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if any(unicodedata.category(character).startswith("C") for character in value):
             raise ValueError("出生地不能包含控制字符或不可见格式字符")
         return value
@@ -238,6 +244,9 @@ class TraditionalCultureCalendarFacts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     solar_datetime: str = Field(min_length=10, max_length=30)
+    civil_solar_datetime: str | None = Field(default=None, min_length=10, max_length=30)
+    true_solar_datetime: str | None = Field(default=None, min_length=10, max_length=30)
+    true_solar_time_offset_minutes: int | None = Field(default=None, ge=-180, le=180)
     lunar_date: str = Field(min_length=1, max_length=80)
     zodiac: str = Field(min_length=1, max_length=20)
     constellation: str = Field(min_length=1, max_length=30)
@@ -245,6 +254,60 @@ class TraditionalCultureCalendarFacts(BaseModel):
     pillars: list[Annotated[str, Field(min_length=1, max_length=12)]] = Field(min_length=4, max_length=4)
     pillar_wuxing: list[Annotated[str, Field(min_length=1, max_length=12)]] = Field(min_length=4, max_length=4)
     heavenly_stem_ten_gods: list[Annotated[str, Field(min_length=1, max_length=20)]] = Field(min_length=4, max_length=4)
+
+
+class TraditionalCultureSolarTerm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=20)
+    datetime: str = Field(min_length=10, max_length=30)
+
+
+class TraditionalCultureTimingFacts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_civil_datetime: str = Field(min_length=10, max_length=30)
+    reference_true_solar_datetime: str = Field(min_length=10, max_length=30)
+    reference_true_solar_offset_minutes: int = Field(ge=-180, le=180)
+    timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
+    time_source: Literal["network", "local_fallback"]
+    time_provider: Literal["https_consensus", "timeapi.io", "system_clock"]
+    time_source_url: str = Field(default="", max_length=300)
+    time_proof: str | None = Field(default=None, pattern=r"^v1\.[a-f0-9]{64}$")
+    synced: bool
+    lunar_date: str = Field(min_length=1, max_length=80)
+    year_pillar: str = Field(min_length=2, max_length=12)
+    month_pillar: str = Field(min_length=2, max_length=12)
+    day_pillar: str = Field(min_length=2, max_length=12)
+    hour_pillar: str = Field(min_length=2, max_length=12)
+    current_solar_term: str = Field(default="", max_length=20)
+    previous_solar_term: TraditionalCultureSolarTerm
+    next_solar_term: TraditionalCultureSolarTerm
+
+    @model_validator(mode="after")
+    def validate_time_provenance(self) -> "TraditionalCultureTimingFacts":
+        if self.synced:
+            valid_status = self.time_source == "network" and self.time_provider in {"https_consensus", "timeapi.io"}
+        else:
+            valid_status = self.time_source == "local_fallback" and self.time_provider == "system_clock"
+        if not valid_status:
+            raise ValueError("联网校时状态与来源不一致")
+        if self.time_provider == "https_consensus":
+            allowed_sources = {
+                "https://www.cloudflare.com/",
+                "https://www.google.com/generate_204",
+                "https://www.baidu.com/",
+            }
+            sources = self.time_source_url.split(",")
+            if len(set(sources)) < 2 or any(source not in allowed_sources for source in sources):
+                raise ValueError("联网多源校时缺少一致来源")
+        if self.time_provider == "timeapi.io" and not self.time_source_url.startswith("https://timeapi.io/"):
+            raise ValueError("联网校时来源地址无效")
+        if not self.synced and self.time_source_url:
+            raise ValueError("本机时间回退不能标记为联网来源")
+        if self.time_provider != "https_consensus" and self.time_proof is not None:
+            raise ValueError("非多源联网校时不能携带服务端时间证明")
+        return self
 
 
 class TraditionalCultureZiweiPalace(BaseModel):
@@ -287,12 +350,13 @@ class TraditionalCultureZiweiChart(BaseModel):
 class TraditionalCultureSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     calculation_source: Literal["local_browser"] = "local_browser"
     calculated_at: datetime
     profile: TraditionalCultureProfile
     engines: list[TraditionalCultureEngine] = Field(min_length=2, max_length=2)
     calendar_facts: TraditionalCultureCalendarFacts
+    timing_facts: TraditionalCultureTimingFacts | None = None
     ziwei_chart: TraditionalCultureZiweiChart
     notices: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, min_length=2, max_length=12)
     snapshot_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -302,26 +366,64 @@ class TraditionalCultureSnapshot(BaseModel):
         versions = {item.id: item.version for item in self.engines}
         if versions != {"lunar-javascript": "1.7.7", "iztro": "2.5.8"}:
             raise ValueError("传统文化计算引擎版本与当前发行版不一致")
+        if self.schema_version == 2:
+            if self.timing_facts is None:
+                raise ValueError("新版传统文化快照缺少流年流月流日字段")
+            if self.profile.true_solar_time_applied:
+                if (
+                    not self.profile.birth_place
+                    or not self.profile.birth_place_normalized
+                    or self.profile.birth_latitude is None
+                    or self.profile.birth_longitude is None
+                    or self.profile.birth_place_source == "unresolved"
+                    or self.calendar_facts.true_solar_datetime is None
+                    or self.calendar_facts.true_solar_time_offset_minutes is None
+                ):
+                    raise ValueError("真太阳时校正缺少可追溯的出生地或时间字段")
         payload = self.model_dump(mode="json", exclude={"snapshot_sha256"})
-        canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        valid_hashes = {hashlib.sha256(canonical).hexdigest()}
+        time_proof = None
+        if self.timing_facts is not None:
+            # The proof authenticates fresh network time separately. It is
+            # process-keyed and must not make an otherwise identical snapshot
+            # hash change after the backend restarts.
+            time_proof = payload["timing_facts"].pop("time_proof", None)
+        if self.schema_version == 1:
+            for key in ("birth_place_normalized", "birth_latitude", "birth_longitude", "birth_place_source"):
+                payload["profile"].pop(key, None)
+            for key in ("civil_solar_datetime", "true_solar_datetime", "true_solar_time_offset_minutes"):
+                payload["calendar_facts"].pop(key, None)
+            payload.pop("timing_facts", None)
+        payload_variants = [payload]
+        if time_proof is not None and self.schema_version == 2:
+            # Compatibility for development builds that briefly included the
+            # process-keyed proof in the digest before v0.15.0 shipped.
+            proof_bound_payload = json.loads(json.dumps(payload, ensure_ascii=False))
+            proof_bound_payload["timing_facts"]["time_proof"] = time_proof
+            payload_variants.append(proof_bound_payload)
+
+        valid_hashes: set[str] = set()
         # Older v1 snapshots predate the optional reference index and default
         # comparative framework. Keep compatibility for those default-only
         # shapes; non-default framework selections remain hash-bound.
-        if not self.profile.reference_book_ids:
-            legacy_payload = json.loads(json.dumps(payload, ensure_ascii=False))
-            legacy_payload["profile"].pop("reference_book_ids", None)
-            legacy_canonical = json.dumps(legacy_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-            valid_hashes.add(hashlib.sha256(legacy_canonical).hexdigest())
-        if self.profile.interpretation_framework == "comparative_research":
-            legacy_payload = json.loads(json.dumps(payload, ensure_ascii=False))
-            legacy_payload["profile"].pop("interpretation_framework", None)
-            legacy_canonical = json.dumps(legacy_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-            valid_hashes.add(hashlib.sha256(legacy_canonical).hexdigest())
+        for base_payload in payload_variants:
+            profile_omissions = [()]
             if not self.profile.reference_book_ids:
-                legacy_payload["profile"].pop("reference_book_ids", None)
-                legacy_canonical = json.dumps(legacy_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-                valid_hashes.add(hashlib.sha256(legacy_canonical).hexdigest())
+                profile_omissions.append(("reference_book_ids",))
+            if self.profile.interpretation_framework == "comparative_research":
+                profile_omissions.append(("interpretation_framework",))
+                if not self.profile.reference_book_ids:
+                    profile_omissions.append(("reference_book_ids", "interpretation_framework"))
+            for omissions in profile_omissions:
+                compatible_payload = json.loads(json.dumps(base_payload, ensure_ascii=False))
+                for key in omissions:
+                    compatible_payload["profile"].pop(key, None)
+                canonical = json.dumps(
+                    compatible_payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+                valid_hashes.add(hashlib.sha256(canonical).hexdigest())
         if self.snapshot_sha256 not in valid_hashes:
             raise ValueError("传统文化计算快照校验失败，请重新排盘")
         return self

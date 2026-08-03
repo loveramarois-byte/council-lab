@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildTraditionalCultureSnapshot, TRADITIONAL_REFERENCE_BOOKS, TRADITIONAL_RULE_PROFILES } from "./traditional-culture";
+import { resolveTraditionalLocation } from "./traditional-locations";
 
 
 describe("traditional culture local calculation", () => {
@@ -29,7 +30,7 @@ describe("traditional culture local calculation", () => {
     expect(snapshot.ziwei_chart.palaces).toHaveLength(12);
     expect(snapshot.profile.interpretation_framework).toBe("comparative_research");
     expect(snapshot.engines.map((engine) => `${engine.id}@${engine.version}`)).toEqual(["lunar-javascript@1.7.7", "iztro@2.5.8"]);
-    expect(snapshot.snapshot_sha256).toBe("1a46c686e3d19434811ebe9c4b7927c81667d6c6268207f2773a9560430f6c59");
+    expect(snapshot.snapshot_sha256).toBe("834a9b05215734c27c5bc5530ddd6eaf54be59c154854580356feaabca162b5a");
   });
 
   it("records selected reference-book metadata without bundling source text", async () => {
@@ -58,4 +59,101 @@ describe("traditional culture local calculation", () => {
     expect(TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === "ziwei_doushu_quan_shu")?.source).toMatchObject({ level: "upstream_excerpt", label: "上游精选片段" });
     expect(JSON.stringify(snapshot)).not.toContain("原文");
   });
+
+  it("resolves Shandong Qingdao and freezes true-solar and current timing fields", async () => {
+    const snapshot = await buildTraditionalCultureSnapshot({
+      calendar_type: "solar",
+      birth_date: "1995-04-27",
+      birth_time: "11:45",
+      time_precision: "exact",
+      gender: "male",
+      birth_place: "山东青岛",
+      timezone: "Asia/Shanghai",
+      true_solar_time_applied: true,
+      focus_topics: ["timing"],
+      interpretation_framework: "comparative_research",
+      reference_book_ids: [],
+    }, {
+      utc_datetime: "2026-08-03T00:00:00Z",
+      local_datetime: "2026-08-03T08:00:00+08:00",
+      timezone: "Asia/Shanghai",
+      source: "network",
+      provider: "https_consensus",
+      source_url: "https://www.cloudflare.com/,https://www.google.com/generate_204",
+      synced: true,
+    });
+
+    expect(snapshot.schema_version).toBe(2);
+    expect(snapshot.profile).toMatchObject({
+      birth_place: "山东青岛",
+      birth_place_normalized: "青岛",
+      birth_latitude: 36.0671,
+      birth_longitude: 120.3826,
+      birth_place_source: "offline_city_catalog",
+      true_solar_time_applied: true,
+    });
+    expect(snapshot.calendar_facts).toMatchObject({
+      civil_solar_datetime: "1995-04-27 11:45:00",
+      true_solar_datetime: "1995-04-27 11:49:00",
+      true_solar_time_offset_minutes: 4,
+    });
+    expect(snapshot.calendar_facts.pillars[2]).toBeTruthy();
+    expect(snapshot.calendar_facts.pillars[3]).toBeTruthy();
+    expect(snapshot.timing_facts).toMatchObject({
+      reference_civil_datetime: "2026-08-03 08:00:00",
+      reference_true_solar_datetime: "2026-08-03 07:56:00",
+      time_source: "network",
+      time_provider: "https_consensus",
+      year_pillar: "丙午",
+      month_pillar: "乙未",
+      day_pillar: "己酉",
+      hour_pillar: "戊辰",
+      previous_solar_term: { name: "大暑", datetime: "2026-07-23 03:13:05" },
+      next_solar_term: { name: "立秋", datetime: "2026-08-07 19:42:43" },
+    });
+  });
+
+  it("keeps the snapshot digest stable when only the server time proof changes", async () => {
+    const profile = {
+      calendar_type: "solar" as const,
+      birth_date: "1995-04-27",
+      birth_time: "11:45",
+      time_precision: "exact" as const,
+      gender: "male" as const,
+      birth_place: "山东青岛",
+      timezone: "Asia/Shanghai" as const,
+      true_solar_time_applied: true,
+      focus_topics: ["timing" as const],
+    };
+    const trustedTime = {
+      utc_datetime: "2026-08-03T00:00:00Z",
+      local_datetime: "2026-08-03T08:00:00+08:00",
+      timezone: "Asia/Shanghai" as const,
+      source: "network" as const,
+      provider: "https_consensus" as const,
+      source_url: "https://www.cloudflare.com/,https://www.google.com/generate_204",
+      synced: true,
+    };
+    const first = await buildTraditionalCultureSnapshot(profile, { ...trustedTime, time_proof: `v1.${"a".repeat(64)}` });
+    const second = await buildTraditionalCultureSnapshot(profile, { ...trustedTime, time_proof: `v1.${"b".repeat(64)}` });
+
+    expect(first.timing_facts?.time_proof).not.toBe(second.timing_facts?.time_proof);
+    expect(first.snapshot_sha256).toBe(second.snapshot_sha256);
+  });
+
+  it.each([
+    ["青岛", "青岛"],
+    ["青岛市", "青岛"],
+    ["山东青岛", "青岛"],
+    ["山东省青岛市", "青岛"],
+  ])("resolves only structured city input %s", (input, expected) => {
+    expect(resolveTraditionalLocation(input)?.name).toBe(expected);
+  });
+
+  it.each(["不在北京", "南京路", "我住在山东青岛附近", "广东青岛"])(
+    "does not infer a city from ambiguous free-form input %s",
+    (input) => {
+      expect(resolveTraditionalLocation(input)).toBeNull();
+    },
+  );
 });

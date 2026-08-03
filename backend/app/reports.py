@@ -131,6 +131,7 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
     if snapshot is None:
         return []
     profile, facts, chart = snapshot.profile, snapshot.calendar_facts, snapshot.ziwei_chart
+    timing = snapshot.timing_facts
     framework = get_traditional_rule_profile(profile.interpretation_framework)
     references = [TRADITIONAL_REFERENCE_BOOKS_BY_ID[item] for item in profile.reference_book_ids]
     reference_lines = []
@@ -150,11 +151,14 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
         "> 排盘字段来自版本化本地开源引擎，可按相同输入复现；传统解释、预测和流派判断不属于科学验证，不得用于医疗、法律、投资、合规或生产决策。",
         "",
         f"- 输入：{profile.birth_date.isoformat()} {profile.birth_time}；排盘参数：{'男' if profile.gender == 'male' else '女'}；时间精度：{'准确' if profile.time_precision == 'exact' else '约数'}",
-        f"- 时区：{profile.timezone} 民用时；真太阳时：未应用；出生地记录：{profile.birth_place or '未提供'}",
+        f"- 时区：{profile.timezone} 民用时；出生地：{profile.birth_place_normalized + '（城市级）' if profile.birth_place_normalized else '未识别'}",
+        f"- 坐标来源：{profile.birth_place_source}",
+        f"- 出生民用时：{facts.civil_solar_datetime or facts.solar_datetime}；真太阳时：{facts.true_solar_datetime or '未应用'}；校正分钟：{facts.true_solar_time_offset_minutes if facts.true_solar_time_offset_minutes is not None else '无'}",
         f"- 固定解释体系：{framework['label']}（{framework['version']}）",
         f"- 公历：{facts.solar_datetime}",
         f"- 农历：{facts.lunar_date}；生肖：{facts.zodiac}；星座：{facts.constellation}",
         f"- 四柱：{facts.eight_char}",
+        f"- 出生日柱：{facts.pillars[2]}；出生时辰：{chart.time_label}（{chart.time_range}）；出生时柱：{facts.pillars[3]}",
         f"- 柱五行：{' / '.join(facts.pillar_wuxing)}",
         f"- 天干十神：{' / '.join(facts.heavenly_stem_ten_gods)}",
         f"- 紫微：{chart.five_elements_class}；命主：{chart.soul_star}；身主：{chart.body_star}；命宫地支：{chart.soul_palace_branch}；身宫地支：{chart.body_palace_branch}",
@@ -179,6 +183,16 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
         "### 紫微十二宫",
         "",
     ]
+    if timing is not None:
+        time_provider = {"https_consensus": "HTTPS 多源校时", "timeapi.io": "历史单源时间记录"}.get(
+            timing.time_provider, timing.time_provider
+        )
+        lines[14:14] = [
+            f"- 咨询时刻：{timing.reference_civil_datetime}；时间来源：{time_provider}（{'联网已同步' if timing.synced else '本机时钟回退'}）",
+            f"- 咨询真太阳时：{timing.reference_true_solar_datetime}；校正分钟：{timing.reference_true_solar_offset_minutes:+d}",
+            f"- 流年：{timing.year_pillar}；流月：{timing.month_pillar}；流日：{timing.day_pillar}；流时：{timing.hour_pillar}",
+            f"- 节气交接：{timing.previous_solar_term.name} {timing.previous_solar_term.datetime} -> {timing.next_solar_term.name} {timing.next_solar_term.datetime}",
+        ]
     for palace in chart.palaces:
         markers = [label for enabled, label in ((palace.is_original_palace, "来因宫"), (palace.is_body_palace, "身宫")) if enabled]
         marker = f"（{'、'.join(markers)}）" if markers else ""
@@ -322,16 +336,34 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
     reference_html = "".join(reference_items) or "<li>未选择参考典籍</li>"
     framework_steps = "".join(f"<li>{escape(step)}</li>" for step in framework["steps"])
     framework_limits = "".join(f"<li>{escape(item)}</li>" for item in framework["limitations"])
+    timing = snapshot.timing_facts
+    timing_html = ""
+    if timing is not None:
+        time_provider = {"https_consensus": "HTTPS 多源校时", "timeapi.io": "历史单源时间记录"}.get(
+            timing.time_provider, timing.time_provider
+        )
+        timing_html = (
+            f"<p><strong>咨询时刻：</strong>{escape(timing.reference_civil_datetime)} · "
+            f"{escape(time_provider)}（{'联网已同步' if timing.synced else '本机时钟回退'}）<br>"
+            f"<strong>咨询真太阳时：</strong>{escape(timing.reference_true_solar_datetime)} · 校正 {timing.reference_true_solar_offset_minutes:+d} 分钟</p>"
+            f"<p><strong>流年：</strong>{escape(timing.year_pillar)} · <strong>流月：</strong>{escape(timing.month_pillar)} · "
+            f"<strong>流日：</strong>{escape(timing.day_pillar)} · <strong>流时：</strong>{escape(timing.hour_pillar)}<br>"
+            f"<strong>节气交接：</strong>{escape(timing.previous_solar_term.name)} {escape(timing.previous_solar_term.datetime)} → "
+            f"{escape(timing.next_solar_term.name)} {escape(timing.next_solar_term.datetime)}</p>"
+        )
     return (
         "<section class='traditional-snapshot'><h2>传统文化本地计算快照</h2>"
         "<aside class='verification-warning'><strong>计算字段可复现，传统解释不属于科学验证。</strong> "
         "不得用于医疗、法律、投资、合规或生产决策。</aside>"
         f"<p><strong>输入：</strong>{profile.birth_date.isoformat()} {escape(profile.birth_time)} · {'男' if profile.gender == 'male' else '女'} · "
-        f"{'准确时间' if profile.time_precision == 'exact' else '约数时间'} · {escape(profile.timezone)} 民用时 · 未应用真太阳时</p>"
-        f"<p><strong>出生地记录：</strong>{escape(profile.birth_place or '未提供')}</p>"
+        f"{'准确时间' if profile.time_precision == 'exact' else '约数时间'} · {escape(profile.timezone)} 民用时</p>"
+        f"<p><strong>出生地：</strong>{escape(profile.birth_place_normalized + '（城市级）' if profile.birth_place_normalized else '未识别')}<br>"
+        f"<strong>出生民用时：</strong>{escape(facts.civil_solar_datetime or facts.solar_datetime)} · "
+        f"<strong>真太阳时：</strong>{escape(facts.true_solar_datetime or '未应用')}</p>"
         f"<p><strong>固定解释体系：</strong>{escape(framework['label'])}（{escape(framework['version'])}）</p>"
         f"<p><strong>公历：</strong>{escape(facts.solar_datetime)}<br><strong>农历：</strong>{escape(facts.lunar_date)} · {escape(facts.zodiac)} · {escape(facts.constellation)}</p>"
-        f"<p><strong>四柱：</strong>{escape(facts.eight_char)}<br><strong>柱五行：</strong>{escape(' / '.join(facts.pillar_wuxing))}<br><strong>天干十神：</strong>{escape(' / '.join(facts.heavenly_stem_ten_gods))}</p>"
+        f"<p><strong>四柱：</strong>{escape(facts.eight_char)}<br><strong>日柱：</strong>{escape(facts.pillars[2])} · <strong>时辰：</strong>{escape(chart.time_label)}（{escape(chart.time_range)}） · <strong>时柱：</strong>{escape(facts.pillars[3])}<br><strong>柱五行：</strong>{escape(' / '.join(facts.pillar_wuxing))}<br><strong>天干十神：</strong>{escape(' / '.join(facts.heavenly_stem_ten_gods))}</p>"
+        f"{timing_html}"
         f"<p><strong>紫微：</strong>{escape(chart.five_elements_class)} · 命主 {escape(chart.soul_star)} · 身主 {escape(chart.body_star)} · 命宫 {escape(chart.soul_palace_branch)} · 身宫 {escape(chart.body_palace_branch)}</p>"
         "<h3>参考典籍索引</h3><p><small>仅记录研究方向，不代表 Council 已读取或引用典籍原文。</small></p>"
         f"<ul>{reference_html}</ul>"

@@ -23,6 +23,18 @@ from .models import (
     UsageSummary,
 )
 
+
+def _bounded_upstream_request_id(value: str | None, max_length: int = 300) -> str | None:
+    """Keep provider headers useful without letting untrusted IDs break persistence."""
+    if not value:
+        return None
+    value = value.strip()
+    if len(value) <= max_length:
+        return value
+    marker = "..."
+    edge = (max_length - len(marker)) // 2
+    return f"{value[:edge]}{marker}{value[-(max_length - edge - len(marker)):]}"
+
 DEFAULT_CCSWITCH_URL = "http://127.0.0.1:15721/v1"
 BLOCKED_HOSTS = {"169.254.169.254", "metadata.google.internal", "100.100.100.200"}
 
@@ -274,7 +286,11 @@ class OpenAICompatibleProvider(ModelBackend):
                     attempt=attempt + 1,
                     status_code=response.status_code,
                     duration_ms=int((time.perf_counter() - started) * 1000),
-                    upstream_request_id=(response.headers.get("x-request-id") or response.headers.get("request-id") or response.headers.get("x-correlation-id")),
+                    upstream_request_id=_bounded_upstream_request_id(
+                        response.headers.get("x-request-id")
+                        or response.headers.get("request-id")
+                        or response.headers.get("x-correlation-id")
+                    ),
                 )
             )
             if response.status_code not in retryable or attempt >= self.profile.max_retries:

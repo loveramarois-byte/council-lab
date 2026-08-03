@@ -6,7 +6,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from evals.run_live_acceptance import build_question, load_cases, summarize_ccswitch, validate_real_assignments
+from evals.run_live_acceptance import (
+    build_question,
+    load_cases,
+    public_run_record,
+    summarize_ccswitch,
+    summarize_provider_attempts,
+    validate_real_assignments,
+)
 from app.provider_catalog import builtin_providers
 from app.models import ProviderAttempt, RunCreate, RunLimits
 from app.orchestrator import Orchestrator
@@ -63,6 +70,55 @@ def test_ccswitch_summary_reports_attempts_tokens_cost_and_failures():
     }
 
 
+def test_live_record_keeps_non_sensitive_run_attempts_and_authoritative_latency():
+    record = public_run_record(
+        {
+            "id": "run-1",
+            "status": "completed",
+            "usage": {"model_calls": 1},
+            "provider_attempts": [
+                {
+                    "role": "analyst",
+                    "provider_id": "ccswitch",
+                    "provider_name": "CC Switch",
+                    "model": "gpt-test",
+                    "endpoint": "/responses",
+                    "attempt": 1,
+                    "status_code": 200,
+                    "duration_ms": 1200,
+                    "upstream_request_id": "must-not-export",
+                    "error_kind": None,
+                },
+                {
+                    "role": "finalizer",
+                    "provider_id": "ccswitch",
+                    "provider_name": "CC Switch",
+                    "model": "gpt-test",
+                    "endpoint": "/responses",
+                    "attempt": 2,
+                    "status_code": 200,
+                    "duration_ms": 2400,
+                    "error_kind": None,
+                },
+            ],
+        },
+        {"id": "case-1", "category": "decision"},
+        4000,
+    )
+
+    assert len(record["provider_attempts"]) == 2
+    assert "upstream_request_id" not in record["provider_attempts"][0]
+    assert summarize_provider_attempts(record["provider_attempts"]) == {
+        "attribution": "authoritative_run_provider_attempts",
+        "requests": 2,
+        "successful_requests": 2,
+        "failed_requests": 0,
+        "retry_attempts": 1,
+        "status_codes": {"200": 2},
+        "latency_ms": {"p50": 1200, "p95": 1200, "max": 2400, "mean": 1800.0},
+    }
+
+
 async def test_compatible_provider_records_each_http_retry(monkeypatch):
     backend = OpenAICompatibleProvider(builtin_providers()["ccswitch"])
     request = httpx.Request("POST", "http://127.0.0.1:15721/v1/responses")
@@ -99,6 +155,36 @@ async def test_compatible_provider_records_each_http_retry(monkeypatch):
         (1, 503, "upstream-1"),
         (2, 200, "upstream-2"),
     ]
+
+
+async def test_compatible_provider_bounds_oversized_upstream_request_id(monkeypatch):
+    backend = OpenAICompatibleProvider(builtin_providers()["ccswitch"])
+    request = httpx.Request("POST", "http://127.0.0.1:15721/v1/responses")
+    oversized = "request-" + ("x" * 420)
+    response = httpx.Response(
+        200,
+        request=request,
+        headers={"x-request-id": oversized},
+        json={
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "done"}]}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+    async def post(*_args, **_kwargs):
+        return response
+
+    monkeypatch.setattr(backend.client, "post", post)
+    try:
+        generation = await backend.generate("question", "system", "gpt-test")
+    finally:
+        await backend.aclose()
+
+    request_id = generation.attempts[0].upstream_request_id
+    assert request_id is not None
+    assert len(request_id) == 300
+    assert request_id.startswith("request-")
+    assert request_id.endswith("x")
 
 
 async def test_orchestrator_persists_non_sensitive_provider_attempts(tmp_path, monkeypatch):

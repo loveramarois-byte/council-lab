@@ -21,15 +21,16 @@ async function mockHome(page: import("@playwright/test").Page) {
 
 function snapshot() {
   return {
-    schema_version: 1,
+    schema_version: 2,
     calculation_source: "local_browser",
     calculated_at: now,
-    profile: { calendar_type: "solar", birth_date: "2000-08-16", birth_time: "03:30", time_precision: "exact", gender: "male", birth_place: "", timezone: "Asia/Shanghai", true_solar_time_applied: false, focus_topics: ["temperament"], interpretation_framework: "comparative_research", reference_book_ids: ["di_tian_sui", "zhou_yi"] },
+    profile: { calendar_type: "solar", birth_date: "2000-08-16", birth_time: "03:30", time_precision: "exact", gender: "male", birth_place: "山东青岛", birth_place_normalized: "青岛", birth_latitude: 36.0671, birth_longitude: 120.3826, birth_place_source: "offline_city_catalog", timezone: "Asia/Shanghai", true_solar_time_applied: true, focus_topics: ["temperament"], interpretation_framework: "comparative_research", reference_book_ids: ["di_tian_sui", "zhou_yi"] },
     engines: [
       { id: "lunar-javascript", version: "1.7.7", source_url: "https://github.com/6tail/lunar-javascript", license: "MIT" },
       { id: "iztro", version: "2.5.8", source_url: "https://github.com/SylarLong/iztro", license: "MIT" },
     ],
-    calendar_facts: { solar_datetime: "2000-08-16 03:30:00", lunar_date: "二〇〇〇年七月十七", zodiac: "龙", constellation: "狮子", eight_char: "庚辰 甲申 丙午 庚寅", pillars: ["庚辰", "甲申", "丙午", "庚寅"], pillar_wuxing: ["金土", "木金", "火火", "金木"], heavenly_stem_ten_gods: ["偏财", "偏印", "日主", "偏财"] },
+    calendar_facts: { solar_datetime: "2000-08-16 03:25:00", civil_solar_datetime: "2000-08-16 03:30:00", true_solar_datetime: "2000-08-16 03:25:00", true_solar_time_offset_minutes: -5, lunar_date: "二〇〇〇年七月十七", zodiac: "龙", constellation: "狮子", eight_char: "庚辰 甲申 丙午 庚寅", pillars: ["庚辰", "甲申", "丙午", "庚寅"], pillar_wuxing: ["金土", "木金", "火火", "金木"], heavenly_stem_ten_gods: ["偏财", "偏印", "日主", "偏财"] },
+    timing_facts: { reference_civil_datetime: "2026-08-03 08:00:00", reference_true_solar_datetime: "2026-08-03 07:56:00", reference_true_solar_offset_minutes: -4, timezone: "Asia/Shanghai", time_source: "network", time_provider: "https_consensus", time_source_url: "https://www.cloudflare.com/,https://www.google.com/generate_204", synced: true, lunar_date: "二〇二六年六月廿一", year_pillar: "丙午", month_pillar: "乙未", day_pillar: "己酉", hour_pillar: "戊辰", current_solar_term: "", previous_solar_term: { name: "大暑", datetime: "2026-07-23 03:13:05" }, next_solar_term: { name: "立秋", datetime: "2026-08-07 19:42:43" } },
     ziwei_chart: { solar_date: "2000-8-16", lunar_date: "二〇〇〇年七月十七", chinese_date: "庚辰 甲申 丙午 庚寅", time_label: "寅时", time_range: "03:00~05:00", five_elements_class: "木三局", soul_star: "破军", body_star: "文昌", soul_palace_branch: "午", body_palace_branch: "戌", palaces: Array.from({ length: 12 }, (_, index) => ({ index, name: `宫${index}`, heavenly_stem: "甲", earthly_branch: "子", is_body_palace: index === 8, is_original_palace: index === 2, major_stars: index === 4 ? ["紫微（庙）"] : [], minor_stars: [], changsheng12: "长生", decadal_range: [1, 10] })) },
     notices: ["本地计算", "传统解释未验证"],
     snapshot_sha256: "0c281caafaafe14a94824ab728821e27e20c6d874c74b7038ff6441677f55d83",
@@ -41,6 +42,7 @@ test("creates a traditional-culture Run only after local profile consent", async
   let payload: Record<string, any> = {};
   let readinessRequests = 0;
   await page.route("**/api/readiness", (route) => { readinessRequests += 1; return route.fulfill({ json: {} }); });
+  await page.route("**/api/time", (route) => route.fulfill({ json: { utc_datetime: "2026-08-03T00:00:00Z", local_datetime: "2026-08-03T08:00:00+08:00", timezone: "Asia/Shanghai", source: "network", provider: "https_consensus", source_url: "https://www.cloudflare.com/,https://www.google.com/generate_204", synced: true } }));
   await page.route("**/api/runs", (route) => { payload = route.request().postDataJSON(); return route.fulfill({ json: { id: "traditional-created" } }); });
 
   await page.goto("/");
@@ -58,6 +60,9 @@ test("creates a traditional-culture Run only after local profile consent", async
   await expect(create).toBeDisabled();
   await page.getByLabel("出生日期").fill("2000-08-16");
   await page.getByLabel("出生时间").fill("03:30");
+  await page.getByLabel("出生地").fill("山东青岛");
+  await expect(page.getByText(/已识别 青岛/)).toBeVisible();
+  await expect(page.getByLabel("应用真太阳时校正")).toBeChecked();
   await page.getByRole("textbox", { name: "你的问题" }).fill("比较性情结构，并指出不可验证之处");
   await page.getByText("性情结构", { exact: true }).click();
   await page.getByText("《滴天髓》", { exact: true }).click();
@@ -75,6 +80,8 @@ test("creates a traditional-culture Run only after local profile consent", async
   expect(payload.traditional_culture_snapshot.calendar_facts.eight_char).toBe("庚辰 甲申 丙午 庚寅");
   expect(payload.traditional_culture_snapshot.profile.reference_book_ids).toEqual(["di_tian_sui"]);
   expect(payload.traditional_culture_snapshot.profile.interpretation_framework).toBe("bazi_classical");
+  expect(payload.traditional_culture_snapshot.profile).toMatchObject({ birth_place: "山东青岛", birth_place_normalized: "青岛", birth_longitude: 120.3826, true_solar_time_applied: true });
+  expect(payload.traditional_culture_snapshot.timing_facts).toMatchObject({ time_source: "network", year_pillar: "丙午", month_pillar: "乙未", day_pillar: "己酉", hour_pillar: "戊辰" });
   expect(payload.traditional_culture_snapshot.engines.map((engine: any) => `${engine.id}@${engine.version}`)).toEqual(["lunar-javascript@1.7.7", "iztro@2.5.8"]);
   expect(payload.traditional_culture_snapshot.snapshot_sha256).toMatch(/^[a-f0-9]{64}$/);
 });
@@ -90,7 +97,11 @@ test("renders provenance and boundaries on a mobile result without decision asse
 
   const card = page.getByLabel("传统文化本地计算快照");
   await expect(card).toContainText("庚辰 甲申 丙午 庚寅");
+  await expect(card).toContainText("寅时（03:00~05:00）");
   await expect(card).toContainText("木三局");
+  await expect(card).toContainText("联网校时 · HTTPS 多源校时");
+  await expect(card).toContainText("己酉 · 戊辰");
+  await expect(card).toContainText("大暑 → 立秋");
   await expect(card).toContainText("比较研读（八字 + 紫微）");
   await expect(page.getByText("传统解释不属于科学验证")).toBeVisible();
   await expect(page.getByRole("button", { name: "结果回访" })).toHaveCount(0);

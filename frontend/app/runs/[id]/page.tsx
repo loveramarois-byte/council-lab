@@ -99,6 +99,10 @@ export default function RunDetailPage() {
       if (highRiskProbeRef.current.runId !== params.id) {
         highRiskProbeRef.current = { runId: params.id, result: "unknown" };
       }
+      // Older API/fixture payloads may omit the field entirely, so those
+      // records still get one compatibility probe. A missing high-risk record
+      // is handled as an absent optional capability below, not as a page-load
+      // failure.
       const shouldLoadHighRisk = nextRun.high_risk_control === true
         || (nextRun.high_risk_control == null && ["unknown", "present"].includes(highRiskProbeRef.current.result));
       if (!shouldLoadHighRisk) {
@@ -124,7 +128,8 @@ export default function RunDetailPage() {
           else throw approvalError;
         }
       } catch (highRiskLoadError) {
-        if (highRiskLoadError instanceof CouncilApiError && highRiskLoadError.code === "HIGH_RISK_RUN_NOT_FOUND") {
+        if (highRiskLoadError instanceof CouncilApiError
+          && (highRiskLoadError.code === "HIGH_RISK_RUN_NOT_FOUND" || highRiskLoadError.status === 404)) {
           highRiskProbeRef.current.result = "absent";
           setHighRisk(null);
           setHighRiskApproval(null);
@@ -892,11 +897,14 @@ function Seat({ participant, assignment, index, selected, status, onSelect }: { 
 function TraditionalCultureSnapshotCard({ snapshot }: { snapshot: TraditionalCultureSnapshot }) {
   const facts = snapshot.calendar_facts;
   const chart = snapshot.ziwei_chart;
+  const timing = snapshot.timing_facts;
+  const timeProvider = timing?.time_provider === "https_consensus" ? "HTTPS 多源校时" : timing?.time_provider === "timeapi.io" ? "历史单源时间记录" : timing?.time_provider;
   const references = (snapshot.profile.reference_book_ids || []).map((id) => TRADITIONAL_REFERENCE_BOOKS.find((item) => item.id === id)).filter(Boolean);
   const framework = TRADITIONAL_RULE_PROFILES.find((item) => item.id === (snapshot.profile.interpretation_framework || "comparative_research")) || TRADITIONAL_RULE_PROFILES[0];
   return <article className="traditional-snapshot-card" aria-label="传统文化本地计算快照">
     <header><Landmark size={17} /><div><strong>本地计算快照</strong><small>计算字段可复现 · 传统解释未经过科学验证</small></div><span>SHA-256 {snapshot.snapshot_sha256.slice(0, 12)}…</span></header>
-    <div className="traditional-facts"><section><span>四柱</span><strong>{facts.eight_char}</strong><small>{facts.pillar_wuxing.join(" · ")}</small></section><section><span>历法</span><strong>{facts.lunar_date}</strong><small>{facts.zodiac} · {facts.constellation}</small></section><section><span>紫微</span><strong>{chart.five_elements_class}</strong><small>命主 {chart.soul_star} · 身主 {chart.body_star}</small></section><section><span>体系</span><strong>{framework.label}</strong><small>规则顺序已冻结</small></section></div>
+    <div className="traditional-facts"><section><span>四柱</span><strong>{facts.eight_char}</strong><small>日柱 {facts.pillars[2]} · 时辰 {chart.time_label}（{chart.time_range}） · 时柱 {facts.pillars[3]}</small></section><section><span>出生时间</span><strong>{facts.true_solar_datetime || facts.solar_datetime}</strong><small>{snapshot.profile.birth_place_normalized ? `${snapshot.profile.birth_place_normalized} · ${snapshot.profile.true_solar_time_applied ? `真太阳时 ${facts.true_solar_time_offset_minutes! >= 0 ? "+" : ""}${facts.true_solar_time_offset_minutes} 分` : "民用时"}` : "出生地未识别"}</small></section><section><span>紫微</span><strong>{chart.five_elements_class}</strong><small>命主 {chart.soul_star} · 身主 {chart.body_star}</small></section><section><span>体系</span><strong>{framework.label}</strong><small>规则顺序已冻结</small></section></div>
+    {timing && <div className="traditional-timing" aria-label="流年流月流日与节气交接"><section><span>当前时刻</span><strong>{timing.reference_civil_datetime}</strong><small>{timing.synced ? `联网校时 · ${timeProvider}` : "本机时钟回退"}</small></section><section><span>流年 · 流月</span><strong>{timing.year_pillar} · {timing.month_pillar}</strong><small>{timing.lunar_date}</small></section><section><span>流日 · 流时</span><strong>{timing.day_pillar} · {timing.hour_pillar}</strong><small>真太阳时 {timing.reference_true_solar_datetime}</small></section><section><span>节气交接</span><strong>{timing.previous_solar_term.name} → {timing.next_solar_term.name}</strong><small>{timing.previous_solar_term.datetime} · {timing.next_solar_term.datetime}</small></section></div>}
     <details><summary>查看典籍索引、十二宫与计算来源</summary>{references.length > 0 && <section className="traditional-reference-summary" aria-label="本次参考典籍"><strong>本次参考典籍</strong><small>仅为研究方向，不代表已读取或引用原文</small><div>{references.map((reference) => reference && <span key={reference.id} title={`${reference.focus} · ${reference.tradition}`}>{reference.title}</span>)}</div></section>}<div className="traditional-palaces">{chart.palaces.map((palace) => <section key={palace.index}><header><strong>{palace.name}</strong><span>{palace.heavenly_stem}{palace.earthly_branch}{palace.is_original_palace ? " · 来因宫" : ""}{palace.is_body_palace ? " · 身宫" : ""}</span></header><p>{palace.major_stars.join("、") || "无主星"}</p></section>)}</div><footer>{snapshot.engines.map((engine) => <a key={engine.id} href={engine.source_url} target="_blank" rel="noreferrer">{engine.id}@{engine.version} · {engine.license}</a>)}</footer></details>
   </article>;
 }

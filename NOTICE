@@ -16,6 +16,12 @@ Traditional-culture mode includes the following MIT-licensed packages:
 - @noble/hashes 2.2.0, Copyright Paul Miller and contributors
   https://github.com/paulmillr/noble-hashes
 
+Traditional-culture city-level coordinates are adapted from the MIT-licensed
+Ficere/tianji data set at commit d674635c810b167c616df5fd607418a38d290315:
+
+- city_coords.json, Copyright Ficere/tianji contributors
+  https://github.com/Ficere/tianji/blob/d674635c810b167c616df5fd607418a38d290315/references/city_coords.json
+
 The integration also studies public concepts from the following MIT-licensed
 projects without bundling their applications or datasets:
 

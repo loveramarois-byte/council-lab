@@ -35,6 +35,7 @@ from .request_boundary import load_internal_api_token, token_identifier
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
 from .templates import list_templates
+from .time_sync import fetch_trusted_time, issue_time_proof, verify_time_proof
 from .output_contracts import list_output_contracts
 from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, runtime_identity, update_manager
 
@@ -143,6 +144,15 @@ async def health() -> dict[str, str]:
     }
 
 
+@app.get("/api/time")
+async def trusted_time(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    result = await fetch_trusted_time()
+    if result["provider"] == "https_consensus" and result["synced"] is True:
+        result["time_proof"] = issue_time_proof(result, internal_api_token)
+    return result
+
+
 @app.get("/api/update/check")
 async def check_for_update(refresh: bool = False, x_council_request: str | None = Header(default=None)):
     if refresh and not install_request_is_allowed(x_council_request):
@@ -205,6 +215,15 @@ async def create_run(
         raise ApiError(400, "HIGH_RISK_AUTO_SUMMARY_FORBIDDEN", "高风险模式不能开启自动总结。")
 
     async def start_run():
+        if request.council_mode == "traditional_culture" and request.traditional_culture_snapshot is not None:
+            timing = request.traditional_culture_snapshot.timing_facts
+            if timing is not None and timing.synced:
+                if timing.time_provider != "https_consensus":
+                    raise HTTPException(400, "旧版单源联网时间只用于读取历史 Run；新建研判请重新校时。")
+                try:
+                    verify_time_proof(timing.model_dump(mode="json"), internal_api_token)
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
         return await orchestrator.start(request, high_risk_actor=high_risk_actor)
 
     try:
