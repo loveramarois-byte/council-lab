@@ -13,6 +13,7 @@
 
 - 将结果页高风险控制面拆为独立展示组件，父页面继续持有 API 调用、授权信息和状态机，降低高风险界面的维护与审查复杂度，不改变用户流程。
 - 移除未使用的 React Query 生产依赖，缩小前端依赖面。
+- GitHub Tag 发布默认只生成 GitHub Release；只有显式设置仓库变量 `GITEE_RELEASE_ENABLED=true` 时才允许自动同步 Gitee，保留手动补发能力。
 
 ### Fixed
 

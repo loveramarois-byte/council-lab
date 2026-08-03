@@ -414,7 +414,7 @@ jobs:
               --notes-file artifacts/RELEASE_NOTES.md
           fi
       - name: Publish Gitee Release
-        if: ${{ env.GITEE_ACCESS_TOKEN != '' }}
+        if: ${{ vars.GITEE_RELEASE_ENABLED == 'true' && env.GITEE_ACCESS_TOKEN != '' }}
         run: |
           python scripts/publish_gitee_release.py \
             --owner bbbbo-liu \

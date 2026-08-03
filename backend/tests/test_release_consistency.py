@@ -87,6 +87,7 @@ def test_release_workflow_requests_packaged_javascript_and_css():
     assert workflow.count("http://127.0.0.1:3000/sw.js") >= 2
     assert "Publish Gitee Release" in workflow
     assert "secrets.GITEE_ACCESS_TOKEN" in workflow
+    assert "vars.GITEE_RELEASE_ENABLED == 'true'" in workflow
     assert "publish_gitee_release.py" in workflow
     github_publish = workflow.split("      - name: Publish GitHub Release\n", 1)[1].split("      - name: Publish Gitee Release\n", 1)[0]
     assert github_publish.rstrip().endswith("fi")
