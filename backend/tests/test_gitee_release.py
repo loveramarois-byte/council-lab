@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 import urllib.error
 from pathlib import Path
 
@@ -31,11 +32,9 @@ def test_publish_release_creates_release_and_uploads_all_assets(monkeypatch, tmp
         urllib.error.HTTPError("url", 404, "not found", {}, io.BytesIO(b'{"message":"Not Found"}')),
         FakeResponse({"id": 7, "assets": []}),
         FakeResponse([]),
-        FakeResponse({"id": 101}),
-        FakeResponse({"id": 102}),
-        FakeResponse({"id": 103}),
         FakeResponse({"id": 7, "tag_name": "v1.0.0", "assets": []}),
     ])
+    uploads = []
 
     def fake_urlopen(request, timeout):
         requests.append((request, timeout))
@@ -45,12 +44,18 @@ def test_publish_release_creates_release_and_uploads_all_assets(monkeypatch, tmp
         return response
 
     monkeypatch.setattr(publish_gitee_release.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        publish_gitee_release,
+        "upload_asset",
+        lambda path, token, file_path: uploads.append((path, token, file_path)) or {"id": len(uploads)},
+    )
     release = publish_gitee_release.publish_release(
         "owner", "repo", "v1.0.0", "Council v1.0.0", "notes", assets, "secret-token"
     )
 
     assert release["tag_name"] == "v1.0.0"
-    assert [request.get_method() for request, _ in requests] == ["GET", "POST", "GET", "POST", "POST", "POST", "GET"]
+    assert [request.get_method() for request, _ in requests] == ["GET", "POST", "GET", "GET"]
+    assert [item[2] for item in uploads] == assets
     assert all("access_token=secret-token" in request.full_url for request, _ in requests)
     assert all(not isinstance(request.data, bytes) or b"secret-token" not in request.data for request, _ in requests)
 
@@ -69,50 +74,40 @@ def test_http_errors_do_not_expose_token(monkeypatch):
     assert "secret-token" not in str(raised.value)
 
 
-def test_asset_upload_uses_extended_timeout(monkeypatch, tmp_path):
+def test_asset_upload_uses_curl_with_total_timeout_without_token_in_arguments(monkeypatch, tmp_path):
     asset = tmp_path / "Council.zip"
     asset.write_bytes(b"release")
     observed = {}
 
-    def fake_urlopen(request, timeout):
-        observed["method"] = request.get_method()
-        observed["timeout"] = timeout
-        observed["content_length"] = request.get_header("Content-length")
-        observed["body"] = b"".join(request.data)
-        return FakeResponse({"id": 101})
+    def fake_run(arguments, **kwargs):
+        observed["arguments"] = arguments
+        observed["input"] = kwargs["input"]
+        output_path = arguments[arguments.index("--output") + 1]
+        Path(output_path).write_text('{"id": 101}', encoding="utf-8")
+        return subprocess.CompletedProcess(arguments, 0)
 
-    monkeypatch.setattr(publish_gitee_release.urllib.request, "urlopen", fake_urlopen)
-    publish_gitee_release.api_request("POST", "/release/attach_files", "secret-token", file_path=asset)
+    monkeypatch.setattr(publish_gitee_release.subprocess, "run", fake_run)
+    result = publish_gitee_release.api_request("POST", "/release/attach_files", "secret-token", file_path=asset)
 
-    assert observed["method"] == "POST"
-    assert observed["timeout"] == 1800
-    assert int(observed["content_length"]) == len(observed["body"])
-    assert b'release' in observed["body"]
+    assert result == {"id": 101}
+    assert observed["arguments"][0] == "curl"
+    assert observed["arguments"][observed["arguments"].index("--max-time") + 1] == "3600"
+    assert f"file=@{asset};type=application/octet-stream" in observed["arguments"]
+    assert all("secret-token" not in argument for argument in observed["arguments"])
+    assert "secret-token" in observed["input"]
 
 
-def test_asset_upload_streams_large_files_in_bounded_chunks(monkeypatch, tmp_path):
+def test_asset_upload_failure_does_not_expose_token(monkeypatch, tmp_path):
     asset = tmp_path / "Council.zip"
-    asset.write_bytes(b"x" * (publish_gitee_release.UPLOAD_CHUNK_SIZE * 2 + 17))
-    observed = {}
+    asset.write_bytes(b"release")
 
-    def fake_urlopen(request, timeout):
-        chunks = list(request.data)
-        observed["chunks"] = chunks
-        observed["content_length"] = request.get_header("Content-length")
-        return FakeResponse({"id": 101})
+    def fake_run(arguments, **_kwargs):
+        return subprocess.CompletedProcess(arguments, 28)
 
-    monkeypatch.setattr(publish_gitee_release.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(Path, "read_bytes", lambda _path: (_ for _ in ()).throw(AssertionError("asset read eagerly")))
-
-    publish_gitee_release.api_request("POST", "/release/attach_files", "secret-token", file_path=asset)
-
-    file_chunks = [chunk for chunk in observed["chunks"] if chunk and set(chunk) == {ord("x")}]
-    assert [len(chunk) for chunk in file_chunks] == [
-        publish_gitee_release.UPLOAD_CHUNK_SIZE,
-        publish_gitee_release.UPLOAD_CHUNK_SIZE,
-        17,
-    ]
-    assert int(observed["content_length"]) == sum(len(chunk) for chunk in observed["chunks"])
+    monkeypatch.setattr(publish_gitee_release.subprocess, "run", fake_run)
+    with pytest.raises(publish_gitee_release.GiteeApiError) as raised:
+        publish_gitee_release.upload_asset("/release/attach_files", "secret-token", asset)
+    assert "secret-token" not in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -129,7 +124,7 @@ def test_timeouts_can_be_configured(monkeypatch, tmp_path, environment, file_nam
     assert publish_gitee_release._timeout_seconds(file_path) == expected
 
 
-@pytest.mark.parametrize("value", ["zero", "0", "3601"])
+@pytest.mark.parametrize("value", ["zero", "0", "7201"])
 def test_invalid_upload_timeout_is_rejected(monkeypatch, tmp_path, value):
     monkeypatch.setenv("GITEE_UPLOAD_TIMEOUT_SECONDS", value)
     with pytest.raises(publish_gitee_release.GiteeApiError, match="GITEE_UPLOAD_TIMEOUT_SECONDS"):

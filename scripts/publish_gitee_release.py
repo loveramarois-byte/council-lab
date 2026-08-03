@@ -4,55 +4,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import mimetypes
 import os
-import secrets
+import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 
 API_ROOT = "https://gitee.com/api/v5"
 DEFAULT_API_TIMEOUT_SECONDS = 60
-DEFAULT_UPLOAD_TIMEOUT_SECONDS = 1800
-UPLOAD_CHUNK_SIZE = 64 * 1024
+DEFAULT_UPLOAD_TIMEOUT_SECONDS = 3600
 
 
 class GiteeApiError(RuntimeError):
     pass
-
-
-class MultipartBody:
-    """Re-iterable multipart body that streams release assets from disk."""
-
-    def __init__(self, boundary: str, fields: dict[str, str], file_path: Path):
-        chunks: list[bytes] = []
-        for name, value in fields.items():
-            chunks.extend([
-                f"--{boundary}\r\n".encode(),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
-                value.encode(),
-                b"\r\n",
-            ])
-        mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-        chunks.extend([
-            f"--{boundary}\r\n".encode(),
-            f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode(),
-            f"Content-Type: {mime_type}\r\n\r\n".encode(),
-        ])
-        self.preamble = b"".join(chunks)
-        self.file_path = file_path
-        self.trailer = f"\r\n--{boundary}--\r\n".encode()
-        self.content_length = len(self.preamble) + file_path.stat().st_size + len(self.trailer)
-
-    def __iter__(self) -> Iterator[bytes]:
-        yield self.preamble
-        with self.file_path.open("rb") as asset:
-            while chunk := asset.read(UPLOAD_CHUNK_SIZE):
-                yield chunk
-        yield self.trailer
 
 
 def _timeout_seconds(file_path: Path | None) -> int:
@@ -63,9 +31,57 @@ def _timeout_seconds(file_path: Path | None) -> int:
         timeout = int(raw_value)
     except ValueError as error:
         raise GiteeApiError(f"{variable} must be an integer") from error
-    if timeout < 1 or timeout > 3600:
-        raise GiteeApiError(f"{variable} must be between 1 and 3600 seconds")
+    if timeout < 1 or timeout > 7200:
+        raise GiteeApiError(f"{variable} must be between 1 and 7200 seconds")
     return timeout
+
+
+def _curl_config_value(value: str) -> str:
+    if "\n" in value or "\r" in value:
+        raise GiteeApiError("Gitee access token contains an invalid newline")
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def upload_asset(path: str, token: str, file_path: Path) -> Any:
+    """Upload through libcurl so the timeout is a real end-to-end budget."""
+    url = f"{API_ROOT}{path}"
+    timeout = _timeout_seconds(file_path)
+    config = f'form = "access_token={_curl_config_value(token)}"\n'
+    with tempfile.NamedTemporaryFile() as response_file:
+        result = subprocess.run(
+            [
+                "curl",
+                "--fail-with-body",
+                "--show-error",
+                "--connect-timeout",
+                "30",
+                "--max-time",
+                str(timeout),
+                "--request",
+                "POST",
+                "--form",
+                f"file=@{file_path};type=application/octet-stream",
+                "--output",
+                response_file.name,
+                "--config",
+                "-",
+                url,
+            ],
+            input=config,
+            text=True,
+            check=False,
+        )
+        response_file.seek(0)
+        payload = response_file.read()
+    if result.returncode != 0:
+        body = payload.decode("utf-8", errors="replace").replace(token, "***").strip()
+        raise GiteeApiError(
+            f"Gitee asset upload failed with curl exit {result.returncode}: {body[:500]}"
+        )
+    try:
+        return json.loads(payload) if payload else None
+    except json.JSONDecodeError as error:
+        raise GiteeApiError("Gitee asset upload returned invalid JSON") from error
 
 
 def _response_error(error: urllib.error.HTTPError) -> GiteeApiError:
@@ -92,10 +108,7 @@ def api_request(
         data = urllib.parse.urlencode(fields or {}).encode() if method != "GET" else None
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     else:
-        boundary = f"----CouncilLab{secrets.token_hex(12)}"
-        data = MultipartBody(boundary, fields or {}, file_path)
-        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
-        headers["Content-Length"] = str(data.content_length)
+        return upload_asset(path, token, file_path)
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=_timeout_seconds(file_path)) as response:

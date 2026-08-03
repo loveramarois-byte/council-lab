@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Gitee Release 大附件改用系统 `curl` 执行 multipart 上传，提供真实的端到端总耗时上限和持续传输进度；访问令牌只经标准输入配置传递，不出现在进程参数、日志或异常文本中。
+
 ## [0.15.1] - 2026-08-03
 
 ### Fixed
