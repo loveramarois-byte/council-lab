@@ -112,8 +112,8 @@ test("creates a traditional-culture Run only after local profile consent", async
   expect(payload.traditional_culture_snapshot.snapshot_proof).toMatch(/^v1\.[a-f0-9]{64}$/);
 });
 
-test("renders provenance and boundaries on a mobile result without decision assets", async ({ page }) => {
-  await page.setViewportSize({ width: 375, height: 812 });
+test("keeps the callboard compact and renders provenance on mobile without decision assets", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
   const cultureSnapshot = snapshot();
   cultureSnapshot.timing_facts.time_proof = `v1.${"b".repeat(64)}`;
   cultureSnapshot.snapshot_proof = `v1.${"c".repeat(64)}`;
@@ -122,6 +122,19 @@ test("renders provenance and boundaries on a mobile result without decision asse
   page.on("request", (request) => { if (/decision-brief|claims|memory-proposals/.test(request.url())) assetRequests.push(request.url()); });
   await page.route("**/api/runs/traditional-result", (route) => route.fulfill({ json: run }));
   await page.goto("/runs/traditional-result");
+
+  const seatHeight = await page.locator(".council-seat").first().evaluate((element) => element.getBoundingClientRect().height);
+  const stageRows = await page.locator(".council-stage").evaluate((element) =>
+    getComputedStyle(element).gridTemplateRows.split(" ").map((row) => Number.parseFloat(row))
+  );
+  expect(seatHeight).toBeLessThanOrEqual(60);
+  expect(stageRows[1]).toBeLessThanOrEqual(82);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const mobileSeatHeight = await page.locator(".council-seat").first().evaluate((element) => element.getBoundingClientRect().height);
+  const mobileBoardHeight = await page.locator(".council-callboard").evaluate((element) => element.getBoundingClientRect().height);
+  expect(mobileSeatHeight).toBeLessThanOrEqual(50);
+  expect(mobileBoardHeight).toBeLessThanOrEqual(72);
 
   const card = page.getByLabel("传统文化本地计算快照");
   await expect(card).toContainText("庚辰 甲申 丙午 庚寅");

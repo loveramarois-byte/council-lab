@@ -531,7 +531,7 @@ export default function RunDetailPage() {
 
     {immersive && <button ref={immersiveExitRef} className="immersive-exit icon-button" type="button" aria-label="退出沉浸模式" title="退出沉浸模式" aria-pressed={true} onClick={exitImmersive}><Minimize2 size={17} /></button>}
 
-    <main className={`council-stage ${highRisk ? "has-high-risk" : ""}`}>
+    <main className={`council-stage ${traditionalMode ? "traditional-culture" : ""} ${highRisk ? "has-high-risk" : ""}`}>
       <section className="council-question">
         <span>本次议题</span>
         <h1>{run.question}</h1>

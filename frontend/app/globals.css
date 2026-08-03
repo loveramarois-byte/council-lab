@@ -459,6 +459,25 @@ body:has(.council-page) .sidebar-rule, body:has(.council-page) .provider-presenc
   .completed-actions { gap: 3px; padding: 6px; }.completed-actions .quiet-button { padding: 0 5px; font-size: 0; }.completed-actions .quiet-button svg { margin: 0; }.completed-actions .send-button { padding: 0 8px; font-size: 10px; }
 }
 
+@media (min-width: 681px) {
+  .council-stage.traditional-culture { grid-template-rows: auto 80px minmax(0, 1fr); gap: 8px; }
+  .council-stage.traditional-culture .council-callboard { grid-template-rows: 20px minmax(0, 1fr); }
+  .council-stage.traditional-culture .council-seat,
+  .council-stage.traditional-culture .summary-node { height: 58px; }
+  .council-stage.traditional-culture .council-seat { padding: 6px 8px; }
+  .council-stage.traditional-culture .seat-avatar { width: 28px; height: 28px; font-size: 12px; }
+  .council-stage.traditional-culture .seat-copy strong { font-size: 11px; }
+  .council-stage.traditional-culture .seat-copy small,
+  .council-stage.traditional-culture .seat-status { font-size: 9px; }
+}
+
+@media (max-width: 680px) {
+  .council-stage.traditional-culture { grid-template-rows: auto 70px minmax(0, 1fr); gap: 6px; }
+  .council-stage.traditional-culture .council-callboard { grid-template-rows: 22px minmax(0, 1fr); }
+  .council-stage.traditional-culture .council-seat { height: 48px; padding: 3px 2px; }
+  .council-stage.traditional-culture .seat-avatar { width: 22px; height: 22px; flex-basis: 22px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .council-mode-switch button, .culture-topics label { transition: none; }
 }

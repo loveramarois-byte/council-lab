@@ -533,6 +533,13 @@ async def test_traditional_run_prompts_exports_restart_and_decision_asset_isolat
     assert completed.final_decision is not None
     assert completed.final_decision.verified_claims == []
     assert completed.final_decision.confidence["level"] == "traditional_interpretation"
+    finalizer_system = backend.systems[-1]
+    assert "先说结论" in finalizer_system
+    assert "默认读者完全没有八字或紫微基础" in finalizer_system
+    assert "这对你意味着什么" in finalizer_system
+    assert "专业术语首次出现" in finalizer_system
+    assert "可见字段 -> 传统解释 -> 不确定性" in finalizer_system
+    assert "禁止文言断语、恐吓式表达和宿命化结论" in finalizer_system
     assert await store.get_decision_brief(created.id) is None
     assert await store.list_decision_claims(created.id) == []
 
