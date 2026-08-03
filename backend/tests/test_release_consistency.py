@@ -56,6 +56,9 @@ def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_bu
     for script in (mac_release, windows_release):
         assert ".next-release" in script
         assert "COUNCIL_NEXT_DIST_DIR" in script
+        assert "--collect-all tzdata" in script
+    requirements = (ROOT / "backend/requirements.lock").read_text(encoding="utf-8")
+    assert "tzdata==" in requirements
     assert 'web/$RELEASE_DIST_DIR/static' in mac_release
     assert 'web\\$ReleaseDistDir\\static' in windows_release
     assert 'frontend/public" "$RESOURCES_DIR/web/public' in mac_release

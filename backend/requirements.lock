@@ -190,6 +190,8 @@ typing-inspection==0.4.2
     # via
     #   fastapi
     #   pydantic
+tzdata==2026.3
+    # via -r backend/requirements.txt
 urllib3==2.7.0
     # via requests
 uuid-utils==0.17.0

@@ -12,3 +12,4 @@ python-multipart>=0.0.20,<1
 pypdf>=6,<7
 python-docx>=1.2,<2
 tiktoken>=0.9,<1
+tzdata>=2025.2,<2027

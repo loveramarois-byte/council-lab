@@ -39,6 +39,7 @@ finally {
     --paths (Join-Path $ProjectDir "backend") `
     --collect-all keyring `
     --collect-all tiktoken `
+    --collect-all tzdata `
     --hidden-import tiktoken_ext.openai_public `
     --hidden-import uvicorn.logging `
     --hidden-import uvicorn.loops.auto `
