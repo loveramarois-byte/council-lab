@@ -460,11 +460,14 @@ body:has(.council-page) .sidebar-rule, body:has(.council-page) .provider-presenc
 }
 
 @media (min-width: 681px) {
-  .council-stage.traditional-culture { grid-template-rows: auto 80px minmax(0, 1fr); gap: 8px; }
-  .council-stage.traditional-culture .council-callboard { grid-template-rows: 20px minmax(0, 1fr); }
+  .council-stage.traditional-culture { grid-template-rows: auto 82px minmax(0, 1fr); gap: 8px; }
+  .council-stage.traditional-culture .council-callboard { grid-template-rows: 18px minmax(0, 1fr); row-gap: 4px; }
+  .council-stage.traditional-culture .council-seats { gap: 6px; }
+  .council-stage.traditional-culture .council-seats:before { display: none; }
   .council-stage.traditional-culture .council-seat,
-  .council-stage.traditional-culture .summary-node { height: 58px; }
-  .council-stage.traditional-culture .council-seat { padding: 6px 8px; }
+  .council-stage.traditional-culture .summary-node { height: 60px; }
+  .council-stage.traditional-culture .council-seat { padding: 7px 9px; border-color: var(--border); border-top-color: var(--seat); box-shadow: 0 1px 3px rgba(58, 48, 40, .035); }
+  .council-stage.traditional-culture .council-seat.completed { border-color: var(--border); border-top-color: var(--seat); }
   .council-stage.traditional-culture .seat-avatar { width: 28px; height: 28px; font-size: 12px; }
   .council-stage.traditional-culture .seat-copy strong { font-size: 11px; }
   .council-stage.traditional-culture .seat-copy small,
