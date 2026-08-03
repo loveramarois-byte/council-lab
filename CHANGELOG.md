@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.1] - 2026-08-03
+
+### Fixed
+
+- Windows 自包含安装包显式锁定并携带 `tzdata`，修复传统文化联网校时引入 `ZoneInfo("Asia/Shanghai")` 后，Windows 后端因系统缺少 IANA 时区数据库而在启动时退出的问题；macOS 包同步收集同一份时区数据，保持跨平台结果一致。
+- Windows 发行冒烟测试现在保留前后端 stdout/stderr、进程退出状态和最后一次健康检查错误，后续打包启动失败会直接显示根因，不再只等待超时。
+
+### Testing
+
+- GitHub Actions 完整验证、macOS 自包含打包与启动器/更新器冒烟、Windows 自包含打包与服务启动/残留恢复/更新回滚冒烟全部通过；Windows 修复前稳定复现 `ZoneInfoNotFoundError`，补齐 `tzdata==2026.3` 后同一流程通过。
+
 ## [0.15.0] - 2026-08-03
 
 ### Added
