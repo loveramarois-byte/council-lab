@@ -162,11 +162,13 @@ async def test_trusted_time_and_proof_are_reused_within_cache_window(monkeypatch
         calls += 1
         return dict(trusted)
 
-    monkeypatch.setattr(time_sync.time, "monotonic", lambda: 100.0)
+    now = 100.0
+    monkeypatch.setattr(time_sync.time, "monotonic", lambda: now)
     monkeypatch.setattr(time_sync, "fetch_trusted_time", fixed_time)
     time_sync.clear_time_caches()
 
     first = await fetch_cached_trusted_time()
+    now = 101.0
     second = await fetch_cached_trusted_time()
     first_proof = issue_time_proof(first, "test-secret-at-least-32-characters")
     second_proof = issue_time_proof(second, "test-secret-at-least-32-characters")

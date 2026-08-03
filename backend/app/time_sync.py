@@ -284,10 +284,15 @@ async def fetch_cached_trusted_time() -> dict[str, object]:
     now = time.monotonic()
     if _trusted_time_cache:
         expires_at, sampled_at, result = _trusted_time_cache
+        if now < expires_at:
+            # Keep the signed payload stable for the proof cache window. Once
+            # stale, _project_trusted_time below still avoids a cold wait while
+            # the background consensus refresh runs.
+            return dict(result)
         if now >= expires_at and (_trusted_time_refresh_task is None or _trusted_time_refresh_task.done()):
             _trusted_time_refresh_task = asyncio.create_task(_refresh_trusted_time_cache())
         return _project_trusted_time(sampled_at, result, now)
     await _refresh_trusted_time_cache()
     assert _trusted_time_cache is not None
-    _, sampled_at, result = _trusted_time_cache
-    return _project_trusted_time(sampled_at, result, time.monotonic())
+    _, _, result = _trusted_time_cache
+    return dict(result)
