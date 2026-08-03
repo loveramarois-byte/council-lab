@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     1: (
@@ -94,6 +94,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX IF NOT EXISTS idx_high_risk_professional_review_run ON high_risk_professional_reviews(run_id, sequence)",
         "CREATE TRIGGER IF NOT EXISTS high_risk_professional_review_no_update BEFORE UPDATE ON high_risk_professional_reviews BEGIN SELECT RAISE(ABORT, 'high-risk professional reviews are append-only'); END",
         "CREATE TRIGGER IF NOT EXISTS high_risk_professional_review_no_delete BEFORE DELETE ON high_risk_professional_reviews BEGIN SELECT RAISE(ABORT, 'high-risk professional reviews are append-only'); END",
+    ),
+    13: (
+        "CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at DESC)",
     ),
 }
 

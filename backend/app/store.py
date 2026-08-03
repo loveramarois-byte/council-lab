@@ -773,13 +773,27 @@ class Store:
             "SELECT 1 FROM high_risk_runs WHERE run_id=? LIMIT 1", (run_id,)
         ).fetchone() is not None
 
-    async def list_runs(self) -> list[RunRecord]:
-        rows = self.conn.execute("SELECT payload FROM runs ORDER BY created_at DESC").fetchall()
+    async def list_runs(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        include_total: bool = False,
+    ) -> list[RunRecord] | tuple[list[RunRecord], int]:
+        query = "SELECT payload FROM runs ORDER BY created_at DESC"
+        parameters: tuple[int, ...] = ()
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            parameters = (max(1, min(limit, 200)), max(0, offset))
+        rows = self.conn.execute(query, parameters).fetchall()
         runs = [RunRecord.model_validate_json(row[0]) for row in rows]
         for index, run in enumerate(runs):
             latest = await self.latest_decision_review(run.id)
             if latest:
                 runs[index] = run.model_copy(update={"decision_review": latest})
+        if include_total:
+            total = int(self.conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0])
+            return runs, total
         return runs
 
     def has_checkpoint(self, run_id: str) -> bool:

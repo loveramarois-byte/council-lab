@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.context import (
+    ConservativeTokenEstimator,
     _truncate_tokens,
     _truncate_tokens_with_tail,
     build_context_window,
@@ -31,6 +32,7 @@ from app.models import (
     ProviderCreate,
     ProviderProfile,
     ProviderType,
+    ProtocolMode,
     RunCreate,
     RunLimits,
     RunRecord,
@@ -47,7 +49,7 @@ from app.orchestrator import (
 )
 from app.paths import data_dir, database_path
 from app.provider_catalog import builtin_providers
-from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, ProviderRequestError, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
+from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, ProviderRequestError, build_chat_payload, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
 from app.reports import run_html, run_markdown
 from app.runtime_config import assignment_config_is_valid, restore_provider_profiles, select_active_profile
 from app.store import Store, serialize_public_provider
@@ -284,6 +286,13 @@ def test_responses_payload_uses_highest_reasoning_effort():
     assert "temperature" not in payload
 
 
+def test_chat_completions_payload_never_contains_reasoning_effort():
+    payload = build_chat_payload("ping", "system", "test-chat-model", 0.2)
+
+    assert "reasoning_effort" not in payload
+    assert "reasoning" not in payload
+
+
 def test_extract_responses_text_skips_reasoning_items():
     payload = {
         "output": [
@@ -357,6 +366,13 @@ def test_token_estimator_selection_reports_accuracy_truthfully():
     assert compatible.count("mixed 中文 JSON 🚀" * 10) > exact.count("mixed 中文 JSON 🚀" * 10)
     assert conservative.name == "conservative_utf8"
     assert conservative.exact is False
+
+
+def test_conservative_token_estimator_does_not_overcount_chinese_or_english():
+    estimator = ConservativeTokenEstimator()
+
+    assert estimator.count("汉" * 1000) <= 1200
+    assert estimator.count("a" * 1000) <= 350
 
 
 def test_token_estimator_degrades_when_tiktoken_registry_is_unavailable(monkeypatch):
@@ -736,7 +752,7 @@ async def test_ccswitch_timeout_downgrades_reasoning_and_completes(tmp_path, mon
 
     monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: EffortBackend(profile.reasoning_effort))
     store = Store(tmp_path / "council.sqlite3")
-    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH, capabilities=ProviderCapabilities(supports_reasoning_effort=True))
+    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH, capabilities=ProviderCapabilities(supports_responses=True, supports_reasoning_effort=True))
     orchestrator = Orchestrator(store, {"ccswitch": profile, "mock": profile})
     run = await orchestrator.start(RunCreate(question="验证自动降档", mode="rigorous", provider_id="ccswitch", limits=RunLimits(max_model_calls=10)))
 
@@ -760,6 +776,38 @@ async def test_ccswitch_timeout_downgrades_reasoning_and_completes(tmp_path, mon
     ]
 
 
+async def test_ccswitch_chat_completions_does_not_run_effort_fallbacks(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    class TimeoutBackend:
+        def __init__(self, effort: str):
+            self.effort = effort
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            calls.append(self.effort)
+            raise asyncio.TimeoutError
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: TimeoutBackend(profile.reasoning_effort))
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(
+        id="ccswitch",
+        display_name="CC Switch",
+        provider_type=ProviderType.CCSWITCH,
+        protocol_mode=ProtocolMode.CHAT_COMPLETIONS,
+        capabilities=ProviderCapabilities(supports_reasoning_effort=True, supports_responses=False),
+    )
+    orchestrator = Orchestrator(store, {"ccswitch": profile})
+    run = await orchestrator.start(
+        RunCreate(question="验证 Chat Completions 不降档", mode="rigorous", provider_id="ccswitch")
+    )
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None and current.status == "failed"
+    assert calls == ["ultra"]
+    assert not [turn for turn in current.discussion_turns if turn.speaker_type == "system"]
+
+
 async def test_ccswitch_medium_timeout_downgrades_to_low(tmp_path, monkeypatch):
     calls: list[str] = []
 
@@ -780,7 +828,7 @@ async def test_ccswitch_medium_timeout_downgrades_to_low(tmp_path, monkeypatch):
         display_name="CC Switch",
         provider_type=ProviderType.CCSWITCH,
         reasoning_effort="medium",
-        capabilities=ProviderCapabilities(supports_reasoning_effort=True),
+        capabilities=ProviderCapabilities(supports_responses=True, supports_reasoning_effort=True),
     )
     orchestrator = Orchestrator(store, {"ccswitch": profile})
     run = await orchestrator.start(
@@ -835,7 +883,7 @@ async def test_ccswitch_fallbacks_share_one_seat_timeout(tmp_path, monkeypatch):
         id="ccswitch",
         display_name="CC Switch",
         provider_type=ProviderType.CCSWITCH,
-        capabilities=ProviderCapabilities(supports_reasoning_effort=True),
+        capabilities=ProviderCapabilities(supports_responses=True, supports_reasoning_effort=True),
     )
     orchestrator = Orchestrator(store, {"ccswitch": profile})
 
@@ -879,7 +927,7 @@ async def test_ccswitch_wrapped_httpx_timeout_jumps_directly_to_low(tmp_path, mo
         id="ccswitch",
         display_name="CC Switch",
         provider_type=ProviderType.CCSWITCH,
-        capabilities=ProviderCapabilities(supports_reasoning_effort=True),
+        capabilities=ProviderCapabilities(supports_responses=True, supports_reasoning_effort=True),
     )
     orchestrator = Orchestrator(store, {"ccswitch": profile})
     run = await orchestrator.start(
@@ -928,7 +976,7 @@ async def test_ccswitch_wrapped_upstream_400_downgrades_reasoning(tmp_path, monk
 
     monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: EffortBackend(profile.reasoning_effort))
     store = Store(tmp_path / "council.sqlite3")
-    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH, capabilities=ProviderCapabilities(supports_reasoning_effort=True))
+    profile = ProviderProfile(id="ccswitch", display_name="CC Switch", provider_type=ProviderType.CCSWITCH, capabilities=ProviderCapabilities(supports_responses=True, supports_reasoning_effort=True))
     orchestrator = Orchestrator(store, {"ccswitch": profile, "mock": profile})
     run = await orchestrator.start(RunCreate(question="验证上游兼容性错误降档", mode="rigorous", provider_id="ccswitch", limits=RunLimits(max_model_calls=10)))
 

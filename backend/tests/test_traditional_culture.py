@@ -624,7 +624,7 @@ async def test_traditional_api_fails_closed_without_writing_turns_memory_or_deci
         await store.create_memory_proposals(
             [MemoryProposal(source_run_id=run.id, type="decision", content="传统解释", rationale="绕过 API")]
         )
-    summary_item = next(item for item in summary.json() if item["id"] == run.id)
+    summary_item = next(item for item in summary.json()["items"] if item["id"] == run.id)
     assert "traditional_culture_snapshot" not in summary_item
     assert "project_context" not in summary_item
     await orchestrator.shutdown()

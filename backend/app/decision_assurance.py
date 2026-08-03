@@ -35,6 +35,16 @@ class StrictAssuranceModel(BaseModel):
 
 
 class ReadinessRequest(StrictAssuranceModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "question": "是否应该采用微服务架构？",
+                "high_risk": False,
+            }
+        },
+    )
+
     question: str = Field(min_length=3, max_length=12000)
     high_risk: bool = False
 

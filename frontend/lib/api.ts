@@ -112,6 +112,7 @@ export type TraditionalCultureSnapshot = {
   snapshot_proof?: string | null;
 };
 export type RunSummary = Pick<Run, "id" | "question" | "mode" | "council_mode" | "status" | "created_at" | "provider_id" | "participant_roles" | "seat_assignments" | "usage"> & { has_final_decision: boolean };
+export type RunsPage = { items: RunSummary[]; total: number; limit: number; offset: number };
 export type RiskTier = "normal" | "elevated" | "high" | "critical";
 export type HighRiskStatus = "DRAFT" | "RISK_ASSESSMENT_REQUIRED" | "MORE_INFORMATION_REQUIRED" | "EVIDENCE_REQUIRED" | "INDEPENDENT_ANALYSIS" | "CROSS_EXAMINATION" | "PROFESSIONAL_ESCALATION_REQUIRED" | "READY_FOR_HUMAN_REVIEW" | "APPROVAL_REQUIRED" | "APPROVED" | "REJECTED" | "ACTION_BLOCKED" | "COMPLETED" | "CANCELLED";
 export type VerificationStatus = "unverified" | "pending" | "verified" | "rejected" | "conflicting" | "expired" | "legacy_default";
@@ -392,6 +393,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => null) as ErrorEnvelope | null;
     throw new CouncilApiError(response.status, body, response.headers.get("X-Council-Request-ID"));
   }
+  if (response.status === 204) return undefined as T;
   return response.json();
 }
 
@@ -434,6 +436,7 @@ export const api = {
   assignments: () => request<AgentAssignmentsConfig>("/api/agent-assignments"),
   saveAssignments: (body: AgentAssignmentsConfig) => request<AgentAssignmentsConfig>("/api/agent-assignments", { method: "PUT", body: JSON.stringify(body) }),
   patchProvider: (id: string, body: Partial<Pick<Provider, "base_url" | "protocol_mode" | "default_model" | "reasoning_effort">> & { api_key?: string }) => request<Provider>(`/api/providers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteProvider: (id: string) => request<void>(`/api/providers/${id}`, { method: "DELETE" }),
   providerModels: (id: string) => request<{ models: string[]; source: string; fetched: number; default_model?: string; error?: string }>(`/api/providers/${id}/models`),
   deleteProviderCredential: (id: string) => request<Provider>(`/api/providers/${id}/credential`, { method: "DELETE" }),
   activateProvider: (id: string) => request<Provider>(`/api/providers/${id}/activate`, { method: "POST" }),
@@ -457,7 +460,10 @@ export const api = {
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
   createRun: (body: { question: string; mode: string; council_mode?: CouncilMode; workflow_strategy?: "sequential" | "independent"; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; traditional_culture_snapshot?: TraditionalCultureSnapshot; traditional_culture_consent?: boolean; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   readiness: (question: string, high_risk = false) => request<DecisionReadiness>("/api/readiness", { method: "POST", body: JSON.stringify({ question, high_risk }) }),
-  runs: () => request<RunSummary[]>("/api/runs?summary=true"),
+  runs: async (limit = 50, offset = 0): Promise<RunsPage> => {
+    const response = await request<RunsPage | RunSummary[]>(`/api/runs?summary=true&limit=${limit}&offset=${offset}`);
+    return Array.isArray(response) ? { items: response, total: response.length, limit, offset } : response;
+  },
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   decisionBrief: (id: string) => request<DecisionBrief>(`/api/runs/${id}/decision-brief`),
   runLineage: (id: string) => request<RunForkLineage>(`/api/runs/${id}/lineage`),
@@ -508,7 +514,7 @@ export function subscribeToRun(
   let reconnecting = false;
   let lastEventId = 0;
   let stopped = false;
-  const names = ["run_created", "run_fork_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "decision_brief_generating", "decision_brief_generated", "decision_brief_validation_failed", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
+  const names = ["run_created", "run_fork_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "decision_brief_generating", "decision_brief_generated", "decision_brief_validation_failed", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed", "ping"];
   const terminalEvents = new Set(["final_completed", "run_cancelled"]);
 
   const connect = async () => {
@@ -537,6 +543,7 @@ export function subscribeToRun(
       const event = message as MessageEvent;
       const sequence = Number.parseInt(event.lastEventId, 10);
       if (Number.isFinite(sequence)) lastEventId = Math.max(lastEventId, sequence);
+      if (name === "ping") return;
       onEvent(JSON.parse(event.data));
       if (terminalEvents.has(name)) {
         stopped = true;

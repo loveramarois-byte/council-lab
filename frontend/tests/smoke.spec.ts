@@ -462,6 +462,7 @@ test("CC Switch 打开设置后自动识别模型", async ({ page }) => {
   await page.route("**/api/providers/ccswitch/detect", (route) => route.fulfill({
     json: {
       status: "connected",
+      available: true,
       model_source: "provider",
       default_model: "gpt-test-primary",
       models: ["gpt-test-primary", "gpt-test-backup"],
@@ -477,6 +478,7 @@ test("CC Switch 不可达时不会显示为已连接", async ({ page }) => {
   await page.route("**/api/providers/ccswitch/detect", (route) => route.fulfill({
     json: {
       status: "connection_refused",
+      available: false,
       model_source: "none",
       default_model: "",
       models: [],
@@ -495,6 +497,7 @@ test("CC Switch 历史模型不会被标成当前可用", async ({ page }) => {
   await page.route("**/api/providers/ccswitch/detect", (route) => route.fulfill({
     json: {
       status: "connection_refused",
+      available: false,
       model_source: "ccswitch_history",
       default_model: "recent-model",
       models: ["recent-model"],
@@ -1286,21 +1289,31 @@ test("大量历史记录分批显示且加载期间不闪烁空状态", async ({
   }));
   let releaseResponse: (() => void) | undefined;
   const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
-  await page.route(/\/api\/runs\?summary=true$/, async (route) => {
+  await page.route(/\/api\/runs\?summary=true&limit=\d+&offset=\d+$/, async (route) => {
     await responseGate;
-    return route.fulfill({ json: runs });
+    const url = new URL(route.request().url());
+    const limit = Number(url.searchParams.get("limit"));
+    const offset = Number(url.searchParams.get("offset"));
+    return route.fulfill({ json: { items: runs.slice(offset, offset + limit), total: runs.length, limit, offset } });
   });
 
   await page.goto("/runs");
   await expect(page.getByText("正在读取历史记录")).toBeVisible();
   await expect(page.getByText("还没有审议记录")).toHaveCount(0);
   releaseResponse?.();
-  await expect(page.locator(".run-row")).toHaveCount(30);
-  await page.getByRole("button", { name: /加载更多/ }).click();
-  await expect(page.locator(".run-row")).toHaveCount(60);
+  await expect(page.locator(".run-row")).toHaveCount(50);
   await page.getByPlaceholder("搜索问题").fill("历史测试 105");
+  await expect(page.locator(".run-row")).toHaveCount(0);
+  await page.getByRole("button", { name: "继续加载更多记录" }).click();
+  await page.getByRole("button", { name: "继续加载更多记录" }).click();
   await expect(page.locator(".run-row")).toHaveCount(1);
   await expect(page.getByText("历史测试 105", { exact: true })).toBeVisible();
+  await page.getByPlaceholder("搜索问题").fill("");
+  await expect(page.locator(".run-row")).toHaveCount(50);
+  await page.getByRole("button", { name: /加载更多/ }).click();
+  await expect(page.locator(".run-row")).toHaveCount(100);
+  await page.getByRole("button", { name: /加载更多/ }).click();
+  await expect(page.locator(".run-row")).toHaveCount(105);
 });
 
 test("历史页明确区分空记录、无匹配和读取失败", async ({ page }) => {
@@ -1312,9 +1325,9 @@ test("历史页明确区分空记录、无匹配和读取失败", async ({ page 
     limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 }, seat_assignments: [], auto_summarize: false, high_risk_control: false, recoverable: false,
   }];
   let responseMode: "empty" | "one" | "error" = "empty";
-  await page.route(/\/api\/runs\?summary=true$/, (route) => responseMode === "error"
+  await page.route(/\/api\/runs\?summary=true&limit=\d+&offset=\d+$/, (route) => responseMode === "error"
     ? route.fulfill({ status: 503, json: { error: { message: "本地数据库暂时忙" } } })
-    : route.fulfill({ json: responseMode === "one" ? oneRun : [] }));
+    : route.fulfill({ json: { items: responseMode === "one" ? oneRun : [], total: responseMode === "one" ? 1 : 0, limit: 50, offset: 0 } }));
 
   await page.goto("/runs");
   await expect(page.getByText("还没有审议记录")).toBeVisible();

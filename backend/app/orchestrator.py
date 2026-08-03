@@ -863,7 +863,12 @@ class Orchestrator:
         system: str,
     ) -> Any:
         provider_type = getattr(assignment.provider_snapshot.provider_type, "value", assignment.provider_snapshot.provider_type)
-        native_effort = assignment.provider_snapshot.capabilities.supports_reasoning_effort
+        protocol = getattr(assignment.protocol, "value", assignment.protocol)
+        native_effort = (
+            assignment.provider_snapshot.capabilities.supports_reasoning_effort
+            and assignment.provider_snapshot.capabilities.supports_responses
+            and protocol != "chat_completions"
+        )
         plan = (
             CCSWITCH_EFFORT_FALLBACKS.get(assignment.reasoning_effort, [assignment.reasoning_effort])
             if provider_type == "ccswitch_local" and native_effort

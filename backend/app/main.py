@@ -35,7 +35,7 @@ from .request_boundary import load_internal_api_token, token_identifier
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles, select_active_profile
 from .store import Store, serialize_public_provider
 from .templates import list_templates
-from .time_sync import fetch_trusted_time, verify_snapshot_proof, issue_time_proof, verify_time_proof
+from .time_sync import fetch_cached_trusted_time, verify_snapshot_proof, issue_time_proof, verify_time_proof
 from .output_contracts import list_output_contracts
 from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, runtime_identity, update_manager
 
@@ -61,6 +61,7 @@ MemoryIdPath = Annotated[str, ApiPath(min_length=3, max_length=128, pattern=r"^[
 async def lifespan(_: FastAPI):
     if assignments_need_persist:
         await store.save_assignment_config(assignments)
+    await fetch_cached_trusted_time()
     await high_risk_service.recover()
     await orchestrator.recover_incomplete_runs()
     try:
@@ -141,7 +142,7 @@ async def health() -> dict[str, str]:
 @app.get("/api/time")
 async def trusted_time(response: Response):
     response.headers["Cache-Control"] = "no-store"
-    result = await fetch_trusted_time()
+    result = await fetch_cached_trusted_time()
     if result["provider"] == "https_consensus" and result["synced"] is True:
         result["time_proof"] = issue_time_proof(result, internal_api_token)
     return result
@@ -758,11 +759,13 @@ async def delete_project_source(project_id: str, source_id: str, response: Respo
 
 
 @app.get("/api/runs")
-async def list_runs(summary: bool = False):
-    runs = await store.list_runs()
-    if not summary:
-        return runs
-    return [
+async def list_runs(
+    summary: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    runs, total = await store.list_runs(limit=limit, offset=offset, include_total=True)
+    items = runs if not summary else [
         {
             "id": run.id,
             "question": run.question,
@@ -778,6 +781,7 @@ async def list_runs(summary: bool = False):
         }
         for run in runs
     ]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @app.get("/api/runs/compare", response_model=DecisionBriefComparison)
@@ -1205,9 +1209,9 @@ async def run_events(
             while True:
                 if await request.is_disconnected():
                     break
-                events = await store.wait_for_events(run_id, cursor, timeout=15)
+                events = await store.wait_for_events(run_id, cursor, timeout=20)
                 if not events:
-                    yield ": keep-alive\n\n"
+                    yield "event: ping\ndata: {}\n\n"
                     continue
                 for event in events:
                     cursor = event.sequence
@@ -1274,7 +1278,7 @@ async def patch_provider(provider_id: str, request: ProviderPatch):
     return serialize_public_provider(profile)
 
 
-@app.delete("/api/providers/{provider_id}")
+@app.delete("/api/providers/{provider_id}", status_code=204)
 async def delete_provider(provider_id: str):
     if provider_id in BUILTIN_PROVIDER_IDS:
         raise HTTPException(400, "内置 Provider 不可删除")
@@ -1286,7 +1290,7 @@ async def delete_provider(provider_id: str):
         raise HTTPException(503, str(exc)) from exc
     del providers[provider_id]
     await store.delete_provider(provider_id)
-    return {"deleted": True}
+    return Response(status_code=204)
 
 
 @app.delete("/api/providers/{provider_id}/credential")
@@ -1332,6 +1336,10 @@ async def detect_ccswitch():
     models, model_source, _ = resolve_model_catalog(result.get("models") or [], fallback_models, fallback_source)
     replace_model_catalog(profile, models, model_source)
     result["models"] = profile.available_models
+    result["available"] = bool(
+        result.get("proxy_listening")
+        or result.get("status") in {"connected", "route_reachable", "route_connected_upstream_busy"}
+    )
     await store.save_provider(profile)
     return {
         "base_url": profile.base_url,

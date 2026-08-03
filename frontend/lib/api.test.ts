@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CouncilApiError, providerIsReady, type Provider } from "./api";
+import { api, CouncilApiError, providerIsReady, type Provider } from "./api";
 
 
 const provider = (patch: Partial<Provider> = {}): Provider => ({
@@ -26,6 +26,11 @@ const provider = (patch: Partial<Provider> = {}): Provider => ({
   last_health_check: "2026-07-29T00:00:00Z",
   last_error: null,
   ...patch,
+});
+
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 
@@ -57,5 +62,14 @@ describe("CouncilApiError", () => {
     expect(error.code).toBe("IDEMPOTENCY_KEY_REUSED");
     expect(error.requestId).toBe("request-123");
     expect(error.message).toContain("排错编号 request-123");
+  });
+});
+
+
+describe("empty responses", () => {
+  it("accepts a provider delete response with status 204", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+
+    await expect(api.deleteProvider("custom-provider")).resolves.toBeUndefined();
   });
 });

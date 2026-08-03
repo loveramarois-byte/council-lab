@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from statistics import median
 from typing import Mapping
@@ -27,7 +27,22 @@ _MAX_CONSENSUS_SKEW_SECONDS = 5
 _MAX_PROOF_AGE_SECONDS = 10 * 60
 _TIME_PROOF_VERSION = "v1"
 _MAX_TRACKED_PROOFS = 1024
+_TIME_CACHE_TTL_SECONDS = 30.0
 _issued_proofs: dict[str, float] = {}
+_trusted_time_cache: tuple[float, float, dict[str, object]] | None = None
+_trusted_time_cache_lock = asyncio.Lock()
+_trusted_time_refresh_task: asyncio.Task[None] | None = None
+_time_proof_cache: dict[tuple[str, str, int], tuple[str, float]] = {}
+
+
+def clear_time_caches() -> None:
+    global _trusted_time_cache, _trusted_time_refresh_task
+    _trusted_time_cache = None
+    if _trusted_time_refresh_task and not _trusted_time_refresh_task.done():
+        _trusted_time_refresh_task.cancel()
+    _trusted_time_refresh_task = None
+    _time_proof_cache.clear()
+    _issued_proofs.clear()
 
 
 def _seconds_iso(value: datetime) -> str:
@@ -129,8 +144,21 @@ def issue_time_proof(payload: Mapping[str, object], secret: str) -> str:
         and proof_payload["synced"] is True
     ):
         raise ValueError("只有 HTTPS 多源校时结果可以签发证明")
-    proof = f"{_TIME_PROOF_VERSION}.{_proof_digest(proof_payload, secret)}"
+    canonical = json.dumps(proof_payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    cache_key = (
+        canonical,
+        hashlib.sha256(secret.encode("utf-8")).hexdigest(),
+        int(time.time() // 60),
+    )
     issued_at = time.monotonic()
+    cached = _time_proof_cache.get(cache_key)
+    if cached and issued_at < cached[1]:
+        return cached[0]
+    proof = f"{_TIME_PROOF_VERSION}.{_proof_digest(proof_payload, secret)}"
+    _time_proof_cache[cache_key] = (proof, issued_at + _TIME_CACHE_TTL_SECONDS)
+    if len(_time_proof_cache) > 64:
+        oldest_key = min(_time_proof_cache, key=lambda key: _time_proof_cache[key][1])
+        _time_proof_cache.pop(oldest_key, None)
     _issued_proofs[proof] = issued_at
     if len(_issued_proofs) > _MAX_TRACKED_PROOFS:
         oldest = min(_issued_proofs, key=_issued_proofs.get)
@@ -223,3 +251,43 @@ async def fetch_trusted_time(
     finally:
         if owns_client:
             await active_client.aclose()
+
+
+def _project_trusted_time(
+    sampled_at: float,
+    payload: Mapping[str, object],
+    now: float,
+) -> dict[str, object]:
+    result = dict(payload)
+    try:
+        utc_value = datetime.fromisoformat(str(payload["utc_datetime"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError):
+        return result
+    projected_utc = utc_value.astimezone(timezone.utc) + timedelta(seconds=max(0.0, now - sampled_at))
+    projected_utc = projected_utc.replace(microsecond=0)
+    result["utc_datetime"] = _seconds_iso(projected_utc)
+    result["local_datetime"] = projected_utc.astimezone(_SHANGHAI).isoformat(timespec="seconds")
+    return result
+
+
+async def _refresh_trusted_time_cache() -> None:
+    global _trusted_time_cache
+    async with _trusted_time_cache_lock:
+        result = await fetch_trusted_time()
+        sampled_at = time.monotonic()
+        _trusted_time_cache = (sampled_at + _TIME_CACHE_TTL_SECONDS, sampled_at, dict(result))
+
+
+async def fetch_cached_trusted_time() -> dict[str, object]:
+    """Serve projected trusted time immediately and refresh consensus in the background."""
+    global _trusted_time_refresh_task
+    now = time.monotonic()
+    if _trusted_time_cache:
+        expires_at, sampled_at, result = _trusted_time_cache
+        if now >= expires_at and (_trusted_time_refresh_task is None or _trusted_time_refresh_task.done()):
+            _trusted_time_refresh_task = asyncio.create_task(_refresh_trusted_time_cache())
+        return _project_trusted_time(sampled_at, result, now)
+    await _refresh_trusted_time_cache()
+    assert _trusted_time_cache is not None
+    _, sampled_at, result = _trusted_time_cache
+    return _project_trusted_time(sampled_at, result, time.monotonic())

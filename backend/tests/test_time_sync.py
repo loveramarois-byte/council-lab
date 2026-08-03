@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 from datetime import datetime, timezone
 
@@ -8,6 +9,7 @@ import pytest
 
 from app import time_sync
 from app.time_sync import (
+    fetch_cached_trusted_time,
     fetch_trusted_time,
     issue_snapshot_proof,
     issue_time_proof,
@@ -142,6 +144,70 @@ def test_network_time_proof_freshness_uses_monotonic_process_time(monkeypatch):
     )
 
 
+@pytest.mark.asyncio
+async def test_trusted_time_and_proof_are_reused_within_cache_window(monkeypatch):
+    trusted = {
+        "utc_datetime": "2026-08-03T00:00:00Z",
+        "local_datetime": "2026-08-03T08:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "source": "network",
+        "provider": "https_consensus",
+        "source_url": "https://www.cloudflare.com/,https://www.google.com/generate_204",
+        "synced": True,
+    }
+    calls = 0
+
+    async def fixed_time():
+        nonlocal calls
+        calls += 1
+        return dict(trusted)
+
+    monkeypatch.setattr(time_sync.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(time_sync, "fetch_trusted_time", fixed_time)
+    time_sync.clear_time_caches()
+
+    first = await fetch_cached_trusted_time()
+    second = await fetch_cached_trusted_time()
+    first_proof = issue_time_proof(first, "test-secret-at-least-32-characters")
+    second_proof = issue_time_proof(second, "test-secret-at-least-32-characters")
+
+    assert calls == 1
+    assert first == second
+    assert first_proof == second_proof
+
+
+@pytest.mark.asyncio
+async def test_expired_trusted_time_is_projected_while_consensus_refreshes(monkeypatch):
+    trusted = {
+        "utc_datetime": "2026-08-03T00:00:00Z",
+        "local_datetime": "2026-08-03T08:00:00+08:00",
+        "timezone": "Asia/Shanghai",
+        "source": "network",
+        "provider": "https_consensus",
+        "source_url": "https://www.cloudflare.com/,https://www.google.com/generate_204",
+        "synced": True,
+    }
+    now = 100.0
+    calls = 0
+
+    async def fixed_time():
+        nonlocal calls
+        calls += 1
+        return dict(trusted)
+
+    monkeypatch.setattr(time_sync, "fetch_trusted_time", fixed_time)
+    monkeypatch.setattr(time_sync.time, "monotonic", lambda: now)
+    time_sync.clear_time_caches()
+    await fetch_cached_trusted_time()
+
+    now = 140.0
+    projected = await fetch_cached_trusted_time()
+    await asyncio.sleep(0)
+
+    assert projected["utc_datetime"] == "2026-08-03T00:00:40Z"
+    assert calls == 2
+
+
 def test_snapshot_proof_binds_hash_and_time_proof():
     secret = "test-secret-at-least-32-characters"
     snapshot_hash = "a" * 64
@@ -170,7 +236,7 @@ async def test_time_api_signs_consensus_result_and_disables_caching(monkeypatch)
     async def fixed_time():
         return dict(trusted)
 
-    monkeypatch.setattr(main, "fetch_trusted_time", fixed_time)
+    monkeypatch.setattr(main, "fetch_cached_trusted_time", fixed_time)
     transport = httpx.ASGITransport(app=main.app)
     async with httpx.AsyncClient(
         transport=transport,
@@ -203,7 +269,7 @@ async def test_time_api_never_signs_local_clock_fallback(monkeypatch):
     async def fixed_time():
         return dict(fallback)
 
-    monkeypatch.setattr(main, "fetch_trusted_time", fixed_time)
+    monkeypatch.setattr(main, "fetch_cached_trusted_time", fixed_time)
     transport = httpx.ASGITransport(app=main.app)
     async with httpx.AsyncClient(
         transport=transport,

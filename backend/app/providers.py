@@ -208,6 +208,17 @@ def build_responses_payload(prompt: str, system: str, model: str, reasoning_effo
     return payload
 
 
+def build_chat_payload(prompt: str, system: str, model: str, temperature: float = 0.2) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": temperature,
+    }
+
+
 def extract_responses_text(payload: dict[str, Any]) -> str:
     output_text = payload.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
@@ -321,7 +332,7 @@ class OpenAICompatibleProvider(ModelBackend):
 
     async def generate(self, prompt: str, system: str, model: str, temperature: float = 0.2) -> Generation:
         protocol = self.profile.protocol_mode
-        if protocol in (ProtocolMode.AUTO, ProtocolMode.RESPONSES):
+        if protocol in (ProtocolMode.AUTO, ProtocolMode.RESPONSES) and self.profile.capabilities.supports_responses:
             effort = self.profile.reasoning_effort if self.profile.capabilities.supports_reasoning_effort else None
             response, attempts = await self._post_with_retry(
                 "/responses",
@@ -341,7 +352,7 @@ class OpenAICompatibleProvider(ModelBackend):
                     raise RuntimeError("Responses 接口成功但没有返回可用文本")
                 usage = data.get("usage") or {}
                 return Generation(output, usage.get("input_tokens", 0), usage.get("output_tokens", 0), "responses", effort, attempts)
-        chat_payload = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}], "temperature": temperature}
+        chat_payload = build_chat_payload(prompt, system, model, temperature)
         try:
             response, chat_attempts = await self._post_with_retry("/chat/completions", chat_payload)
         except ProviderRequestError as exc:
