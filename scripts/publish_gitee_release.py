@@ -11,16 +11,48 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 API_ROOT = "https://gitee.com/api/v5"
 DEFAULT_API_TIMEOUT_SECONDS = 60
 DEFAULT_UPLOAD_TIMEOUT_SECONDS = 1800
+UPLOAD_CHUNK_SIZE = 64 * 1024
 
 
 class GiteeApiError(RuntimeError):
     pass
+
+
+class MultipartBody:
+    """Re-iterable multipart body that streams release assets from disk."""
+
+    def __init__(self, boundary: str, fields: dict[str, str], file_path: Path):
+        chunks: list[bytes] = []
+        for name, value in fields.items():
+            chunks.extend([
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                value.encode(),
+                b"\r\n",
+            ])
+        mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        chunks.extend([
+            f"--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode(),
+            f"Content-Type: {mime_type}\r\n\r\n".encode(),
+        ])
+        self.preamble = b"".join(chunks)
+        self.file_path = file_path
+        self.trailer = f"\r\n--{boundary}--\r\n".encode()
+        self.content_length = len(self.preamble) + file_path.stat().st_size + len(self.trailer)
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.preamble
+        with self.file_path.open("rb") as asset:
+            while chunk := asset.read(UPLOAD_CHUNK_SIZE):
+                yield chunk
+        yield self.trailer
 
 
 def _timeout_seconds(file_path: Path | None) -> int:
@@ -61,31 +93,17 @@ def api_request(
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     else:
         boundary = f"----CouncilLab{secrets.token_hex(12)}"
-        chunks: list[bytes] = []
-        for name, value in (fields or {}).items():
-            chunks.extend([
-                f"--{boundary}\r\n".encode(),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
-                value.encode(),
-                b"\r\n",
-            ])
-        mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-        chunks.extend([
-            f"--{boundary}\r\n".encode(),
-            f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'.encode(),
-            f"Content-Type: {mime_type}\r\n\r\n".encode(),
-            file_path.read_bytes(),
-            b"\r\n",
-            f"--{boundary}--\r\n".encode(),
-        ])
-        data = b"".join(chunks)
+        data = MultipartBody(boundary, fields or {}, file_path)
         headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+        headers["Content-Length"] = str(data.content_length)
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=_timeout_seconds(file_path)) as response:
             payload = response.read()
     except urllib.error.HTTPError as error:
         raise _response_error(error) from error
+    except urllib.error.URLError as error:
+        raise GiteeApiError(f"Gitee API request failed: {error.reason}") from error
     return json.loads(payload) if payload else None
 
 

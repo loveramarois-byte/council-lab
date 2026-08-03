@@ -52,7 +52,7 @@ def test_publish_release_creates_release_and_uploads_all_assets(monkeypatch, tmp
     assert release["tag_name"] == "v1.0.0"
     assert [request.get_method() for request, _ in requests] == ["GET", "POST", "GET", "POST", "POST", "POST", "GET"]
     assert all("access_token=secret-token" in request.full_url for request, _ in requests)
-    assert all(b"secret-token" not in (request.data or b"") for request, _ in requests)
+    assert all(not isinstance(request.data, bytes) or b"secret-token" not in request.data for request, _ in requests)
 
 
 def test_http_errors_do_not_expose_token(monkeypatch):
@@ -77,12 +77,42 @@ def test_asset_upload_uses_extended_timeout(monkeypatch, tmp_path):
     def fake_urlopen(request, timeout):
         observed["method"] = request.get_method()
         observed["timeout"] = timeout
+        observed["content_length"] = request.get_header("Content-length")
+        observed["body"] = b"".join(request.data)
         return FakeResponse({"id": 101})
 
     monkeypatch.setattr(publish_gitee_release.urllib.request, "urlopen", fake_urlopen)
     publish_gitee_release.api_request("POST", "/release/attach_files", "secret-token", file_path=asset)
 
-    assert observed == {"method": "POST", "timeout": 1800}
+    assert observed["method"] == "POST"
+    assert observed["timeout"] == 1800
+    assert int(observed["content_length"]) == len(observed["body"])
+    assert b'release' in observed["body"]
+
+
+def test_asset_upload_streams_large_files_in_bounded_chunks(monkeypatch, tmp_path):
+    asset = tmp_path / "Council.zip"
+    asset.write_bytes(b"x" * (publish_gitee_release.UPLOAD_CHUNK_SIZE * 2 + 17))
+    observed = {}
+
+    def fake_urlopen(request, timeout):
+        chunks = list(request.data)
+        observed["chunks"] = chunks
+        observed["content_length"] = request.get_header("Content-length")
+        return FakeResponse({"id": 101})
+
+    monkeypatch.setattr(publish_gitee_release.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(Path, "read_bytes", lambda _path: (_ for _ in ()).throw(AssertionError("asset read eagerly")))
+
+    publish_gitee_release.api_request("POST", "/release/attach_files", "secret-token", file_path=asset)
+
+    file_chunks = [chunk for chunk in observed["chunks"] if chunk and set(chunk) == {ord("x")}]
+    assert [len(chunk) for chunk in file_chunks] == [
+        publish_gitee_release.UPLOAD_CHUNK_SIZE,
+        publish_gitee_release.UPLOAD_CHUNK_SIZE,
+        17,
+    ]
+    assert int(observed["content_length"]) == sum(len(chunk) for chunk in observed["chunks"])
 
 
 @pytest.mark.parametrize(
