@@ -100,7 +100,7 @@ export type TraditionalCultureProfile = {
 };
 export type TraditionalCultureSnapshot = {
   schema_version: 1 | 2;
-  calculation_source: "local_browser";
+  calculation_source: "local_browser" | "local_service";
   calculated_at: string;
   profile: TraditionalCultureProfile;
   engines: { id: "lunar-javascript" | "iztro"; version: string; source_url: string; license: "MIT" }[];
@@ -109,6 +109,7 @@ export type TraditionalCultureSnapshot = {
   ziwei_chart: { solar_date: string; lunar_date: string; chinese_date: string; time_label: string; time_range: string; five_elements_class: string; soul_star: string; body_star: string; soul_palace_branch: string; body_palace_branch: string; palaces: { index: number; name: string; heavenly_stem: string; earthly_branch: string; is_body_palace: boolean; is_original_palace: boolean; major_stars: string[]; minor_stars: string[]; changsheng12: string; decadal_range: number[] }[] };
   notices: string[];
   snapshot_sha256: string;
+  snapshot_proof?: string | null;
 };
 export type RunSummary = Pick<Run, "id" | "question" | "mode" | "council_mode" | "status" | "created_at" | "provider_id" | "participant_roles" | "seat_assignments" | "usage"> & { has_final_decision: boolean };
 export type RiskTier = "normal" | "elevated" | "high" | "critical";
@@ -424,7 +425,7 @@ async function download(path: string, init?: RequestInit): Promise<{ blob: Blob;
 }
 
 export const api = {
-  trustedTime: () => request<TrustedTime>("/api/time", { cache: "no-store" }),
+  traditionalSnapshot: (profile: TraditionalCultureProfile) => request<TraditionalCultureSnapshot>("/api/traditional/snapshot", { method: "POST", body: JSON.stringify(profile) }),
   downloadDiagnostics: () => download("/api/diagnostics/export", { headers: { "X-Council-Request": "app" } }),
   checkUpdate: (refresh = false) => request<UpdateInfo>(`/api/update/check${refresh ? "?refresh=true" : ""}`, refresh ? { headers: { "X-Council-Request": "app" } } : undefined),
   updateStatus: () => request<UpdateStatus>("/api/update/status"),

@@ -35,7 +35,7 @@ from .request_boundary import load_internal_api_token, token_identifier
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles
 from .store import Store, serialize_public_provider
 from .templates import list_templates
-from .time_sync import fetch_trusted_time, issue_time_proof, verify_time_proof
+from .time_sync import fetch_trusted_time, verify_snapshot_proof, issue_time_proof, verify_time_proof
 from .output_contracts import list_output_contracts
 from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, runtime_identity, update_manager
 
@@ -216,7 +216,18 @@ async def create_run(
 
     async def start_run():
         if request.council_mode == "traditional_culture" and request.traditional_culture_snapshot is not None:
+            if request.traditional_culture_snapshot.schema_version != 2:
+                raise HTTPException(400, "旧版传统文化快照只用于读取历史 Run；新建研判请重新排盘。")
             timing = request.traditional_culture_snapshot.timing_facts
+            try:
+                verify_snapshot_proof(
+                    request.traditional_culture_snapshot.snapshot_sha256,
+                    timing.time_proof if timing is not None else None,
+                    request.traditional_culture_snapshot.snapshot_proof,
+                    internal_api_token,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
             if timing is not None and timing.synced:
                 if timing.time_provider != "https_consensus":
                     raise HTTPException(400, "旧版单源联网时间只用于读取历史 Run；新建研判请重新校时。")

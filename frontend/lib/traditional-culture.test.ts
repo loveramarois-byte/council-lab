@@ -30,7 +30,7 @@ describe("traditional culture local calculation", () => {
     expect(snapshot.ziwei_chart.palaces).toHaveLength(12);
     expect(snapshot.profile.interpretation_framework).toBe("comparative_research");
     expect(snapshot.engines.map((engine) => `${engine.id}@${engine.version}`)).toEqual(["lunar-javascript@1.7.7", "iztro@2.5.8"]);
-    expect(snapshot.snapshot_sha256).toBe("834a9b05215734c27c5bc5530ddd6eaf54be59c154854580356feaabca162b5a");
+    expect(snapshot.snapshot_sha256).toBe("7ec75b8752e6165137b18cd194f630bae82cf29238e8a15b4a5284b8bccf65b5");
   });
 
   it("records selected reference-book metadata without bundling source text", async () => {
@@ -101,7 +101,8 @@ describe("traditional culture local calculation", () => {
     expect(snapshot.calendar_facts.pillars[3]).toBeTruthy();
     expect(snapshot.timing_facts).toMatchObject({
       reference_civil_datetime: "2026-08-03 08:00:00",
-      reference_true_solar_datetime: "2026-08-03 07:56:00",
+      reference_true_solar_datetime: "2026-08-03 08:00:00",
+      reference_true_solar_offset_minutes: 0,
       time_source: "network",
       time_provider: "https_consensus",
       year_pillar: "丙午",
@@ -111,6 +112,7 @@ describe("traditional culture local calculation", () => {
       previous_solar_term: { name: "大暑", datetime: "2026-07-23 03:13:05" },
       next_solar_term: { name: "立秋", datetime: "2026-08-07 19:42:43" },
     });
+    expect(snapshot.notices).toContain("未采集咨询地点；流年、流月、流日和流时按 Asia/Shanghai 民用时计算，不复用出生地经度。");
   });
 
   it("keeps the snapshot digest stable when only the server time proof changes", async () => {
@@ -150,7 +152,14 @@ describe("traditional culture local calculation", () => {
     expect(resolveTraditionalLocation(input)?.name).toBe(expected);
   });
 
-  it.each(["不在北京", "南京路", "我住在山东青岛附近", "广东青岛"])(
+  it.each(["云南普洱", "云南省普洱市", "云南西双版纳", "云南景洪"])(
+    "keeps Yunnan aliases in the correct province for %s",
+    (input) => {
+      expect(resolveTraditionalLocation(input)).not.toBeNull();
+    },
+  );
+
+  it.each(["不在北京", "南京路", "我住在山东青岛附近", "广东青岛", "四川普洱", "四川西双版纳", "四川景洪"])(
     "does not infer a city from ambiguous free-form input %s",
     (input) => {
       expect(resolveTraditionalLocation(input)).toBeNull();

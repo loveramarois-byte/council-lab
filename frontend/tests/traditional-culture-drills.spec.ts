@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { buildTraditionalCultureSnapshot } from "../lib/traditional-culture";
+import { snapshotProofFor } from "../lib/traditional-snapshot-server";
 
 
 const backendUrl = process.env.COUNCIL_TEST_BACKEND_URL || "http://127.0.0.1:8001";
@@ -13,7 +14,7 @@ const templates = [
   { id: "traditional_culture_review", name: "传统文化联合研判", description: "本地排盘后研判", prompt_hint: "说明希望研究的传统文化主题", system_guidance: "" },
 ];
 
-function snapshot() {
+function snapshot(): any {
   return {
     schema_version: 1,
     calculation_source: "local_browser",
@@ -37,6 +38,15 @@ async function mockHome(page: Page, memories: unknown[] = []) {
   await page.route("**/api/output-contracts", (route) => route.fulfill({ json: [{ id: "general_decision", name: "一般决策", description: "通用", input_checks: [], prompt_hint: "通用", system_guidance: "" }] }));
   await page.route("**/api/memory", (route) => route.fulfill({ json: memories }));
   await page.route("**/api/memory/preview", (route) => route.fulfill({ json: { workspace_id: "default", selected_memory_ids: [], included: [], excluded_memory_ids: [], rendered_context: "" } }));
+  await page.route("**/api/traditional/snapshot", async (route) => {
+    const profile = route.request().postDataJSON();
+    const value = await buildTraditionalCultureSnapshot(profile);
+    value.snapshot_proof = snapshotProofFor(
+      value,
+      process.env.COUNCIL_INTERNAL_API_TOKEN || "",
+    );
+    return route.fulfill({ json: value });
+  });
 }
 
 async function openTraditional(page: Page, memories: unknown[] = []) {
@@ -118,6 +128,10 @@ async function rejectProhibitedQuestion(request: APIRequestContext, question: st
     true_solar_time_applied: false,
     focus_topics: ["temperament"],
   });
+  cultureSnapshot.snapshot_proof = snapshotProofFor(
+    cultureSnapshot,
+    process.env.COUNCIL_INTERNAL_API_TOKEN || "",
+  );
   const response = await request.post(`${backendUrl}/api/runs`, {
     headers: { ...internalApiHeaders, "Idempotency-Key": `culture-drill-risk-${index}` },
     data: {

@@ -4,6 +4,7 @@ import json
 import sqlite3
 import time
 
+import httpx
 import pytest
 
 from app.context import (
@@ -37,10 +38,16 @@ from app.models import (
     UsageSummary,
     utc_now,
 )
-from app.orchestrator import Orchestrator, analyze_question, describe_run_error, reasoning_effort_for_mode
+from app.orchestrator import (
+    CCSWITCH_EFFORT_FALLBACKS,
+    Orchestrator,
+    analyze_question,
+    describe_run_error,
+    reasoning_effort_for_mode,
+)
 from app.paths import data_dir, database_path
 from app.provider_catalog import builtin_providers
-from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
+from app.providers import DEFAULT_CCSWITCH_URL, Generation, OpenAICompatibleProvider, ProviderRequestError, build_responses_payload, discover_ccswitch_models, extract_model_ids, extract_responses_text, is_loopback_url, normalize_base_url, replace_model_catalog, resolve_model_catalog, validate_base_url
 from app.reports import run_html, run_markdown
 from app.runtime_config import assignment_config_is_valid, restore_provider_profiles
 from app.store import Store, serialize_public_provider
@@ -444,6 +451,17 @@ def test_run_mode_selects_actual_reasoning_effort(mode, expected_effort):
     assert reasoning_effort_for_mode(mode) == expected_effort
 
 
+@pytest.mark.parametrize(
+    ("effort", "expected_plan"),
+    [
+        ("xhigh", ["xhigh", "high", "low"]),
+        ("max", ["max", "high", "low"]),
+    ],
+)
+def test_ccswitch_extended_reasoning_efforts_have_bounded_fallbacks(effort, expected_plan):
+    assert CCSWITCH_EFFORT_FALLBACKS[effort] == expected_plan
+
+
 async def test_standard_run_builds_backend_with_high_effort(tmp_path, monkeypatch):
     captured_efforts = []
 
@@ -700,12 +718,11 @@ async def test_ccswitch_timeout_downgrades_reasoning_and_completes(tmp_path, mon
     assert current.status == "awaiting_final_input"
     assert current.reasoning_effort == "low"
     assert current.degraded is True
-    assert calls[:3] == ["ultra", "high", "low"]
-    assert calls[3:] == ["low", "low", "low"]
+    assert calls[:2] == ["ultra", "low"]
+    assert calls[2:] == ["low", "low", "low"]
     route_turns = [turn for turn in current.discussion_turns if turn.speaker_type == "system"]
     assert [turn.content for turn in route_turns] == [
-        "Ultra 原生推理档上游超时，已自动降为 High 档重试当前席位。",
-        "High 原生推理档上游超时，已自动降为 Low 档重试当前席位。",
+        "Ultra 原生推理档上游超时，已自动降为 Low 档重试当前席位。",
     ]
 
 
@@ -802,9 +819,54 @@ async def test_ccswitch_fallbacks_share_one_seat_timeout(tmp_path, monkeypatch):
     current = await store.get_run(run.id)
 
     assert elapsed < 1.35
-    assert calls == ["ultra", "high"]
+    assert calls == ["ultra", "low"]
     assert current is not None and current.status == "failed"
     assert "超过 1 秒" in (current.error or "")
+
+
+async def test_ccswitch_wrapped_httpx_timeout_jumps_directly_to_low(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    class EffortBackend:
+        def __init__(self, effort: str):
+            self.effort = effort
+
+        async def generate(self, prompt, system, model, temperature=0.2):
+            calls.append(self.effort)
+            if self.effort == "ultra":
+                request = httpx.Request("POST", "http://127.0.0.1:15721/v1/responses")
+                timeout = httpx.ReadTimeout("upstream timed out", request=request)
+                raise ProviderRequestError("Provider request could not be completed", []) from timeout
+            return Generation(text="最终答案" if "记录员" in system else "席位发言")
+
+    monkeypatch.setattr("app.orchestrator.build_backend", lambda profile: EffortBackend(profile.reasoning_effort))
+    store = Store(tmp_path / "council.sqlite3")
+    profile = ProviderProfile(
+        id="ccswitch",
+        display_name="CC Switch",
+        provider_type=ProviderType.CCSWITCH,
+        capabilities=ProviderCapabilities(supports_reasoning_effort=True),
+    )
+    orchestrator = Orchestrator(store, {"ccswitch": profile})
+    run = await orchestrator.start(
+        RunCreate(
+            question="验证真实 HTTP 超时降档",
+            mode="rigorous",
+            provider_id="ccswitch",
+            limits=RunLimits(max_model_calls=10),
+        )
+    )
+    await orchestrator.tasks[run.id]
+    current = await store.get_run(run.id)
+
+    assert current is not None and current.status == "awaiting_final_input"
+    assert current.degraded is True
+    assert current.reasoning_effort == "low"
+    assert calls == ["ultra", "low", "low", "low", "low"]
+    route_turns = [turn for turn in current.discussion_turns if turn.speaker_type == "system"]
+    assert [turn.content for turn in route_turns] == [
+        "Ultra 原生推理档上游超时，已自动降为 Low 档重试当前席位。",
+    ]
 
 
 async def test_ccswitch_wrapped_upstream_400_downgrades_reasoning(tmp_path, monkeypatch):

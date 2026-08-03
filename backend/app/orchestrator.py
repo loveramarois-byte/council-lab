@@ -6,6 +6,7 @@ import time
 import uuid
 from typing import Any, TypedDict
 
+import httpx
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 
@@ -818,8 +819,19 @@ class Orchestrator:
                 await asyncio.gather(*close_calls, return_exceptions=True)
 
     @staticmethod
-    def _is_retryable_generation_error(exc: Exception) -> bool:
-        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+    def _is_timeout_generation_error(exc: BaseException) -> bool:
+        seen: set[int] = set()
+        current: BaseException | None = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
+                return True
+            current = current.__cause__ or current.__context__
+        return False
+
+    @classmethod
+    def _is_retryable_generation_error(cls, exc: Exception) -> bool:
+        if cls._is_timeout_generation_error(exc):
             return True
         response = getattr(exc, "response", None)
         status_code = getattr(response, "status_code", None)
@@ -857,12 +869,18 @@ class Orchestrator:
             if provider_type == "ccswitch_local" and native_effort
             else [assignment.reasoning_effort]
         )
-        deadline = time.perf_counter() + min(assignment.timeout_seconds, run.limits.timeout_seconds)
+        seat_timeout = min(assignment.timeout_seconds, run.limits.timeout_seconds)
+        deadline = time.perf_counter() + seat_timeout
 
-        for index, effort in enumerate(plan):
+        index = 0
+        while index < len(plan):
+            effort = plan[index]
             remaining = deadline - time.perf_counter()
             if remaining <= 0:
                 raise asyncio.TimeoutError
+            is_last_attempt = index >= len(plan) - 1
+            attempt_timeout = remaining if is_last_attempt else remaining * 0.75
+            provider_timeout = seat_timeout if len(plan) == 1 else attempt_timeout
             if self.high_risk_service:
                 await self.high_risk_service.assert_model_call_allowed(run.id)
             self._check_call_limits(run)
@@ -873,7 +891,7 @@ class Orchestrator:
                     # this seat. Keep the provider client from silently using
                     # an older profile default (for example 30s) when the seat
                     # explicitly allows a longer upstream wait.
-                    "timeout_seconds": min(assignment.timeout_seconds, run.limits.timeout_seconds),
+                    "timeout_seconds": provider_timeout,
                 }
             )
             backend_key = f"{assignment.role}:{assignment.provider_id}:{assignment.model}:{effort}"
@@ -889,7 +907,7 @@ class Orchestrator:
                         assignment.model,
                         temperature=assignment.temperature,
                     ),
-                    timeout=remaining,
+                    timeout=attempt_timeout,
                 )
                 run.usage.input_tokens += generation.input_tokens
                 run.usage.output_tokens += generation.output_tokens
@@ -898,9 +916,11 @@ class Orchestrator:
             except Exception as exc:
                 if isinstance(exc, ProviderRequestError):
                     run.provider_attempts.extend(item.model_copy(update={"role": assignment.role}) for item in exc.attempts)
-                if index >= len(plan) - 1 or not self._is_retryable_generation_error(exc):
+                if is_last_attempt or not self._is_retryable_generation_error(exc):
                     raise
-                next_effort = plan[index + 1]
+                timed_out = self._is_timeout_generation_error(exc)
+                next_index = len(plan) - 1 if timed_out else index + 1
+                next_effort = plan[next_index]
                 run.degraded = True
                 run.reasoning_effort = next_effort
                 for pending in run.seat_assignments[run.current_speaker_index:]:
@@ -912,7 +932,7 @@ class Orchestrator:
                     run.finalizer_assignment.provider_snapshot.reasoning_effort = next_effort
                 current_label = EFFORT_LABELS.get(effort, effort.title())
                 next_label = EFFORT_LABELS.get(next_effort, next_effort.title())
-                reason = "上游超时" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) else "上游暂不可用"
+                reason = "上游超时" if timed_out else "上游暂不可用"
                 run.discussion_turns.append(
                     DiscussionTurn(
                         id=str(uuid.uuid4()),
@@ -935,6 +955,7 @@ class Orchestrator:
                     min(88, 15 + len(run.discussion_turns) * 7),
                     {"from_effort": effort, "to_effort": next_effort, "speaker_index": run.current_speaker_index},
                 )
+                index = next_index
 
         raise RuntimeError("Provider 重试流程未能生成结果")
 

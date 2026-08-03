@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from statistics import median
@@ -25,6 +26,8 @@ _SHANGHAI = ZoneInfo(TIMEZONE_NAME)
 _MAX_CONSENSUS_SKEW_SECONDS = 5
 _MAX_PROOF_AGE_SECONDS = 10 * 60
 _TIME_PROOF_VERSION = "v1"
+_MAX_TRACKED_PROOFS = 1024
+_issued_proofs: dict[str, float] = {}
 
 
 def _seconds_iso(value: datetime) -> str:
@@ -94,6 +97,29 @@ def _proof_digest(payload: Mapping[str, object], secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
 
 
+def _snapshot_proof_digest(snapshot_sha256: str, time_proof: str | None, secret: str) -> str:
+    payload = f"{snapshot_sha256}\n{time_proof or ''}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+
+def issue_snapshot_proof(snapshot_sha256: str, time_proof: str | None, secret: str) -> str:
+    """Attest a locally recomputed snapshot without exposing the process key."""
+    return f"{_TIME_PROOF_VERSION}.{_snapshot_proof_digest(snapshot_sha256, time_proof, secret)}"
+
+
+def verify_snapshot_proof(
+    snapshot_sha256: str,
+    time_proof: str | None,
+    proof: str | None,
+    secret: str,
+) -> None:
+    if not isinstance(proof, str) or not proof.startswith(f"{_TIME_PROOF_VERSION}."):
+        raise ValueError("本地排盘证明缺失或格式无效，请重新排盘")
+    expected = issue_snapshot_proof(snapshot_sha256, time_proof, secret)
+    if not hmac.compare_digest(proof, expected):
+        raise ValueError("本地排盘证明无效，请重新排盘")
+
+
 def issue_time_proof(payload: Mapping[str, object], secret: str) -> str:
     """Bind the browser-visible consensus timestamp to this backend instance."""
     proof_payload = _proof_payload_from_trusted_time(payload)
@@ -103,7 +129,13 @@ def issue_time_proof(payload: Mapping[str, object], secret: str) -> str:
         and proof_payload["synced"] is True
     ):
         raise ValueError("只有 HTTPS 多源校时结果可以签发证明")
-    return f"{_TIME_PROOF_VERSION}.{_proof_digest(proof_payload, secret)}"
+    proof = f"{_TIME_PROOF_VERSION}.{_proof_digest(proof_payload, secret)}"
+    issued_at = time.monotonic()
+    _issued_proofs[proof] = issued_at
+    if len(_issued_proofs) > _MAX_TRACKED_PROOFS:
+        oldest = min(_issued_proofs, key=_issued_proofs.get)
+        _issued_proofs.pop(oldest, None)
+    return proof
 
 
 def verify_time_proof(
@@ -125,10 +157,12 @@ def verify_time_proof(
         ).replace(tzinfo=_SHANGHAI)
     except ValueError as exc:
         raise ValueError("联网校时时刻格式无效，请重新校时") from exc
-    utc_now = now or datetime.now(timezone.utc)
-    if utc_now.tzinfo is None:
-        utc_now = utc_now.replace(tzinfo=timezone.utc)
-    age = abs((utc_now.astimezone(timezone.utc) - reference.astimezone(timezone.utc)).total_seconds())
+    if now is None:
+        issued_at = _issued_proofs.get(proof)
+        age = time.monotonic() - issued_at if issued_at is not None else _MAX_PROOF_AGE_SECONDS + 1
+    else:
+        utc_now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        age = abs((utc_now.astimezone(timezone.utc) - reference.astimezone(timezone.utc)).total_seconds())
     if age > _MAX_PROOF_AGE_SECONDS:
         raise ValueError("联网校时证明已过期，请重新校时")
 

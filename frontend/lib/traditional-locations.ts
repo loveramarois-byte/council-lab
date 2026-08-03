@@ -44,6 +44,15 @@ const PROVINCES_BY_CITY = (() => {
   return result;
 })();
 
+// The upstream catalog keeps these Yunnan aliases before its provincial
+// capital. Pin them explicitly instead of inheriting the previous Sichuan
+// section from source-file order.
+const PROVINCE_OVERRIDES = new Map<string, string[]>([
+  ["普洱", ["云南", "云南省"]],
+  ["西双版纳", ["云南", "云南省"]],
+  ["景洪", ["云南", "云南省"]],
+]);
+
 function normalizedPlace(value: string) {
   return value.normalize("NFKC").replace(/[\s,，·]+/g, "").replace(/(?:中国|中华人民共和国)/g, "");
 }
@@ -55,7 +64,7 @@ export function resolveTraditionalLocation(value: string): TraditionalLocation |
     const city = name.replace(/市$/, "");
     const cityForms = new Set([name, city, `${city}市`]);
     if (cityForms.has(normalized)) return true;
-    return (PROVINCES_BY_CITY.get(name) || []).some((province) =>
+    return (PROVINCE_OVERRIDES.get(name) || PROVINCES_BY_CITY.get(name) || []).some((province) =>
       [...cityForms].some((cityForm) => normalized === `${province}${cityForm}`),
     );
   });

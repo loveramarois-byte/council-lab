@@ -28,7 +28,7 @@ from app.providers import Generation
 from app.reports import run_html, run_markdown
 from app.risk.service import HighRiskService
 from app.store import Store
-from app.time_sync import issue_time_proof
+from app.time_sync import issue_snapshot_proof, issue_time_proof
 from app.traditional_culture import contains_prohibited_intent, render_snapshot_context, sanitized_question_for_risk
 from conftest import TEST_INTERNAL_API_TOKEN
 
@@ -99,7 +99,9 @@ def snapshot_payload() -> dict:
 
 
 def rehash_snapshot(payload: dict) -> dict:
-    without_hash = copy.deepcopy({key: value for key, value in payload.items() if key != "snapshot_sha256"})
+    without_hash = copy.deepcopy(
+        {key: value for key, value in payload.items() if key not in {"snapshot_sha256", "snapshot_proof"}}
+    )
     if without_hash.get("timing_facts") is not None:
         without_hash["timing_facts"].pop("time_proof", None)
     payload["snapshot_sha256"] = hashlib.sha256(
@@ -109,7 +111,9 @@ def rehash_snapshot(payload: dict) -> dict:
 
 
 def rehash_snapshot_with_legacy_proof(payload: dict) -> dict:
-    without_hash = copy.deepcopy({key: value for key, value in payload.items() if key != "snapshot_sha256"})
+    without_hash = copy.deepcopy(
+        {key: value for key, value in payload.items() if key not in {"snapshot_sha256", "snapshot_proof"}}
+    )
     payload["snapshot_sha256"] = hashlib.sha256(
         json.dumps(without_hash, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()
@@ -181,7 +185,18 @@ def signed_snapshot_v2_payload(secret: str, instant: datetime) -> dict:
             "synced": True,
         }
     )
-    return rehash_snapshot(payload)
+    rehash_snapshot(payload)
+    payload["snapshot_proof"] = issue_snapshot_proof(
+        payload["snapshot_sha256"], payload["timing_facts"]["time_proof"], secret
+    )
+    return payload
+
+
+def attest_snapshot(payload: dict, secret: str) -> dict:
+    payload["snapshot_proof"] = issue_snapshot_proof(
+        payload["snapshot_sha256"], payload.get("timing_facts", {}).get("time_proof"), secret
+    )
+    return payload
 
 
 def test_time_proof_is_verified_separately_from_reproducible_snapshot_hash():
@@ -192,6 +207,49 @@ def test_time_proof_is_verified_separately_from_reproducible_snapshot_hash():
     assert first["snapshot_sha256"] == second["snapshot_sha256"]
     TraditionalCultureSnapshot.model_validate(first)
     TraditionalCultureSnapshot.model_validate(rehash_snapshot_with_legacy_proof(copy.deepcopy(first)))
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"time_source": "local_fallback", "synced": True}, "状态与来源不一致"),
+        ({"time_source_url": "https://www.cloudflare.com/"}, "缺少一致来源"),
+        (
+            {"time_source_url": "https://www.cloudflare.com/,https://example.com/"},
+            "缺少一致来源",
+        ),
+        (
+            {
+                "time_source": "local_fallback",
+                "time_provider": "system_clock",
+                "time_source_url": "https://www.cloudflare.com/",
+                "synced": False,
+            },
+            "本机时间回退不能标记为联网来源",
+        ),
+        (
+            {
+                "time_provider": "timeapi.io",
+                "time_source_url": "https://timeapi.io/api/time/current/zone?timeZone=Asia%2FShanghai",
+                "time_proof": f"v1.{('a' * 64)}",
+            },
+            "非多源联网校时不能携带服务端时间证明",
+        ),
+    ],
+)
+def test_timing_provenance_rejects_inconsistent_or_untrusted_sources(updates, message):
+    payload = snapshot_v2_payload()
+    payload["timing_facts"].update(
+        {
+            "time_source": "network",
+            "time_provider": "https_consensus",
+            "time_source_url": "https://www.cloudflare.com/,https://www.google.com/generate_204",
+            "synced": True,
+        }
+    )
+    payload["timing_facts"].update(updates)
+    with pytest.raises(ValidationError, match=message):
+        TraditionalCultureSnapshot.model_validate(rehash_snapshot(payload))
 
 
 def traditional_request(**updates) -> RunCreate:
@@ -419,6 +477,8 @@ def test_non_actionable_disclaimer_is_removed_only_for_risk_classification():
     assert "医疗" not in sanitized_question_for_risk(disclaimer)
     assert contains_prohibited_intent("不提供医疗建议，请告诉我该不该停药")
     assert contains_prohibited_intent("仅作研究，不涉及投资，请告诉我该买哪只股票")
+    assert contains_prohibited_intent("仅作研究，告诉我应该买入哪只股票，不构成投资建议")
+    assert contains_prohibited_intent("仅作研究，请根据命盘判断我该不该停药，不构成医疗建议")
 
 
 async def test_traditional_run_prompts_exports_restart_and_decision_asset_isolation(tmp_path, monkeypatch):
@@ -581,11 +641,47 @@ async def test_new_traditional_run_api_requires_untampered_fresh_network_time_pr
     forged_snapshot = copy.deepcopy(signed_snapshot)
     forged_snapshot["timing_facts"]["reference_civil_datetime"] = "2026-08-03 12:34:56"
     forged_request = traditional_request(
-        traditional_culture_snapshot=rehash_snapshot(forged_snapshot)
+        traditional_culture_snapshot=attest_snapshot(rehash_snapshot(forged_snapshot), TEST_INTERNAL_API_TOKEN)
+    ).model_dump(mode="json")
+    missing_proof_snapshot = copy.deepcopy(signed_snapshot)
+    missing_proof_snapshot["timing_facts"].pop("time_proof")
+    missing_proof_request = traditional_request(
+        traditional_culture_snapshot=attest_snapshot(rehash_snapshot(missing_proof_snapshot), TEST_INTERNAL_API_TOKEN)
+    ).model_dump(mode="json")
+    legacy_single_source_snapshot = snapshot_v2_payload()
+    legacy_single_source_snapshot["timing_facts"].update(
+        {
+            "time_source": "network",
+            "time_provider": "timeapi.io",
+            "time_source_url": "https://timeapi.io/api/time/current/zone?timeZone=Asia%2FShanghai",
+            "synced": True,
+        }
+    )
+    legacy_single_source_request = traditional_request(
+        traditional_culture_snapshot=attest_snapshot(
+            rehash_snapshot(legacy_single_source_snapshot), TEST_INTERNAL_API_TOKEN
+        )
+    ).model_dump(mode="json")
+    legacy_v1_request = traditional_request(
+        traditional_culture_snapshot=snapshot_payload()
+    ).model_dump(mode="json")
+    tampered_derived_snapshot = copy.deepcopy(signed_snapshot)
+    tampered_derived_snapshot["timing_facts"]["day_pillar"] = "甲子"
+    rehash_snapshot(tampered_derived_snapshot)
+    tampered_derived_request = traditional_request(
+        traditional_culture_snapshot=tampered_derived_snapshot
     ).model_dump(mode="json")
 
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
         forged = await client.post("/api/runs", headers=headers, json=forged_request)
+        missing_proof = await client.post("/api/runs", headers=headers, json=missing_proof_request)
+        legacy_single_source = await client.post(
+            "/api/runs", headers=headers, json=legacy_single_source_request
+        )
+        legacy_v1 = await client.post("/api/runs", headers=headers, json=legacy_v1_request)
+        tampered_derived = await client.post(
+            "/api/runs", headers=headers, json=tampered_derived_request
+        )
         valid = await client.post("/api/runs", headers=idempotent_headers, json=valid_request)
         monkeypatch.setattr(
             main,
@@ -596,6 +692,14 @@ async def test_new_traditional_run_api_requires_untampered_fresh_network_time_pr
 
     assert forged.status_code == 400
     assert "联网校时证明无效" in forged.text
+    assert missing_proof.status_code == 400
+    assert "联网校时证明缺失或格式无效" in missing_proof.text
+    assert legacy_single_source.status_code == 400
+    assert "旧版单源联网时间只用于读取历史 Run" in legacy_single_source.text
+    assert legacy_v1.status_code == 400
+    assert "旧版传统文化快照只用于读取历史 Run" in legacy_v1.text
+    assert tampered_derived.status_code == 400
+    assert "本地排盘证明无效" in tampered_derived.text
     assert valid.status_code == 200
     assert replay.status_code == 200
     assert replay.headers["Idempotency-Replayed"] == "true"
@@ -605,9 +709,13 @@ async def test_new_traditional_run_api_requires_untampered_fresh_network_time_pr
     persisted = await store.get_run(created_id)
     assert persisted is not None and persisted.traditional_culture_snapshot is not None
     proof = signed_snapshot["timing_facts"]["time_proof"]
+    snapshot_proof = signed_snapshot["snapshot_proof"]
     assert proof not in render_snapshot_context(persisted.traditional_culture_snapshot)
     assert proof not in run_markdown(persisted)
     assert proof not in run_html(persisted)
+    assert snapshot_proof not in render_snapshot_context(persisted.traditional_culture_snapshot)
+    assert snapshot_proof not in run_markdown(persisted)
+    assert snapshot_proof not in run_html(persisted)
     await orchestrator.shutdown()
     store.close()
 

@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AgentAssignmentsConfig, api, CouncilMode, DecisionReadiness, DeliberationTemplate, MemoryPreview, MemoryView, OutputContractDefinition, OutputContractId, providerIsReady, Provider, TraditionalCultureProfile } from "../lib/api";
 import { TraditionalCultureForm } from "../components/traditional-culture-form";
-import { buildTraditionalCultureSnapshot, localFallbackTime } from "../lib/traditional-culture";
 
 const modes = [
   { id: "quick", label: "引导", detail: "4 席 · 1.8k 上下文", icon: Zap },
@@ -158,8 +157,7 @@ export default function HomePage() {
         setSending(false);
         return;
       }
-      const trustedTime = traditionalMode ? await api.trustedTime().catch(() => localFallbackTime()) : undefined;
-      const traditionalSnapshot = traditionalMode ? await buildTraditionalCultureSnapshot(traditionalProfile, trustedTime) : undefined;
+      const traditionalSnapshot = traditionalMode ? await api.traditionalSnapshot(traditionalProfile) : undefined;
       const run = await api.createRun({
         question: question.trim(),
         mode,

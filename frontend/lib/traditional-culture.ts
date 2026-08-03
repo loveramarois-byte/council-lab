@@ -164,8 +164,11 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
   const referenceInstant = new Date(trustedTime.utc_datetime);
   if (Number.isNaN(referenceInstant.getTime())) throw new Error("联网校时结果无效，请重试");
   const referenceCivil = wallClockFromDate(referenceInstant);
-  const referenceOffset = trueSolarTimeApplied && location ? trueSolarOffsetMinutes(referenceCivil, location.longitude) : 0;
-  const referenceCalculation = shiftWallClock(referenceCivil, referenceOffset);
+  // The user provides a birthplace, not their current location. Current flow
+  // fields therefore use the verified Asia/Shanghai civil clock and must not
+  // silently reuse the birthplace longitude.
+  const referenceOffset = 0;
+  const referenceCalculation = referenceCivil;
   const referenceSolar = solarFromWallClock(referenceCalculation);
   const referenceLunar = referenceSolar.getLunar();
   const referenceEightChar = referenceLunar.getEightChar();
@@ -185,7 +188,7 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
   }
   const snapshotWithoutHash = {
     schema_version: 2 as const,
-    calculation_source: "local_browser" as const,
+    calculation_source: "local_service" as const,
     calculated_at: trustedTime.utc_datetime,
     profile: normalizedProfile,
     engines: ENGINE_METADATA,
@@ -252,6 +255,7 @@ export async function buildTraditionalCultureSnapshot(profile: TraditionalCultur
         ? `已按${location?.name}城市级经度应用真太阳时校正；临界时刻仍可能因流派口径产生不同结果。`
         : "未应用真太阳时校正；临界时刻可能因出生地或流派口径产生不同结果。",
       trustedTime.synced ? "咨询时刻已通过至少两个一致的 HTTPS 时间源联网校时。" : "联网校时失败，本次明确使用本机时钟回退。",
+      "未采集咨询地点；流年、流月、流日和流时按 Asia/Shanghai 民用时计算，不复用出生地经度。",
       "ziwei-doushu 的开源实现依赖 iztro 与 lunar-javascript，共享底层结果不能视为独立交叉验证。",
     ],
   };

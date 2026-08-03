@@ -351,7 +351,7 @@ class TraditionalCultureSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1, 2] = 1
-    calculation_source: Literal["local_browser"] = "local_browser"
+    calculation_source: Literal["local_browser", "local_service"] = "local_browser"
     calculated_at: datetime
     profile: TraditionalCultureProfile
     engines: list[TraditionalCultureEngine] = Field(min_length=2, max_length=2)
@@ -360,6 +360,7 @@ class TraditionalCultureSnapshot(BaseModel):
     ziwei_chart: TraditionalCultureZiweiChart
     notices: list[Annotated[str, Field(min_length=1, max_length=300)]] = Field(default_factory=list, min_length=2, max_length=12)
     snapshot_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    snapshot_proof: str | None = Field(default=None, pattern=r"^v1\.[a-f0-9]{64}$")
 
     @model_validator(mode="after")
     def validate_provenance_and_hash(self) -> "TraditionalCultureSnapshot":
@@ -380,7 +381,7 @@ class TraditionalCultureSnapshot(BaseModel):
                     or self.calendar_facts.true_solar_time_offset_minutes is None
                 ):
                     raise ValueError("真太阳时校正缺少可追溯的出生地或时间字段")
-        payload = self.model_dump(mode="json", exclude={"snapshot_sha256"})
+        payload = self.model_dump(mode="json", exclude={"snapshot_sha256", "snapshot_proof"})
         time_proof = None
         if self.timing_facts is not None:
             # The proof authenticates fresh network time separately. It is

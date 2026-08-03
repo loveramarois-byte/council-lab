@@ -123,10 +123,11 @@ _PROHIBITED_ACTION_PATTERNS = tuple(
 # rejecting harmless wording such as "仅作研究，不提供医疗建议" while still
 # rejecting "不提供医疗建议，请告诉我该不该停药".
 _EXPLICIT_DISCLAIMER = re.compile(
-    r"(?:不(?:作|做|提供|用于|涉及|构成)|仅(?:作|供)(?:于)?研究|仅供研究|禁止|避免)"
-    r"[^。！？\n]{0,80}(?:医疗|法律|投资|合规|生产)"
-    r"[^。！？\n]{0,30}(?:建议|决策|用途|操作|意见)"
-    r"(?=[，,。！？\n]|$)",
+    r"(?:仅(?:作|供)(?:于)?(?:传统文化)?研究(?:用途)?|"
+    r"(?:不(?:作|做|提供|用于|涉及|构成)|禁止|避免)(?:任何)?"
+    r"(?:医疗|法律|投资|合规|生产)"
+    r"(?:[、,，/和或及与]+(?:医疗|法律|投资|合规|生产))*"
+    r"(?:操作)?(?:建议|决策|用途|意见)?)",
     re.IGNORECASE,
 )
 
@@ -229,8 +230,8 @@ def render_snapshot_context(snapshot: "TraditionalCultureSnapshot") -> str:
                 f"时间来源：{time_provider}（{'联网已同步' if timing.synced else '本机时钟回退'}）"
             ),
             (
-                f"- 咨询真太阳时：{_snapshot_value(timing.reference_true_solar_datetime)}"
-                f"（校正 {timing.reference_true_solar_offset_minutes:+d} 分钟）"
+                f"- 咨询排盘时刻：{_snapshot_value(timing.reference_true_solar_datetime)}；"
+                "未采集咨询地点，按 Asia/Shanghai 民用时计算且不复用出生地经度"
             ),
             (
                 f"- 流年：{_snapshot_value(timing.year_pillar)}；流月：{_snapshot_value(timing.month_pillar)}；"

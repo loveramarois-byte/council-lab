@@ -189,7 +189,7 @@ def _traditional_snapshot_markdown(run: RunRecord) -> list[str]:
         )
         lines[14:14] = [
             f"- 咨询时刻：{timing.reference_civil_datetime}；时间来源：{time_provider}（{'联网已同步' if timing.synced else '本机时钟回退'}）",
-            f"- 咨询真太阳时：{timing.reference_true_solar_datetime}；校正分钟：{timing.reference_true_solar_offset_minutes:+d}",
+            f"- 咨询排盘时刻：{timing.reference_true_solar_datetime}；按 Asia/Shanghai 民用时计算（未采集咨询地点，不复用出生地经度）",
             f"- 流年：{timing.year_pillar}；流月：{timing.month_pillar}；流日：{timing.day_pillar}；流时：{timing.hour_pillar}",
             f"- 节气交接：{timing.previous_solar_term.name} {timing.previous_solar_term.datetime} -> {timing.next_solar_term.name} {timing.next_solar_term.datetime}",
         ]
@@ -345,7 +345,7 @@ def _traditional_snapshot_html(run: RunRecord) -> str:
         timing_html = (
             f"<p><strong>咨询时刻：</strong>{escape(timing.reference_civil_datetime)} · "
             f"{escape(time_provider)}（{'联网已同步' if timing.synced else '本机时钟回退'}）<br>"
-            f"<strong>咨询真太阳时：</strong>{escape(timing.reference_true_solar_datetime)} · 校正 {timing.reference_true_solar_offset_minutes:+d} 分钟</p>"
+            f"<strong>咨询排盘时刻：</strong>{escape(timing.reference_true_solar_datetime)} · Asia/Shanghai 民用时（未采集咨询地点）</p>"
             f"<p><strong>流年：</strong>{escape(timing.year_pillar)} · <strong>流月：</strong>{escape(timing.month_pillar)} · "
             f"<strong>流日：</strong>{escape(timing.day_pillar)} · <strong>流时：</strong>{escape(timing.hour_pillar)}<br>"
             f"<strong>节气交接：</strong>{escape(timing.previous_solar_term.name)} {escape(timing.previous_solar_term.datetime)} → "
