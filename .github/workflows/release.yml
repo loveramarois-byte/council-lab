@@ -212,14 +212,21 @@ jobs:
           $version = (Get-Content -Raw VERSION).Trim()
           $package = Join-Path $PWD "artifacts\Council-v$version-Windows"
           $env:COUNCIL_DATA_DIR = Join-Path $env:RUNNER_TEMP "council-data"
-          $backend = Start-Process -FilePath (Join-Path $package "backend\council-backend\council-backend.exe") -PassThru -WindowStyle Hidden
+          $backendStdout = Join-Path $env:RUNNER_TEMP "packaged-backend.stdout.log"
+          $backendStderr = Join-Path $env:RUNNER_TEMP "packaged-backend.stderr.log"
+          $frontendStdout = Join-Path $env:RUNNER_TEMP "packaged-frontend.stdout.log"
+          $frontendStderr = Join-Path $env:RUNNER_TEMP "packaged-frontend.stderr.log"
+          $backend = Start-Process -FilePath (Join-Path $package "backend\council-backend\council-backend.exe") -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $backendStdout -RedirectStandardError $backendStderr
           $oldHost = $env:HOSTNAME
           $oldPort = $env:PORT
           $env:HOSTNAME = "127.0.0.1"
           $env:PORT = "3000"
-          $frontend = Start-Process -FilePath (Join-Path $package "runtime\node.exe") -ArgumentList "server.js" -WorkingDirectory (Join-Path $package "web") -PassThru -WindowStyle Hidden
+          $frontend = Start-Process -FilePath (Join-Path $package "runtime\node.exe") -ArgumentList "server.js" -WorkingDirectory (Join-Path $package "web") -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $frontendStdout -RedirectStandardError $frontendStderr
           try {
             $healthy = $false
+            $lastError = ""
             for ($attempt = 0; $attempt -lt 80; $attempt++) {
               try {
                 $health = Invoke-RestMethod http://127.0.0.1:8001/api/health -TimeoutSec 2
@@ -228,10 +235,19 @@ jobs:
                   $healthy = $true
                   break
                 }
-              } catch {}
+              } catch { $lastError = $_.Exception.Message }
               Start-Sleep -Milliseconds 250
             }
-            if (-not $healthy) { throw "Packaged services did not become healthy" }
+            if (-not $healthy) {
+              Write-Host "Last health error: $lastError"
+              Write-Host "Backend exited: $($backend.HasExited)$(if ($backend.HasExited) { "; exit code: $($backend.ExitCode)" })"
+              Write-Host "Frontend exited: $($frontend.HasExited)$(if ($frontend.HasExited) { "; exit code: $($frontend.ExitCode)" })"
+              foreach ($log in @($backendStdout, $backendStderr, $frontendStdout, $frontendStderr)) {
+                Write-Host "--- $log ---"
+                if (Test-Path $log) { Get-Content -Raw $log }
+              }
+              throw "Packaged services did not become healthy"
+            }
             & node scripts/check_frontend_assets.mjs http://127.0.0.1:3000/pair
             if ($LASTEXITCODE -ne 0) { throw "Packaged frontend assets failed validation" }
             if (-not (Test-Path (Join-Path $package "web\public\sw.js"))) { throw "Packaged Service Worker is missing" }

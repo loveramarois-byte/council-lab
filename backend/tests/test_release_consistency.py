@@ -106,6 +106,11 @@ def test_release_smoke_preserves_internal_api_authentication_on_both_platforms()
     assert 'backend-access.token' in windows_job
     assert '$unauthorizedUpdateStatus -ne 403' in windows_job
     assert 'Invoke-RestMethod http://127.0.0.1:8001/api/update/status -Headers @{ "X-Council-Internal-Token" = $internalToken }' in windows_job
+    assert 'packaged-backend.stderr.log' in windows_job
+    assert 'packaged-frontend.stderr.log' in windows_job
+    assert 'Last health error:' in windows_job
+    assert 'Backend exited:' in windows_job
+    assert 'Frontend exited:' in windows_job
 
 
 def test_release_notes_include_version_changes_and_installation(tmp_path):
