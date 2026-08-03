@@ -116,7 +116,14 @@ async def test_compatible_backend_reads_key_from_environment(monkeypatch):
         await backend.client.aclose()
 
 
-async def test_compatible_backend_records_safe_http_failure_details():
+@pytest.mark.parametrize(
+    ("status_code", "expected_message"),
+    [
+        (403, "上游拒绝了请求（HTTP 403）。请检查路由授权、账号状态和模型访问权限。"),
+        (503, "上游服务暂不可用（HTTP 503）。已按配置重试；请稍后重试当前席位。"),
+    ],
+)
+async def test_compatible_backend_records_safe_http_failure_details(status_code, expected_message):
     profile = ProviderProfile(
         id="custom",
         display_name="Custom",
@@ -130,7 +137,9 @@ async def test_compatible_backend_records_safe_http_failure_details():
     await backend.client.aclose()
     backend.client = httpx.AsyncClient(
         base_url=backend.base_url,
-        transport=httpx.MockTransport(lambda request: httpx.Response(503, request=request, json={"secret": "must-not-leak"})),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(status_code, request=request, json={"secret": "must-not-leak"})
+        ),
     )
     try:
         with pytest.raises(ProviderRequestError) as captured:
@@ -138,11 +147,11 @@ async def test_compatible_backend_records_safe_http_failure_details():
     finally:
         await backend.client.aclose()
 
-    assert str(captured.value) == "上游服务暂不可用（HTTP 503）。已按配置重试；请稍后重试当前席位。"
+    assert str(captured.value) == expected_message
     assert "must-not-leak" not in str(captured.value)
     assert len(captured.value.attempts) == 1
-    assert captured.value.attempts[0].status_code == 503
-    assert captured.value.attempts[0].error_kind == "http_503"
+    assert captured.value.attempts[0].status_code == status_code
+    assert captured.value.attempts[0].error_kind == f"http_{status_code}"
 
 
 def test_ccswitch_default_url():
