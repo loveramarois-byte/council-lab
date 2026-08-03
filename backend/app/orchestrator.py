@@ -26,6 +26,7 @@ from .models import (
     FinalDecision,
     QuestionAnalysis,
     ResolvedAgentAssignment,
+    ProviderAttempt,
     RunCreate,
     RunEvent,
     RunLimits,
@@ -904,6 +905,7 @@ class Orchestrator:
                 backends[backend_key] = build_backend(attempt_profile)
             run.usage.model_calls += 1
             await self.store.save_run(run)
+            attempt_started = time.perf_counter()
             try:
                 generation = await asyncio.wait_for(
                     backends[backend_key].generate(
@@ -921,6 +923,26 @@ class Orchestrator:
             except Exception as exc:
                 if isinstance(exc, ProviderRequestError):
                     run.provider_attempts.extend(item.model_copy(update={"role": assignment.role}) for item in exc.attempts)
+                elif self._is_timeout_generation_error(exc):
+                    protocol = getattr(attempt_profile.protocol_mode, "value", attempt_profile.protocol_mode)
+                    endpoint = (
+                        "/responses"
+                        if protocol == "responses"
+                        or protocol == "auto" and attempt_profile.capabilities.supports_responses
+                        else "/chat/completions"
+                    )
+                    run.provider_attempts.append(
+                        ProviderAttempt(
+                            role=assignment.role,
+                            provider_id=assignment.provider_id,
+                            provider_name=assignment.provider_name,
+                            model=assignment.model,
+                            endpoint=endpoint,
+                            attempt=1,
+                            duration_ms=int((time.perf_counter() - attempt_started) * 1000),
+                            error_kind="timeout",
+                        )
+                    )
                 if is_last_attempt or not self._is_retryable_generation_error(exc):
                     raise
                 timed_out = self._is_timeout_generation_error(exc)

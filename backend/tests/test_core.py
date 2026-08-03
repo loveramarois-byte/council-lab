@@ -116,6 +116,35 @@ async def test_compatible_backend_reads_key_from_environment(monkeypatch):
         await backend.client.aclose()
 
 
+async def test_compatible_backend_records_safe_http_failure_details():
+    profile = ProviderProfile(
+        id="custom",
+        display_name="Custom",
+        provider_type=ProviderType.COMPATIBLE,
+        base_url="https://example.com/v1",
+        protocol_mode=ProtocolMode.CHAT_COMPLETIONS,
+        default_model="test-model",
+        max_retries=0,
+    )
+    backend = OpenAICompatibleProvider(profile)
+    await backend.client.aclose()
+    backend.client = httpx.AsyncClient(
+        base_url=backend.base_url,
+        transport=httpx.MockTransport(lambda request: httpx.Response(503, request=request, json={"secret": "must-not-leak"})),
+    )
+    try:
+        with pytest.raises(ProviderRequestError) as captured:
+            await backend.generate("prompt", "system", "test-model")
+    finally:
+        await backend.client.aclose()
+
+    assert str(captured.value) == "上游服务暂不可用（HTTP 503）。已按配置重试；请稍后重试当前席位。"
+    assert "must-not-leak" not in str(captured.value)
+    assert len(captured.value.attempts) == 1
+    assert captured.value.attempts[0].status_code == 503
+    assert captured.value.attempts[0].error_kind == "http_503"
+
+
 def test_ccswitch_default_url():
     assert normalize_base_url("", ProviderType.CCSWITCH) == DEFAULT_CCSWITCH_URL
     assert normalize_base_url("http://127.0.0.1:17777", ProviderType.CCSWITCH).endswith("/v1")
@@ -904,6 +933,9 @@ async def test_ccswitch_fallbacks_share_one_seat_timeout(tmp_path, monkeypatch):
     assert calls == ["ultra", "low"]
     assert current is not None and current.status == "failed"
     assert "超过 1 秒" in (current.error or "")
+    assert [attempt.error_kind for attempt in current.provider_attempts] == ["timeout", "timeout"]
+    assert all(attempt.role == "analyst" for attempt in current.provider_attempts)
+    assert all(attempt.endpoint == "/responses" for attempt in current.provider_attempts)
 
 
 async def test_ccswitch_wrapped_httpx_timeout_jumps_directly_to_low(tmp_path, monkeypatch):
