@@ -87,6 +87,8 @@ def test_release_workflow_requests_packaged_javascript_and_css():
 def test_gitee_release_can_be_replayed_from_verified_github_assets():
     workflow = (ROOT / ".github/workflows/gitee-release.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow
+    assert "council-gitee-local" in workflow
+    assert "inputs.runner == 'council-gitee-local'" in workflow
     assert 'gh release download "${tag}"' in workflow
     assert "sha256sum -c SHA256SUMS.txt" in workflow
     assert 'git show "${tag}:VERSION"' in workflow

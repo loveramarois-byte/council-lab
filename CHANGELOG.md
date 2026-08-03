@@ -5,6 +5,7 @@
 ### Fixed
 
 - Gitee Release 大附件改用系统 `curl` 执行 multipart 上传，提供真实的端到端总耗时上限和持续传输进度；访问令牌只经标准输入配置传递，不出现在进程参数、日志或异常文本中。
+- Gitee 历史版本补发工作流增加一次性本机 runner 路由，海外 GitHub runner 到 Gitee 出现极低速或连接超时时，可在国内网络完成上传；默认仍使用 GitHub 托管 runner。
 
 ## [0.15.1] - 2026-08-03
 

@@ -7,13 +7,21 @@ on:
         description: Existing GitHub release tag to mirror
         required: true
         default: v0.15.1
+      runner:
+        description: Upload route
+        required: true
+        type: choice
+        default: github-hosted
+        options:
+          - github-hosted
+          - council-gitee-local
 
 permissions:
   contents: read
 
 jobs:
   mirror:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner == 'council-gitee-local' && 'council-gitee-local' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
         with:
