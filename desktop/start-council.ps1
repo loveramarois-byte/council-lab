@@ -8,7 +8,8 @@ $ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendPython = Join-Path $ProjectDir "backend\.venv\Scripts\python.exe"
 $NextScript = Join-Path $ProjectDir "frontend\node_modules\next\dist\bin\next"
 $FrontendDistDir = ".next-runtime"
-$BuildId = Join-Path $ProjectDir "frontend\$FrontendDistDir\BUILD_ID"
+$BuildIdPath = Join-Path $ProjectDir "frontend\$FrontendDistDir\BUILD_ID"
+$FrontendBuildId = ""
 $LocalRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME "AppData\Local" }
 $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $LocalRoot "Council\logs" }
 $PidFile = Join-Path $LogDir "council-pids.json"
@@ -21,7 +22,7 @@ $FrontendProcess = $null
 function Test-Backend {
     try {
         $Health = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 2
-        return $Health.status -eq "ok" -and $Health.service -eq "council-lab" -and $Health.internal_api_id -eq $InternalApiId
+        return $Health.status -eq "ok" -and $Health.service -eq "council-lab" -and $Health.runtime_id -eq $env:COUNCIL_RUNTIME_ID -and $Health.internal_api_id -eq $InternalApiId
     }
     catch { return $false }
 }
@@ -29,7 +30,7 @@ function Test-Backend {
 function Test-Frontend {
     try {
         $Response = Invoke-RestMethod -Uri "http://127.0.0.1:3000/mobile-access/health" -TimeoutSec 2
-        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.internal_api_id -eq $InternalApiId
+        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.runtime_id -eq $env:COUNCIL_RUNTIME_ID -and $Response.web_build_id -eq $FrontendBuildId -and $Response.internal_api_id -eq $InternalApiId
     }
     catch { return $false }
 }
@@ -64,13 +65,21 @@ function Test-Port([int]$Port) {
 }
 
 function Stop-ProjectListener([int]$Port, [string]$ProjectPath) {
+    $ReplaceableCouncil = $false
+    try {
+        $HealthUri = if ($Port -eq 8001) { "http://127.0.0.1:8001/api/health" } else { "http://127.0.0.1:3000/mobile-access/health" }
+        $ExpectedService = if ($Port -eq 8001) { "council-lab" } else { "council-mobile-access" }
+        $Health = Invoke-RestMethod -Uri $HealthUri -TimeoutSec 2
+        $ReplaceableCouncil = $Health.service -eq $ExpectedService -and $Health.internal_api_id -eq $InternalApiId
+    }
+    catch { $ReplaceableCouncil = $false }
     $ProcessIds = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
     foreach ($ProcessId in $ProcessIds) {
         if ($ProcessId -le 1) { continue }
         $Process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
         if ($null -eq $Process) { continue }
         $CommandLine = [string]$Process.CommandLine
-        if ($CommandLine.IndexOf($ProjectPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        if ($ReplaceableCouncil -or $CommandLine.IndexOf($ProjectPath, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
             Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
         }
     }
@@ -90,9 +99,11 @@ function Wait-Until([scriptblock]$Probe) {
 }
 
 try {
-    if (-not (Test-Path $BackendPython) -or -not (Test-Path $NextScript) -or -not (Test-Path $BuildId)) {
+    if (-not (Test-Path $BackendPython) -or -not (Test-Path $NextScript) -or -not (Test-Path $BuildIdPath)) {
         throw "Council is not installed yet. Double-click Install Council.cmd first."
     }
+    $FrontendBuildId = (Get-Content -Raw $BuildIdPath).Trim()
+    $env:COUNCIL_RUNTIME_ID = "source:$FrontendBuildId"
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $Started = [ordered]@{ project_dir = $ProjectDir }
     $InternalToken = if (Test-Path $InternalTokenFile) { (Get-Content -Raw $InternalTokenFile).Trim() } else { "" }
@@ -140,10 +151,12 @@ try {
         $PreviousDesktopToken = $env:COUNCIL_DESKTOP_TOKEN
         $PreviousInternalToken = [Environment]::GetEnvironmentVariable("COUNCIL_INTERNAL_API_TOKEN", "Process")
         $PreviousNextDistDir = $env:COUNCIL_NEXT_DIST_DIR
+        $PreviousWebBuildId = $env:COUNCIL_WEB_BUILD_ID
         $env:COUNCIL_REMOTE_TOKEN = $RemoteToken
         $env:COUNCIL_DESKTOP_TOKEN = $DesktopToken
         $env:COUNCIL_INTERNAL_API_TOKEN = $InternalToken
         $env:COUNCIL_NEXT_DIST_DIR = $FrontendDistDir
+        $env:COUNCIL_WEB_BUILD_ID = $FrontendBuildId
         try {
             $Node = (Get-Command "node.exe" -ErrorAction Stop).Source
             $FrontendProcess = Start-Process -FilePath $Node `
@@ -162,6 +175,8 @@ try {
             else { $env:COUNCIL_INTERNAL_API_TOKEN = $PreviousInternalToken }
             if ($null -eq $PreviousNextDistDir) { Remove-Item Env:COUNCIL_NEXT_DIST_DIR -ErrorAction SilentlyContinue }
             else { $env:COUNCIL_NEXT_DIST_DIR = $PreviousNextDistDir }
+            if ($null -eq $PreviousWebBuildId) { Remove-Item Env:COUNCIL_WEB_BUILD_ID -ErrorAction SilentlyContinue }
+            else { $env:COUNCIL_WEB_BUILD_ID = $PreviousWebBuildId }
         }
         if (-not (Wait-Until { Test-Frontend })) {
             throw "The web interface did not start. See $LogDir\frontend.stderr.log"

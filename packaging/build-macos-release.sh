@@ -70,8 +70,10 @@ popd >/dev/null
   "$PROJECT_DIR/backend/desktop_entry.py"
 
 mkdir -p "$STAGE_DIR"
-/usr/bin/osacompile -o "$STAGE_DIR/Council.app" "$PROJECT_DIR/desktop/Council.applescript"
+COUNCIL_SKIP_SIGN=1 COUNCIL_WEB_BUILD_ID_FILE="$PROJECT_DIR/frontend/$RELEASE_DIST_DIR/BUILD_ID" \
+  "$PROJECT_DIR/macos/CouncilNative/build-app.sh" "$STAGE_DIR/Council.app"
 RESOURCES_DIR="$STAGE_DIR/Council.app/Contents/Resources"
+rm -f "$RESOURCES_DIR/project-path.txt"
 mkdir -p "$RESOURCES_DIR/backend" "$RESOURCES_DIR/runtime" "$RESOURCES_DIR/launcher"
 
 /usr/bin/ditto "$PYINSTALLER_DIST/council-backend" "$RESOURCES_DIR/backend/council-backend"
