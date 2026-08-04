@@ -29,7 +29,12 @@ from app.reports import run_html, run_markdown
 from app.risk.service import HighRiskService
 from app.store import Store
 from app.time_sync import issue_snapshot_proof, issue_time_proof
-from app.traditional_culture import contains_prohibited_intent, render_snapshot_context, sanitized_question_for_risk
+from app.traditional_culture import (
+    contains_prohibited_intent,
+    make_traditional_final_answer_plain,
+    render_snapshot_context,
+    sanitized_question_for_risk,
+)
 from conftest import TEST_INTERNAL_API_TOKEN
 
 
@@ -207,6 +212,18 @@ def test_time_proof_is_verified_separately_from_reproducible_snapshot_hash():
     assert first["snapshot_sha256"] == second["snapshot_sha256"]
     TraditionalCultureSnapshot.model_validate(first)
     TraditionalCultureSnapshot.model_validate(rehash_snapshot_with_legacy_proof(copy.deepcopy(first)))
+
+
+def test_traditional_final_answer_adds_plain_language_glosses_once():
+    answer = "## 先说结论\n八字和命宫提示需要观察旺衰与流年。"
+
+    softened = make_traditional_final_answer_plain(answer)
+
+    assert "八字（出生年、月、日、时组成的四组信息）" in softened
+    assert "命宫（传统排盘中观察主要主题的位置）" in softened
+    assert "旺衰（传统上描述五行强弱的说法）" in softened
+    assert "流年（按年份看的传统周期）" in softened
+    assert softened.count("八字（") == 1
 
 
 @pytest.mark.parametrize(
@@ -537,6 +554,10 @@ async def test_traditional_run_prompts_exports_restart_and_decision_asset_isolat
     assert "先说结论" in finalizer_system
     assert "默认读者完全没有八字或紫微基础" in finalizer_system
     assert "这对你意味着什么" in finalizer_system
+    assert "白话结论：" in finalizer_system
+    assert "对你来说：" in finalizer_system
+    assert "不能据此判断：" in finalizer_system
+    assert "每段不超过3句" in finalizer_system
     assert "专业术语首次出现" in finalizer_system
     assert "可见字段 -> 传统解释 -> 不确定性" in finalizer_system
     assert "禁止文言断语、恐吓式表达和宿命化结论" in finalizer_system

@@ -46,6 +46,7 @@ from .traditional_culture import (
     ROLE_INSTRUCTIONS,
     TRADITIONAL_PARTICIPANTS,
     contains_prohibited_intent,
+    make_traditional_final_answer_plain,
     render_snapshot_context,
     sanitized_question_for_risk,
     without_snapshot_context,
@@ -1222,7 +1223,11 @@ class Orchestrator:
         ]
         active_roles = {participant["id"] for participant in self._participants_for_run(run)}
         run.final_decision = FinalDecision(
-            final_answer=generation.text.strip(),
+            final_answer=(
+                make_traditional_final_answer_plain(generation.text)
+                if run.council_mode == "traditional_culture"
+                else generation.text.strip()
+            ),
             key_reasons=[
                 (
                     f"{len(self._participants_for_run(run))} 席先独立初答，再由总结席综合"
