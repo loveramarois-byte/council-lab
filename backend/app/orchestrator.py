@@ -96,6 +96,66 @@ def describe_run_error(exc: Exception, timeout_seconds: int | float = 120) -> st
     return message or f"{type(exc).__name__}：当前席位调用失败，请重试。"
 
 
+_NON_REASON_PREFIXES = (
+    "不能据此判断",
+    "不得用于",
+    "不构成",
+    "不可验证",
+    "未经验证",
+    "免责声明",
+)
+_NON_REASON_PHRASES = (
+    "未经外部事实核验",
+    "没有外部事实核验",
+    "尚未经过外部事实核验",
+    "不提供百分比置信度",
+)
+
+
+def extract_public_key_reasons(final_answer: str, turns: list[DiscussionTurn], limit: int = 3) -> list[str]:
+    """Extract concise, attributable points without another model call."""
+
+    def candidates(text: str) -> list[str]:
+        result: list[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith(("#", "```", "|")):
+                continue
+            line = re.sub(r"^[-*+>\d.、)\s]+", "", line)
+            line = line.replace("**", "").replace("__", "").strip()
+            line = re.sub(r"^表态\s*[:：]\s*(?:认同|反驳|部分认同)[。.!！?？\s]*", "", line)
+            if (
+                not line
+                or line.startswith(_NON_REASON_PREFIXES)
+                or any(phrase in line for phrase in _NON_REASON_PHRASES)
+            ):
+                continue
+            sentence = re.split(r"(?<=[。！？!?；;])\s*", line, maxsplit=1)[0].strip()
+            if len(sentence) < 8:
+                continue
+            if len(sentence) > 220:
+                sentence = sentence[:217].rstrip("，,；;：: ") + "…"
+            result.append(sentence)
+        return result
+
+    pool = candidates(final_answer)
+    for turn in turns:
+        if turn.speaker_type == "agent":
+            pool.extend(candidates(turn.content))
+
+    reasons: list[str] = []
+    fingerprints: list[str] = []
+    for item in pool:
+        fingerprint = re.sub(r"[\W_]+", "", item).lower()
+        if not fingerprint or any(fingerprint in seen or seen in fingerprint for seen in fingerprints):
+            continue
+        reasons.append(item)
+        fingerprints.append(fingerprint)
+        if len(reasons) >= limit:
+            break
+    return reasons
+
+
 def analyze_question(question: str, mode: str, token_limit: int = 40000) -> QuestionAnalysis:
     normalized = " ".join(question.strip().split())
     lower = normalized.lower()
@@ -1131,11 +1191,18 @@ class Orchestrator:
     @staticmethod
     def _explicit_disagreements(run: RunRecord) -> list[str]:
         markers = ("表态：反驳", "表态:反驳", "表态：部分认同", "表态:部分认同")
-        return [
-            turn.content
-            for turn in run.discussion_turns
-            if turn.speaker_type == "agent" and turn.content.lstrip().startswith(markers)
-        ]
+        disagreements: list[str] = []
+        for turn in run.discussion_turns:
+            content = turn.content.lstrip()
+            if turn.speaker_type != "agent" or not content.startswith(markers):
+                continue
+            summary = re.sub(r"^表态\s*[:：]\s*(?:反驳|部分认同)[。.!！?？\s]*", "", content)
+            summary = re.split(r"(?<=[。！？!?])\s*", summary, maxsplit=1)[0].strip()
+            if len(summary) > 220:
+                summary = summary[:217].rstrip("，,；;：: ") + "…"
+            if summary and summary not in disagreements:
+                disagreements.append(summary)
+        return disagreements
 
     async def _finalize_debate(
         self,
@@ -1222,21 +1289,14 @@ class Orchestrator:
             for index, source in enumerate(run.source_snapshots, 1)
         ]
         active_roles = {participant["id"] for participant in self._participants_for_run(run)}
-        run.final_decision = FinalDecision(
-            final_answer=(
+        final_answer = (
                 make_traditional_final_answer_plain(generation.text)
                 if run.council_mode == "traditional_culture"
                 else generation.text.strip()
-            ),
-            key_reasons=[
-                (
-                    f"{len(self._participants_for_run(run))} 席先独立初答，再由总结席综合"
-                    if run.workflow_strategy == "independent"
-                    else f"{len(self._participants_for_run(run))} 席按顺序公开回应"
-                ),
-                "最终综合使用了已保存的完整公开上下文",
-                *([f"本次固化了 {len(sources)} 份资料快照"] if sources else []),
-            ],
+            )
+        run.final_decision = FinalDecision(
+            final_answer=final_answer,
+            key_reasons=extract_public_key_reasons(final_answer, run.discussion_turns),
             unverified_claims=(
                 ["传统文化解释与预测均未经过科学或外部事实验证"]
                 if run.council_mode == "traditional_culture"

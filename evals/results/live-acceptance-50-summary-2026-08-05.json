@@ -1,0 +1,46 @@
+{
+  "schema_version": "council-live-acceptance-public-summary-v1",
+  "date": "2026-08-05",
+  "scope": {
+    "provider": "CC Switch",
+    "model": "gpt-5.6-sol",
+    "protocol": "auto",
+    "runs": 10,
+    "seats_per_run": 5,
+    "logical_model_requests": 50,
+    "dataset": "evals/live_acceptance_v1.json"
+  },
+  "result": {
+    "complete": true,
+    "successful_requests": 50,
+    "failed_requests": 0,
+    "retry_attempts": 0,
+    "degraded_runs": 0,
+    "status_codes": {
+      "200": 50
+    },
+    "latency_ms": {
+      "p50": 9487,
+      "p95": 44846,
+      "max": 81653,
+      "mean": 15932.62
+    }
+  },
+  "cases": [
+    { "id": "decision-night-bus", "status": "completed", "model_requests": 5 },
+    { "id": "decision-vendor-choice", "status": "completed", "model_requests": 5 },
+    { "id": "decision-office-policy", "status": "completed", "model_requests": 5 },
+    { "id": "fact-conflicting-metrics", "status": "completed", "model_requests": 5 },
+    { "id": "fact-contract-deadline", "status": "completed", "model_requests": 5 },
+    { "id": "fact-survey-generalization", "status": "completed", "model_requests": 5 },
+    { "id": "risk-database-migration", "status": "completed", "model_requests": 5 },
+    { "id": "risk-ai-support", "status": "completed", "model_requests": 5 },
+    { "id": "risk-event-launch", "status": "completed", "model_requests": 5 },
+    { "id": "planning-beta-launch", "status": "completed", "model_requests": 5 }
+  ],
+  "limitations": [
+    "This is a release acceptance snapshot for one model and one local route.",
+    "The ten cases are fixed and do not represent every provider, model, prompt, or network condition.",
+    "Successful requests measure workflow completion, not factual correctness or model quality."
+  ]
+}
