@@ -75,10 +75,11 @@ backend_is_current() {
 
 frontend_is_current() {
   local response
+  local web_build_id="$COUNCIL_WEB_BUILD_ID"
   response="$(/usr/bin/curl -fsSi --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null || true)"
   [[ "$response" == *'"service":"council-mobile-access"'* \
     && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* \
-    && "$response" == *"\"web_build_id\":\"$COUNCIL_WEB_BUILD_ID\""* \
+    && "$response" == *"\"web_build_id\":\"$web_build_id\""* \
     && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* \
     && "${response:l}" == *"x-council-desktop-token-id: $DESKTOP_TOKEN_ID"* ]]
 }
