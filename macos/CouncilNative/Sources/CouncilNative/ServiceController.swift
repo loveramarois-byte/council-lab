@@ -154,7 +154,7 @@ final class ServiceController: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = [script.path]
-        process.currentDirectoryURL = script.deletingLastPathComponent()
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
         var environment = ProcessInfo.processInfo.environment
         environment["COUNCIL_NO_BROWSER"] = "1"
         process.environment = environment
