@@ -24,6 +24,7 @@ frontend/node_modules/
 frontend/.next/
 frontend/.next-runtime/
 frontend/.next-release/
+frontend/.next-e2e/
 frontend/test-results/
 frontend/playwright-report/
 *.tsbuildinfo
@@ -34,6 +35,7 @@ build/
 dist/
 desktop/logs/
 desktop/Council.app/
+macos/CouncilNative/.build*/
 
 # OS and editor files
 .DS_Store

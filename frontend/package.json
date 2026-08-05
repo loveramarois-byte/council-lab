@@ -1,7 +1,7 @@
 {
   "name": "council-lab-web",
   "private": true,
-  "version": "0.15.4",
+  "version": "0.16.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -12,10 +12,7 @@
     "test:a11y": "playwright test accessibility.spec.ts"
   },
   "dependencies": {
-    "@noble/hashes": "2.2.0",
-    "iztro": "2.5.8",
     "lucide-react": "^0.468.0",
-    "lunar-javascript": "1.7.7",
     "next": "^16.2.12",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",

@@ -8,6 +8,7 @@ RESOURCES_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 BACKEND_EXE="$RESOURCES_DIR/backend/council-backend/council-backend"
 NODE_EXE="$RESOURCES_DIR/runtime/node"
 WEB_DIR="$RESOURCES_DIR/web"
+WEB_BUILD_ID_FILE="$WEB_DIR/.next-release/BUILD_ID"
 APP_ROOT="$(cd "$RESOURCES_DIR/../.." && pwd -P)"
 LOG_DIR="${COUNCIL_LOG_DIR:-$HOME/Library/Logs/Council}"
 PID_FILE="$LOG_DIR/council-bundled.pids"
@@ -31,11 +32,14 @@ show_error() {
 service_is_current() {
   local url="$1"
   local service="$2"
+  local expected_web_build_id="${3:-}"
   local response
   response="$(/usr/bin/curl -fsS --max-time 2 "$url" 2>/dev/null || true)"
   [[ "$response" == *"\"service\":\"$service\""* \
     && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* \
-    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
+    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]] || return 1
+  [[ -z "$expected_web_build_id" \
+    || "$response" == *"\"web_build_id\":\"$expected_web_build_id\""* ]]
 }
 
 backend_is_current() {
@@ -43,7 +47,7 @@ backend_is_current() {
 }
 
 frontend_is_current() {
-  service_is_current "http://127.0.0.1:3000/mobile-access/health" "council-mobile-access"
+  service_is_current "http://127.0.0.1:3000/mobile-access/health" "council-mobile-access" "$COUNCIL_WEB_BUILD_ID"
 }
 
 port_is_used() {
@@ -125,10 +129,12 @@ record_pid() {
   /bin/mv "$temp_file" "$PID_FILE"
 }
 
-if [[ ! -x "$BACKEND_EXE" || ! -x "$NODE_EXE" || ! -f "$WEB_DIR/server.js" ]]; then
+if [[ ! -x "$BACKEND_EXE" || ! -x "$NODE_EXE" || ! -f "$WEB_DIR/server.js" || ! -f "$WEB_BUILD_ID_FILE" ]]; then
   show_error "安装包不完整，请重新下载并解压 Council。"
   exit 1
 fi
+
+export COUNCIL_WEB_BUILD_ID="$(/usr/bin/tr -d '[:space:]' < "$WEB_BUILD_ID_FILE")"
 
 umask 077
 INTERNAL_TOKEN=""

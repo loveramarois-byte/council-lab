@@ -14,10 +14,22 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Validate shell scripts
         run: |
           bash -n setup.sh start.sh
           zsh -n "安装 Council.command" desktop/*.sh
+      - name: Build source web runtime
+        working-directory: frontend
+        run: |
+          npm ci
+          COUNCIL_NEXT_DIST_DIR=.next-runtime npm run build
+      - name: Test native runtime identity
+        run: swift test --package-path macos/CouncilNative
       - name: Build and verify desktop launcher
         run: |
           mkdir -p "$HOME/Desktop"
@@ -71,6 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Enforce public decision-analysis scope
+        run: ./scripts/check_public_scope.sh
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

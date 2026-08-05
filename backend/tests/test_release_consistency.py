@@ -70,6 +70,7 @@ def test_source_desktop_runtime_build_is_isolated_from_validation_and_release_bu
     assert 'web/$RELEASE_DIST_DIR/static' in mac_release
     assert 'web\\$ReleaseDistDir\\static' in windows_release
     assert 'frontend/public" "$RESOURCES_DIR/web/public' in mac_release
+    assert 'rm -f "$RESOURCES_DIR/project-path.txt"' in mac_release
     assert 'frontend\\public") (Join-Path $StageDir "web\\public' in windows_release
 
 
@@ -205,6 +206,7 @@ def test_packaged_launchers_only_reuse_services_from_the_same_installation():
 
     for source in (mac_launcher, windows_launcher, backend, frontend_health):
         assert "COUNCIL_RUNTIME_ID" in source or "runtime_identity" in source
+    assert 'web_build_id: process.env.COUNCIL_WEB_BUILD_ID || "unknown"' in frontend_health
     assert "service_is_current" in mac_launcher
     assert "stop_existing_council_service" in mac_launcher
     assert "listeners_before" in mac_launcher
@@ -217,6 +219,58 @@ def test_packaged_launchers_only_reuse_services_from_the_same_installation():
     assert "$ProcessIdsBefore -contains $ProcessId" in windows_launcher
     assert "Test-CouncilProcessOwnership" in windows_launcher
     assert '$RuntimeSeed = "$PackageRoot$([char]0)$($env:COUNCIL_VERSION)"' in windows_launcher
+
+
+def test_desktop_launchers_restart_frontend_when_next_build_changes():
+    source_mac = (ROOT / "desktop/start-council.sh").read_text(encoding="utf-8")
+    bundled_mac = (ROOT / "desktop/start-bundled.sh").read_text(encoding="utf-8")
+    source_windows = (ROOT / "desktop/start-council.ps1").read_text(encoding="utf-8")
+    bundled_windows = (ROOT / "desktop/start-bundled.ps1").read_text(encoding="utf-8")
+
+    assert 'FRONTEND_BUILD_ID="$(tr -d' in source_mac
+    assert 'council_listener_owns_port "$port"' in source_mac
+    assert 'kill -KILL "$pid"' in source_mac
+    assert '\\"runtime_id\\":\\"$COUNCIL_RUNTIME_ID\\"' in source_mac
+    assert 'export COUNCIL_RUNTIME_ID="source:$FRONTEND_BUILD_ID"' in source_mac
+    assert 'export COUNCIL_WEB_BUILD_ID="$FRONTEND_BUILD_ID"' in source_mac
+    assert '\\"web_build_id\\":\\"$FRONTEND_BUILD_ID\\"' in source_mac
+
+    assert 'WEB_BUILD_ID_FILE="$WEB_DIR/.next-release/BUILD_ID"' in bundled_mac
+    assert 'export COUNCIL_WEB_BUILD_ID="$(/usr/bin/tr -d' in bundled_mac
+    assert '"$COUNCIL_WEB_BUILD_ID"' in bundled_mac
+
+    assert '$FrontendBuildId = (Get-Content -Raw $BuildIdPath).Trim()' in source_windows
+    assert '$env:COUNCIL_RUNTIME_ID = "source:$FrontendBuildId"' in source_windows
+    assert '$Health.runtime_id -eq $env:COUNCIL_RUNTIME_ID' in source_windows
+    assert '$ReplaceableCouncil' in source_windows
+    assert '$env:COUNCIL_WEB_BUILD_ID = $FrontendBuildId' in source_windows
+    assert '$Response.web_build_id -eq $FrontendBuildId' in source_windows
+
+    assert '$WebBuildId = (Get-Content -Raw $WebBuildIdPath).Trim()' in bundled_windows
+    assert '$env:COUNCIL_WEB_BUILD_ID = $WebBuildId' in bundled_windows
+    assert '$Response.web_build_id -eq $WebBuildId' in bundled_windows
+
+
+def test_native_macos_shell_embeds_and_checks_the_matching_web_build():
+    builder = (ROOT / "macos/CouncilNative/build-app.sh").read_text(encoding="utf-8")
+    service = (ROOT / "macos/CouncilNative/Sources/CouncilNative/ServiceController.swift").read_text(encoding="utf-8")
+    release = (ROOT / "packaging/build-macos-release.sh").read_text(encoding="utf-8")
+
+    assert "COUNCIL_WEB_BUILD_ID_FILE" in builder
+    assert "web-build-id.txt" in builder
+    assert 'if [[ ! -s "$WEB_BUILD_ID_FILE" ]]' in builder
+    assert 'forResource: "web-build-id"' in service
+    assert "CouncilServiceIdentity.matchesHealth" in service
+    assert "CouncilRuntimeIdentity.packaged" in service
+    assert 'COUNCIL_WEB_BUILD_ID_FILE="$PROJECT_DIR/frontend/$RELEASE_DIST_DIR/BUILD_ID"' in release
+
+    package = (ROOT / "macos/CouncilNative/Package.swift").read_text(encoding="utf-8")
+    runtime_tests = (ROOT / "macos/CouncilNative/Tests/CouncilNativeTests/RuntimeIdentityTests.swift").read_text(
+        encoding="utf-8"
+    )
+    assert ".testTarget(" in package
+    assert "testPackagedIdentityMatchesLauncherAlgorithm" in runtime_tests
+    assert "testHealthIdentityRejectsAnotherInstallationWithTheSameWebBuild" in runtime_tests
 
 
 def _free_port() -> int:

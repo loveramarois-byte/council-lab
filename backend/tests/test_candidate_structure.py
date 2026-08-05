@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.models import CandidateAnswer, DiscussionTurn, RunRecord, UsageSummary
-from app.orchestrator import make_candidate
+from app.orchestrator import extract_public_key_reasons, make_candidate
 from app.reports import run_html, run_markdown
 
 
@@ -66,6 +66,30 @@ def test_none_structure_source_rejects_attributed_content():
             model="council-mock",
             provider="Mock",
         )
+
+
+def test_final_decision_reasons_are_specific_public_points_not_workflow_metadata():
+    turns = [
+        DiscussionTurn(
+            id="turn-analyst",
+            speaker_type="agent",
+            speaker_id="analyst",
+            speaker_name="析理",
+            role_label="拆解者",
+            content="首要依据是现有错误率仍高于发布门槛。继续发布会扩大受影响用户范围。",
+        )
+    ]
+
+    reasons = extract_public_key_reasons(
+        """## 建议\n先灰度 10% 用户，并保留一键回滚。\n该结论未经外部事实核验。\n\n## 限制\n不得用于未经负责人确认的生产发布。""",
+        turns,
+    )
+
+    assert reasons == [
+        "先灰度 10% 用户，并保留一键回滚。",
+        "首要依据是现有错误率仍高于发布门槛。",
+    ]
+    assert all("公开上下文" not in reason and "席按顺序" not in reason for reason in reasons)
 
 
 def test_reports_only_export_actual_discussion_for_legacy_candidate_structure():

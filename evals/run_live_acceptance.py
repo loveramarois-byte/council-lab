@@ -245,7 +245,6 @@ def run_acceptance(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "question": build_question(case, index),
                 "mode": "standard",
-                "council_mode": "general",
                 "workflow_strategy": "sequential",
                 "use_saved_assignments": True,
                 "auto_summarize": True,

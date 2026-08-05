@@ -35,7 +35,6 @@ from .request_boundary import load_internal_api_token, token_identifier
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles, select_active_profile
 from .store import Store, serialize_public_provider
 from .templates import list_templates
-from .time_sync import fetch_trusted_time, verify_snapshot_proof, issue_time_proof, verify_time_proof
 from .output_contracts import list_output_contracts
 from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, runtime_identity, update_manager
 
@@ -138,15 +137,6 @@ async def health() -> dict[str, str]:
     }
 
 
-@app.get("/api/time")
-async def trusted_time(response: Response):
-    response.headers["Cache-Control"] = "no-store"
-    result = await fetch_trusted_time()
-    if result["provider"] == "https_consensus" and result["synced"] is True:
-        result["time_proof"] = issue_time_proof(result, internal_api_token)
-    return result
-
-
 @app.get("/api/update/check")
 async def check_for_update(refresh: bool = False, x_council_request: str | None = Header(default=None)):
     if refresh and not install_request_is_allowed(x_council_request):
@@ -209,26 +199,6 @@ async def create_run(
         raise ApiError(400, "HIGH_RISK_AUTO_SUMMARY_FORBIDDEN", "高风险模式不能开启自动总结。")
 
     async def start_run():
-        if request.council_mode == "traditional_culture" and request.traditional_culture_snapshot is not None:
-            if request.traditional_culture_snapshot.schema_version != 2:
-                raise HTTPException(400, "旧版传统文化快照只用于读取历史 Run；新建研判请重新排盘。")
-            timing = request.traditional_culture_snapshot.timing_facts
-            try:
-                verify_snapshot_proof(
-                    request.traditional_culture_snapshot.snapshot_sha256,
-                    timing.time_proof if timing is not None else None,
-                    request.traditional_culture_snapshot.snapshot_proof,
-                    internal_api_token,
-                )
-            except ValueError as exc:
-                raise HTTPException(400, str(exc)) from exc
-            if timing is not None and timing.synced:
-                if timing.time_provider != "https_consensus":
-                    raise HTTPException(400, "旧版单源联网时间只用于读取历史 Run；新建研判请重新校时。")
-                try:
-                    verify_time_proof(timing.model_dump(mode="json"), internal_api_token)
-                except ValueError as exc:
-                    raise HTTPException(400, str(exc)) from exc
         return await orchestrator.start(request, high_risk_actor=high_risk_actor)
 
     try:
@@ -758,16 +728,17 @@ async def delete_project_source(project_id: str, source_id: str, response: Respo
 
 
 @app.get("/api/runs")
-async def list_runs(summary: bool = False):
-    runs = await store.list_runs()
-    if not summary:
-        return runs
-    return [
+async def list_runs(
+    summary: bool = False,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    runs, total = await store.list_runs(limit=limit, offset=offset, include_total=True)
+    items = runs if not summary else [
         {
             "id": run.id,
             "question": run.question,
             "mode": run.mode,
-            "council_mode": run.council_mode,
             "status": run.status,
             "created_at": run.created_at,
             "provider_id": run.provider_id,
@@ -778,6 +749,7 @@ async def list_runs(summary: bool = False):
         }
         for run in runs
     ]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @app.get("/api/runs/compare", response_model=DecisionBriefComparison)
@@ -843,8 +815,6 @@ async def create_run_memory_proposals(run_id: RunIdPath):
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
-    if run.council_mode == "traditional_culture":
-        raise HTTPException(409, "传统文化解释不能沉淀为长期决策记忆")
     if run.status != "completed":
         raise HTTPException(409, "Run 完成并生成结构化简报后才能提出长期记忆")
     brief = await store.get_decision_brief(run_id)
@@ -859,8 +829,6 @@ async def list_run_memory_proposals(run_id: RunIdPath):
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
-    if run.council_mode == "traditional_culture":
-        raise HTTPException(409, "传统文化解释不能沉淀为长期决策记忆")
     return await store.list_memory_proposals(run_id)
 
 
@@ -1110,7 +1078,6 @@ async def rerun(
             RunCreate(
                 question=source.question,
                 mode=source.mode,
-                council_mode=source.council_mode,
                 workflow_strategy=source.workflow_strategy,
                 provider_id=source.provider_id,
                 model=source.model,
@@ -1121,8 +1088,6 @@ async def rerun(
                 include_project_history=True,
                 template_id=source.template_id,
                 output_contract=source.output_contract,
-                traditional_culture_snapshot=source.traditional_culture_snapshot,
-                traditional_culture_consent=source.traditional_culture_consent,
             ),
             frozen_sources=source.source_snapshots,
             frozen_project_name=source.project_name,
@@ -1151,8 +1116,6 @@ async def save_decision_review(
     run = await store.get_run(run_id)
     if not run:
         raise HTTPException(404, "运行记录不存在")
-    if run.council_mode == "traditional_culture":
-        raise HTTPException(409, "传统文化解释不能记录为可验证的决策回访")
     if run.status != "completed" or not run.final_decision:
         raise HTTPException(409, "圆桌完成后才能记录结果回访")
     async def append_review():
@@ -1205,9 +1168,9 @@ async def run_events(
             while True:
                 if await request.is_disconnected():
                     break
-                events = await store.wait_for_events(run_id, cursor, timeout=15)
+                events = await store.wait_for_events(run_id, cursor, timeout=20)
                 if not events:
-                    yield ": keep-alive\n\n"
+                    yield "event: ping\ndata: {}\n\n"
                     continue
                 for event in events:
                     cursor = event.sequence
@@ -1274,7 +1237,7 @@ async def patch_provider(provider_id: str, request: ProviderPatch):
     return serialize_public_provider(profile)
 
 
-@app.delete("/api/providers/{provider_id}")
+@app.delete("/api/providers/{provider_id}", status_code=204)
 async def delete_provider(provider_id: str):
     if provider_id in BUILTIN_PROVIDER_IDS:
         raise HTTPException(400, "内置 Provider 不可删除")
@@ -1286,7 +1249,7 @@ async def delete_provider(provider_id: str):
         raise HTTPException(503, str(exc)) from exc
     del providers[provider_id]
     await store.delete_provider(provider_id)
-    return {"deleted": True}
+    return Response(status_code=204)
 
 
 @app.delete("/api/providers/{provider_id}/credential")
@@ -1332,6 +1295,10 @@ async def detect_ccswitch():
     models, model_source, _ = resolve_model_catalog(result.get("models") or [], fallback_models, fallback_source)
     replace_model_catalog(profile, models, model_source)
     result["models"] = profile.available_models
+    result["available"] = bool(
+        result.get("proxy_listening")
+        or result.get("status") in {"connected", "route_reachable", "route_connected_upstream_busy"}
+    )
     await store.save_provider(profile)
     return {
         "base_url": profile.base_url,

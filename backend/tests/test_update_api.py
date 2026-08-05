@@ -137,7 +137,7 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
         invalid = await client.post("/api/runs", json={})
         assert invalid.status_code == 422
         assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
-        assert invalid.json()["detail"] == "请求参数不完整或格式不正确。"
+        assert invalid.json()["detail"] == "请求参数不完整或格式不正确。 请检查字段：question。"
 
 
 async def test_legacy_workspace_is_read_only_unless_explicitly_enabled(monkeypatch):

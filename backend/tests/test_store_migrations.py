@@ -44,6 +44,15 @@ def test_existing_database_is_backed_up_and_migrated_once(tmp_path):
     assert len(list((tmp_path / "backups").glob("*.sqlite3"))) == 1
 
 
+def test_current_schema_indexes_run_history_by_creation_time(tmp_path):
+    store = Store(tmp_path / "council.sqlite3")
+    try:
+        indexes = {row[1] for row in store.conn.execute("PRAGMA index_list(runs)")}
+        assert "idx_runs_created_at" in indexes
+    finally:
+        store.close()
+
+
 def test_failed_migration_restores_original_database(tmp_path, monkeypatch):
     database = tmp_path / "council.sqlite3"
     connection = sqlite3.connect(database)

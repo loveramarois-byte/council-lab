@@ -106,6 +106,17 @@ class ProviderRequestError(RuntimeError):
         self.response = response
 
 
+def provider_http_error_message(response: httpx.Response) -> str:
+    status = response.status_code
+    if status in {401, 403}:
+        return f"上游拒绝了请求（HTTP {status}）。请检查路由授权、账号状态和模型访问权限。"
+    if status == 429:
+        return "上游请求过多（HTTP 429）。已按配置重试；请稍后重试当前席位。"
+    if status >= 500:
+        return f"上游服务暂不可用（HTTP {status}）。已按配置重试；请稍后重试当前席位。"
+    return f"上游返回 HTTP {status}。请检查 Provider 配置后重试当前席位。"
+
+
 class ModelBackend:
     async def health_check(self) -> dict[str, Any]:
         raise NotImplementedError
@@ -208,6 +219,17 @@ def build_responses_payload(prompt: str, system: str, model: str, reasoning_effo
     return payload
 
 
+def build_chat_payload(prompt: str, system: str, model: str, temperature: float = 0.2) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": temperature,
+    }
+
+
 def extract_responses_text(payload: dict[str, Any]) -> str:
     output_text = payload.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
@@ -291,6 +313,7 @@ class OpenAICompatibleProvider(ModelBackend):
                         or response.headers.get("request-id")
                         or response.headers.get("x-correlation-id")
                     ),
+                    error_kind=f"http_{response.status_code}" if response.status_code >= 400 else None,
                 )
             )
             if response.status_code not in retryable or attempt >= self.profile.max_retries:
@@ -321,7 +344,7 @@ class OpenAICompatibleProvider(ModelBackend):
 
     async def generate(self, prompt: str, system: str, model: str, temperature: float = 0.2) -> Generation:
         protocol = self.profile.protocol_mode
-        if protocol in (ProtocolMode.AUTO, ProtocolMode.RESPONSES):
+        if protocol in (ProtocolMode.AUTO, ProtocolMode.RESPONSES) and self.profile.capabilities.supports_responses:
             effort = self.profile.reasoning_effort if self.profile.capabilities.supports_reasoning_effort else None
             response, attempts = await self._post_with_retry(
                 "/responses",
@@ -333,7 +356,7 @@ class OpenAICompatibleProvider(ModelBackend):
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:
-                    raise ProviderRequestError("Provider returned an unsuccessful response", attempts, response) from exc
+                    raise ProviderRequestError(provider_http_error_message(response), attempts, response) from exc
             else:
                 data = response.json()
                 output = extract_responses_text(data)
@@ -341,7 +364,7 @@ class OpenAICompatibleProvider(ModelBackend):
                     raise RuntimeError("Responses 接口成功但没有返回可用文本")
                 usage = data.get("usage") or {}
                 return Generation(output, usage.get("input_tokens", 0), usage.get("output_tokens", 0), "responses", effort, attempts)
-        chat_payload = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}], "temperature": temperature}
+        chat_payload = build_chat_payload(prompt, system, model, temperature)
         try:
             response, chat_attempts = await self._post_with_retry("/chat/completions", chat_payload)
         except ProviderRequestError as exc:
@@ -350,7 +373,7 @@ class OpenAICompatibleProvider(ModelBackend):
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise ProviderRequestError("Provider returned an unsuccessful response", attempts, response) from exc
+            raise ProviderRequestError(provider_http_error_message(response), attempts, response) from exc
         data = response.json()
         text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         usage = data.get("usage") or {}

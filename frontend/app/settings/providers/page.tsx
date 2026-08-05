@@ -102,7 +102,7 @@ export default function ProvidersSettingsPage() {
           const modelSource = typeof result.model_source === "string" ? result.model_source as Provider["model_source"] : current.model_source;
           setProviders((items) => items.map((item) => item.id === current.id ? { ...item, available_models: models, default_model: defaultModel, model_source: modelSource } : item));
           const nextStatus = String(result.status || "unknown");
-          const liveRoute = ["connected", "route_reachable"].includes(nextStatus);
+          const liveRoute = typeof result.available === "boolean" ? result.available : ["connected", "route_reachable"].includes(nextStatus);
           setConnectionStatus(nextStatus);
           if (models.length && modelSource === "ccswitch_history") {
             setMessage(`读取到 ${models.length} 个近期成功模型记录，但当前 CC Switch 路由不可用。这些记录不代表模型现在可用。`);
@@ -214,8 +214,9 @@ export default function ProvidersSettingsPage() {
       updateCurrent({ available_models: models, default_model: defaultModel, model_source: modelSource });
       const nextStatus = String(result.status || "unknown");
       setConnectionStatus(nextStatus);
+      const available = typeof result.available === "boolean" ? result.available : ["connected", "route_reachable", "route_connected_upstream_busy"].includes(nextStatus);
       setMessage(statusCopy[nextStatus] || String(result.error || "CC Switch 检测完成。"));
-      setMessageTone(["connected", "route_reachable", "route_connected_upstream_busy"].includes(nextStatus) ? "success" : "error");
+      setMessageTone(available ? "success" : "error");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "检测失败");
       setMessageTone("error");

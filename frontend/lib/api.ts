@@ -53,65 +53,8 @@ export type AgentAssignment = {
 export type AgentAssignmentsConfig = { schema_version: number; seats: AgentAssignment[]; finalizer: AgentAssignment };
 export type ResolvedAssignment = AgentAssignment & { provider_name: string };
 export type RunLimits = { max_model_calls: number; max_tokens: number; timeout_seconds: number };
-export type CouncilMode = "general" | "traditional_culture";
-export type TraditionalCultureReferenceId =
-  | "qiong_tong_bao_dian"
-  | "san_ming_tong_hui"
-  | "di_tian_sui"
-  | "yuan_hai_zi_ping"
-  | "qian_li_ming_gao"
-  | "xie_ji_bian_fang_shu"
-  | "guo_lao_xing_zong"
-  | "zi_ping_zhen_quan"
-  | "shen_feng_tong_kao"
-  | "zhou_yi"
-  | "ziwei_doushu_quan_shu"
-  | "xing_ping_hui_hai"
-  | "ming_li_yue_yan"
-  | "zao_hua_yuan_yuan"
-  | "bu_shi_zheng_zong";
-export type TraditionalInterpretationFramework = "comparative_research" | "bazi_classical" | "ziwei_classical";
-export type TrustedTime = {
-  utc_datetime: string;
-  local_datetime: string;
-  timezone: "Asia/Shanghai";
-  source: "network" | "local_fallback";
-  provider: "https_consensus" | "timeapi.io" | "system_clock";
-  source_url: string;
-  time_proof?: string;
-  synced: boolean;
-};
-export type TraditionalCultureProfile = {
-  calendar_type: "solar";
-  birth_date: string;
-  birth_time: string;
-  time_precision: "exact" | "approximate";
-  gender: "male" | "female";
-  birth_place: string;
-  birth_place_normalized?: string | null;
-  birth_latitude?: number | null;
-  birth_longitude?: number | null;
-  birth_place_source?: "offline_city_catalog" | "manual_coordinates" | "unresolved";
-  timezone: "Asia/Shanghai";
-  true_solar_time_applied: boolean;
-  focus_topics: ("temperament" | "career" | "relationships" | "timing")[];
-  interpretation_framework?: TraditionalInterpretationFramework;
-  reference_book_ids?: TraditionalCultureReferenceId[];
-};
-export type TraditionalCultureSnapshot = {
-  schema_version: 1 | 2;
-  calculation_source: "local_browser" | "local_service";
-  calculated_at: string;
-  profile: TraditionalCultureProfile;
-  engines: { id: "lunar-javascript" | "iztro"; version: string; source_url: string; license: "MIT" }[];
-  calendar_facts: { solar_datetime: string; civil_solar_datetime?: string | null; true_solar_datetime?: string | null; true_solar_time_offset_minutes?: number | null; lunar_date: string; zodiac: string; constellation: string; eight_char: string; pillars: string[]; pillar_wuxing: string[]; heavenly_stem_ten_gods: string[] };
-  timing_facts?: { reference_civil_datetime: string; reference_true_solar_datetime: string; reference_true_solar_offset_minutes: number; timezone: "Asia/Shanghai"; time_source: "network" | "local_fallback"; time_provider: "https_consensus" | "timeapi.io" | "system_clock"; time_source_url: string; time_proof?: string; synced: boolean; lunar_date: string; year_pillar: string; month_pillar: string; day_pillar: string; hour_pillar: string; current_solar_term: string; previous_solar_term: { name: string; datetime: string }; next_solar_term: { name: string; datetime: string } } | null;
-  ziwei_chart: { solar_date: string; lunar_date: string; chinese_date: string; time_label: string; time_range: string; five_elements_class: string; soul_star: string; body_star: string; soul_palace_branch: string; body_palace_branch: string; palaces: { index: number; name: string; heavenly_stem: string; earthly_branch: string; is_body_palace: boolean; is_original_palace: boolean; major_stars: string[]; minor_stars: string[]; changsheng12: string; decadal_range: number[] }[] };
-  notices: string[];
-  snapshot_sha256: string;
-  snapshot_proof?: string | null;
-};
-export type RunSummary = Pick<Run, "id" | "question" | "mode" | "council_mode" | "status" | "created_at" | "provider_id" | "participant_roles" | "seat_assignments" | "usage"> & { has_final_decision: boolean };
+export type RunSummary = Pick<Run, "id" | "question" | "mode" | "status" | "created_at" | "provider_id" | "participant_roles" | "seat_assignments" | "usage"> & { has_final_decision: boolean };
+export type RunsPage = { items: RunSummary[]; total: number; limit: number; offset: number };
 export type RiskTier = "normal" | "elevated" | "high" | "critical";
 export type HighRiskStatus = "DRAFT" | "RISK_ASSESSMENT_REQUIRED" | "MORE_INFORMATION_REQUIRED" | "EVIDENCE_REQUIRED" | "INDEPENDENT_ANALYSIS" | "CROSS_EXAMINATION" | "PROFESSIONAL_ESCALATION_REQUIRED" | "READY_FOR_HUMAN_REVIEW" | "APPROVAL_REQUIRED" | "APPROVED" | "REJECTED" | "ACTION_BLOCKED" | "COMPLETED" | "CANCELLED";
 export type VerificationStatus = "unverified" | "pending" | "verified" | "rejected" | "conflicting" | "expired" | "legacy_default";
@@ -214,7 +157,6 @@ export type Run = {
   id: string;
   question: string;
   mode: "quick" | "standard" | "rigorous";
-  council_mode?: CouncilMode;
   workflow_strategy?: "sequential" | "independent";
   provider_id: string;
   model: string;
@@ -271,8 +213,6 @@ export type Run = {
   source_snapshots?: RunSourceSnapshot[];
   memory_snapshot?: RunMemorySnapshotItem[];
   decision_review?: DecisionReview | null;
-  traditional_culture_snapshot?: TraditionalCultureSnapshot | null;
-  traditional_culture_consent?: boolean;
 };
 
 export type QuestionAnalysis = {
@@ -392,6 +332,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => null) as ErrorEnvelope | null;
     throw new CouncilApiError(response.status, body, response.headers.get("X-Council-Request-ID"));
   }
+  if (response.status === 204) return undefined as T;
   return response.json();
 }
 
@@ -425,7 +366,6 @@ async function download(path: string, init?: RequestInit): Promise<{ blob: Blob;
 }
 
 export const api = {
-  traditionalSnapshot: (profile: TraditionalCultureProfile) => request<TraditionalCultureSnapshot>("/api/traditional/snapshot", { method: "POST", body: JSON.stringify(profile) }),
   downloadDiagnostics: () => download("/api/diagnostics/export", { headers: { "X-Council-Request": "app" } }),
   checkUpdate: (refresh = false) => request<UpdateInfo>(`/api/update/check${refresh ? "?refresh=true" : ""}`, refresh ? { headers: { "X-Council-Request": "app" } } : undefined),
   updateStatus: () => request<UpdateStatus>("/api/update/status"),
@@ -434,6 +374,7 @@ export const api = {
   assignments: () => request<AgentAssignmentsConfig>("/api/agent-assignments"),
   saveAssignments: (body: AgentAssignmentsConfig) => request<AgentAssignmentsConfig>("/api/agent-assignments", { method: "PUT", body: JSON.stringify(body) }),
   patchProvider: (id: string, body: Partial<Pick<Provider, "base_url" | "protocol_mode" | "default_model" | "reasoning_effort">> & { api_key?: string }) => request<Provider>(`/api/providers/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteProvider: (id: string) => request<void>(`/api/providers/${id}`, { method: "DELETE" }),
   providerModels: (id: string) => request<{ models: string[]; source: string; fetched: number; default_model?: string; error?: string }>(`/api/providers/${id}/models`),
   deleteProviderCredential: (id: string) => request<Provider>(`/api/providers/${id}/credential`, { method: "DELETE" }),
   activateProvider: (id: string) => request<Provider>(`/api/providers/${id}/activate`, { method: "POST" }),
@@ -455,9 +396,12 @@ export const api = {
     return request<ProjectSource>(`/api/projects/${id}/sources/file`, { method: "POST", body });
   },
   deleteSource: (projectId: string, sourceId: string) => request<{ deleted: boolean }>(`/api/projects/${projectId}/sources/${sourceId}`, { method: "DELETE" }),
-  createRun: (body: { question: string; mode: string; council_mode?: CouncilMode; workflow_strategy?: "sequential" | "independent"; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; traditional_culture_snapshot?: TraditionalCultureSnapshot; traditional_culture_consent?: boolean; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
+  createRun: (body: { question: string; mode: string; workflow_strategy?: "sequential" | "independent"; provider_id?: string; model?: string; use_saved_assignments?: boolean; auto_summarize?: boolean; high_risk?: boolean; project_id?: string; source_ids?: string[]; include_project_history?: boolean; template_id?: string; output_contract?: OutputContractId; selected_memory_ids?: string[]; readiness_override?: boolean; readiness_override_reason?: string; limits?: RunLimits }) => idempotentRequest<Run>("/api/runs", { method: "POST", headers: body.high_risk ? { "X-Council-Actor": LOCAL_HIGH_RISK_ACTOR } : undefined, body: JSON.stringify(body) }),
   readiness: (question: string, high_risk = false) => request<DecisionReadiness>("/api/readiness", { method: "POST", body: JSON.stringify({ question, high_risk }) }),
-  runs: () => request<RunSummary[]>("/api/runs?summary=true"),
+  runs: async (limit = 50, offset = 0): Promise<RunsPage> => {
+    const response = await request<RunsPage | RunSummary[]>(`/api/runs?summary=true&limit=${limit}&offset=${offset}`);
+    return Array.isArray(response) ? { items: response, total: response.length, limit, offset } : response;
+  },
   run: (id: string) => request<Run>(`/api/runs/${id}`),
   decisionBrief: (id: string) => request<DecisionBrief>(`/api/runs/${id}/decision-brief`),
   runLineage: (id: string) => request<RunForkLineage>(`/api/runs/${id}/lineage`),
@@ -508,7 +452,7 @@ export function subscribeToRun(
   let reconnecting = false;
   let lastEventId = 0;
   let stopped = false;
-  const names = ["run_created", "run_fork_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "decision_brief_generating", "decision_brief_generated", "decision_brief_validation_failed", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed"];
+  const names = ["run_created", "run_fork_created", "question_analyzed", "agent_turn_started", "agent_turn_completed", "agent_turn_failed", "user_interjected", "awaiting_final_input", "summary_started", "decision_brief_generating", "decision_brief_generated", "decision_brief_validation_failed", "final_completed", "provider_degraded", "run_limit_reached", "run_cancelled", "run_failed", "ping"];
   const terminalEvents = new Set(["final_completed", "run_cancelled"]);
 
   const connect = async () => {
@@ -537,6 +481,7 @@ export function subscribeToRun(
       const event = message as MessageEvent;
       const sequence = Number.parseInt(event.lastEventId, 10);
       if (Number.isFinite(sequence)) lastEventId = Math.max(lastEventId, sequence);
+      if (name === "ping") return;
       onEvent(JSON.parse(event.data));
       if (terminalEvents.has(name)) {
         stopped = true;
