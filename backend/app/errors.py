@@ -109,8 +109,17 @@ def install_error_handling(app: FastAPI, internal_api_token: str) -> None:
         return _error_response(request, exc.status_code, code, message, exc.headers)
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(request: Request, _: RequestValidationError) -> JSONResponse:
-        return _error_response(request, 422, "VALIDATION_ERROR", "请求参数不完整或格式不正确。")
+    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        field_paths = []
+        for error in exc.errors():
+            parts = [str(part) for part in error.get("loc", ()) if part not in {"body", "query", "path"}]
+            if parts:
+                field_paths.append(".".join(parts))
+        fields = ", ".join(dict.fromkeys(field_paths))
+        message = "请求参数不完整或格式不正确。"
+        if fields:
+            message = f"{message} 请检查字段：{fields}。"
+        return _error_response(request, 422, "VALIDATION_ERROR", message)
 
     @app.exception_handler(Exception)
     async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:

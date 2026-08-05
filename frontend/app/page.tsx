@@ -1,11 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUp, Bot, ChevronRight, CircleAlert, Landmark, LoaderCircle, MessagesSquare, RefreshCw, Settings2, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { ArrowUp, Bot, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Settings2, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AgentAssignmentsConfig, api, CouncilMode, DecisionReadiness, DeliberationTemplate, MemoryPreview, MemoryView, OutputContractDefinition, OutputContractId, providerIsReady, Provider, TraditionalCultureProfile } from "../lib/api";
-import { TraditionalCultureForm } from "../components/traditional-culture-form";
+import { AgentAssignmentsConfig, api, DecisionReadiness, DeliberationTemplate, MemoryPreview, MemoryView, OutputContractDefinition, OutputContractId, providerIsReady, Provider } from "../lib/api";
 
 const modes = [
   { id: "quick", label: "引导", detail: "4 席 · 1.8k 上下文", icon: Zap },
@@ -26,9 +25,6 @@ export default function HomePage() {
   const router = useRouter();
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState("standard");
-  const [councilMode, setCouncilMode] = useState<CouncilMode>("general");
-  const [traditionalProfile, setTraditionalProfile] = useState<TraditionalCultureProfile>({ calendar_type: "solar", birth_date: "", birth_time: "", time_precision: "exact", gender: "male", birth_place: "", timezone: "Asia/Shanghai", true_solar_time_applied: false, focus_topics: [], interpretation_framework: "comparative_research", reference_book_ids: [] });
-  const [traditionalConsent, setTraditionalConsent] = useState(false);
   const [workflowStrategy, setWorkflowStrategy] = useState<"sequential" | "independent">("sequential");
   const [highRisk, setHighRisk] = useState(false);
   const [autoSummarize, setAutoSummarize] = useState(false);
@@ -75,30 +71,9 @@ export default function HomePage() {
   }, [selectedMemoryIds]);
   useEffect(() => { setReadiness(null); setReadinessOverride(false); }, [question, highRisk]);
 
-  const selectCouncilMode = (nextMode: CouncilMode) => {
-    setCouncilMode(nextMode);
-    setError("");
-    setReadiness(null);
-    setReadinessOverride(false);
-    if (nextMode === "traditional_culture") {
-      setWorkflowStrategy("independent");
-      setTemplateId("traditional_culture_review");
-      setOutputContract("general_decision");
-      setHighRisk(false);
-      setAutoSummarize(false);
-      setSelectedMemoryIds([]);
-    } else {
-      setWorkflowStrategy("sequential");
-      setTemplateId("open_discussion");
-      setTraditionalConsent(false);
-    }
-  };
-
   const selectedMode = useMemo(() => modes.find((item) => item.id === mode)!, [mode]);
   const selectedTemplate = templates.find((item) => item.id === templateId);
   const selectedContract = outputContracts.find((item) => item.id === outputContract);
-  const traditionalMode = councilMode === "traditional_culture";
-  const traditionalProfileReady = Boolean(traditionalProfile.birth_date && traditionalProfile.birth_time && traditionalConsent);
   const allAssignments = assignments ? [...assignments.seats, assignments.finalizer] : [];
   const hasFiveAssignments = allAssignments.length === 5;
   const mockSeatCount = allAssignments.filter((item) => item.provider_id === "mock").length;
@@ -135,17 +110,11 @@ export default function HomePage() {
 
   const submit = async (forceOverride = false) => {
     if (question.trim().length < 3 || sending || configState !== "ready" || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)) return;
-    if (traditionalMode && !traditionalProfileReady) {
-      setError("请完整填写出生日期和时间，并明确同意发送给本次模型席位。");
-      return;
-    }
     setSending(true);
     setError("");
     try {
       let assessment = readiness;
-      if (traditionalMode) {
-        assessment = { ready: true, task_labels: ["analysis"], checks: [], clarification_questions: [], recommended_mode: "full_council", rules_version: "server_fallback" };
-      } else if (!assessment) {
+      if (!assessment) {
         try {
           assessment = await api.readiness(question.trim(), highRisk);
           setReadiness(assessment);
@@ -157,19 +126,16 @@ export default function HomePage() {
         setSending(false);
         return;
       }
-      const traditionalSnapshot = traditionalMode ? await api.traditionalSnapshot(traditionalProfile) : undefined;
       const run = await api.createRun({
         question: question.trim(),
         mode,
-        ...(traditionalMode ? { council_mode: councilMode } : {}),
-        ...((traditionalMode || workflowStrategy === "independent") ? { workflow_strategy: "independent" as const } : {}),
+        ...(workflowStrategy === "independent" ? { workflow_strategy: "independent" as const } : {}),
         use_saved_assignments: true,
-        template_id: traditionalMode ? "traditional_culture_review" : templateId,
-        ...(!traditionalMode && outputContract !== "general_decision" ? { output_contract: outputContract } : {}),
-        ...(!traditionalMode && selectedMemoryIds.length ? { selected_memory_ids: selectedMemoryIds } : {}),
-        ...(!traditionalMode && autoSummarize && !highRisk ? { auto_summarize: true } : {}),
-        ...(!traditionalMode && highRisk ? { high_risk: true } : {}),
-        ...(traditionalSnapshot ? { traditional_culture_snapshot: traditionalSnapshot, traditional_culture_consent: true } : {}),
+        template_id: templateId,
+        ...(outputContract === "general_decision" ? {} : { output_contract: outputContract }),
+        ...(selectedMemoryIds.length ? { selected_memory_ids: selectedMemoryIds } : {}),
+        ...(autoSummarize && !highRisk ? { auto_summarize: true } : {}),
+        ...(highRisk ? { high_risk: true } : {}),
         ...(!assessment.ready && !highRisk && (readinessOverride || forceOverride) ? { readiness_override: true, readiness_override_reason: "用户查看准备度缺口后选择继续" } : {}),
       });
       router.push(`/runs/${run.id}`);
@@ -183,9 +149,8 @@ export default function HomePage() {
     <header className="topbar"><div><span className="top-kicker">工作台 / 新建审议</span><span className="top-title">Council 圆桌</span></div><div className={`top-meta ${hasDemoSeats || configState === "error" ? "demo" : ""}`}><span className="status-dot" />{topStatus}</div></header>
 
     <section className="home-command">
-      <div><h1>{traditionalMode ? "四席校验，也保留怀疑。" : "四种视角，你也在场。"}</h1><p>{traditionalMode ? "本地排盘、独立初答；计算与传统解释严格分开。" : "依次发言、公开回应；短定义与确定性计算会自动精简调用。"}</p></div>
-      <div className="council-mode-switch" role="group" aria-label="圆桌类型"><button type="button" aria-pressed={!traditionalMode} className={!traditionalMode ? "active" : ""} onClick={() => selectCouncilMode("general")}><MessagesSquare size={14} />通用圆桌</button><button type="button" aria-pressed={traditionalMode} className={traditionalMode ? "active" : ""} onClick={() => selectCouncilMode("traditional_culture")}><Landmark size={14} />传统文化</button></div>
-      <div className={`council-sequence ${traditionalMode ? "culture" : ""}`} aria-label="四席顺序"><span>{traditionalMode ? "校" : "析"}</span><ChevronRight size={12} /><span>{traditionalMode ? "典" : "诘"}</span><ChevronRight size={12} /><span>{traditionalMode ? "派" : "构"}</span><ChevronRight size={12} /><span>{traditionalMode ? "证" : "观"}</span><ChevronRight size={12} /><strong>答</strong></div>
+      <div><h1>四种视角，你也在场。</h1><p>依次发言、公开回应；短定义与确定性计算会自动精简调用。</p></div>
+      <div className="council-sequence" aria-label="四席顺序"><span>析</span><ChevronRight size={12} /><span>诘</span><ChevronRight size={12} /><span>构</span><ChevronRight size={12} /><span>观</span><ChevronRight size={12} /><strong>答</strong></div>
     </section>
 
     <section className={`home-workbench ${hasDemoSeats ? "demo-workbench" : ""}`} aria-label="新建审议">
@@ -212,13 +177,12 @@ export default function HomePage() {
         </div>
       </div> : <>
         {hasDemoSeats && <div className="demo-disclosure"><CircleAlert size={15} /><span><strong>{mockSeatCount === 5 ? "本地演示模式" : `混合配置 · ${mockSeatCount} 个本地演示席`}</strong> · {demoDisclosure}</span><Link href={setupHref}>{setupLabel}<ChevronRight size={13} /></Link></div>}
-        <div className={`composer-section ${traditionalMode ? "traditional-composer" : ""}`}>
-          <div className="composer-head"><div><span className="section-label">{traditionalMode ? "研究问题" : "你的问题"}</span><span className="section-hint">{traditionalMode ? "传统文化联合研判 · 四席独立初答" : `${selectedTemplate?.name || "开放讨论"} · ${selectedContract?.name || "一般决策"}`}</span></div>{!traditionalMode && <><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.filter((template) => template.id !== "traditional_culture_review").map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><label className="template-select"><span>发言策略</span><select aria-label="发言策略" value={workflowStrategy} onChange={(event) => setWorkflowStrategy(event.target.value as "sequential" | "independent")}><option value="sequential">连续审议</option><option value="independent">先独立初答</option></select></label><label className="template-select contract-select"><span>结果类型</span><select aria-label="输出契约" value={outputContract} onChange={(event) => setOutputContract(event.target.value as OutputContractId)}>{outputContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.name}</option>)}</select></label></>}<span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
-          <textarea aria-label={traditionalMode ? "研究问题" : "你的问题"} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} title={selectedContract?.prompt_hint} rows={5} />
-          {traditionalMode && <TraditionalCultureForm profile={traditionalProfile} consent={traditionalConsent} onProfileChange={setTraditionalProfile} onConsentChange={setTraditionalConsent} />}
+        <div className="composer-section">
+          <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"} · {selectedContract?.name || "一般决策"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label><label className="template-select"><span>发言策略</span><select aria-label="发言策略" value={workflowStrategy} onChange={(event) => setWorkflowStrategy(event.target.value as "sequential" | "independent")}><option value="sequential">连续审议</option><option value="independent">先独立初答</option></select></label><label className="template-select contract-select"><span>结果类型</span><select aria-label="输出契约" value={outputContract} onChange={(event) => setOutputContract(event.target.value as OutputContractId)}>{outputContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.name}</option>)}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
+          <textarea aria-label="你的问题" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} title={selectedContract?.prompt_hint} rows={5} />
           {readiness && <section className={`readiness-panel ${readiness.ready ? "ready" : "needs-input"}`} aria-label="决策准备度"><header><div><strong>{readiness.ready ? "可以开始审议" : "开始前还有信息缺口"}</strong><small>系统建议：{readiness.recommended_mode}</small></div><span>{readiness.task_labels.join(" · ")}</span></header>{readiness.clarification_questions.length > 0 && <ul>{readiness.clarification_questions.map((item) => <li key={item}>{item}</li>)}</ul>}{!readiness.ready && <footer><span>你可以补充问题，也可以明确保留这些缺口并继续。</span><button type="button" className="quiet-button" onClick={() => { setReadinessOverride(true); void submit(true); }}>仍然继续</button></footer>}</section>}
-          {!traditionalMode && memories.length > 0 && <section className="memory-picker" aria-label="本次使用的已批准记忆"><header><div><strong>本次可用的已批准记忆</strong><small>默认不注入，只有你明确勾选的内容才会进入本次 Run。</small></div><span>{selectedMemoryIds.length} / {memories.length}</span></header><div>{memories.map((item) => <label key={item.memory.id}><input type="checkbox" checked={selectedMemoryIds.includes(item.memory.id)} onChange={(event) => setSelectedMemoryIds((current) => event.target.checked ? [...current, item.memory.id] : current.filter((id) => id !== item.memory.id))} /><span><strong>{item.memory.type}</strong>{item.memory.content}</span></label>)}</div>{memoryPreview && selectedMemoryIds.length > 0 && <details><summary>查看实际注入快照</summary><pre>{memoryPreview.rendered_context || "所选记忆当前不可用，不会注入。"}</pre></details>}</section>}
-          <div className="composer-footer">{traditionalMode ? <span className="culture-footer-note">结果默认等待你的确认，不自动总结。</span> : <><label className={`risk-mode-toggle ${highRisk ? "active" : ""}`}><input type="checkbox" checked={highRisk} onChange={(event) => { const checked = event.target.checked; setHighRisk(checked); if (checked) setAutoSummarize(false); }} /><span className={`toggle ${highRisk ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label>{!highRisk && <label className={`risk-mode-toggle ${autoSummarize ? "active" : ""}`}><input type="checkbox" checked={autoSummarize} onChange={(event) => setAutoSummarize(event.target.checked)} /><span className={`toggle ${autoSummarize ? "on" : ""}`} /><span><strong>自动总结</strong><small>{autoSummarize ? "讨论席结束后直接生成答案" : "默认等待你的确认"}</small></span></label>}</>}<button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged) || (traditionalMode && !traditionalProfileReady)} onClick={() => submit()}>{sending ? "正在入席" : traditionalMode ? "排盘并进入研判" : "进入圆桌"}<ArrowUp size={17} /></button></div>
+          {memories.length > 0 && <section className="memory-picker" aria-label="本次使用的已批准记忆"><header><div><strong>本次可用的已批准记忆</strong><small>默认不注入，只有你明确勾选的内容才会进入本次 Run。</small></div><span>{selectedMemoryIds.length} / {memories.length}</span></header><div>{memories.map((item) => <label key={item.memory.id}><input type="checkbox" checked={selectedMemoryIds.includes(item.memory.id)} onChange={(event) => setSelectedMemoryIds((current) => event.target.checked ? [...current, item.memory.id] : current.filter((id) => id !== item.memory.id))} /><span><strong>{item.memory.type}</strong>{item.memory.content}</span></label>)}</div>{memoryPreview && selectedMemoryIds.length > 0 && <details><summary>查看实际注入快照</summary><pre>{memoryPreview.rendered_context || "所选记忆当前不可用，不会注入。"}</pre></details>}</section>}
+          <div className="composer-footer"><label className={`risk-mode-toggle ${highRisk ? "active" : ""}`}><input type="checkbox" checked={highRisk} onChange={(event) => { const checked = event.target.checked; setHighRisk(checked); if (checked) setAutoSummarize(false); }} /><span className={`toggle ${highRisk ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label>{!highRisk && <label className={`risk-mode-toggle ${autoSummarize ? "active" : ""}`}><input type="checkbox" checked={autoSummarize} onChange={(event) => setAutoSummarize(event.target.checked)} /><span className={`toggle ${autoSummarize ? "on" : ""}`} /><span><strong>自动总结</strong><small>{autoSummarize ? "讨论席结束后直接生成答案" : "默认等待你的确认"}</small></span></label>}<button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={() => submit()}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
           {error && <p className="form-error" role="alert">{error}</p>}
         </div>
       </>}

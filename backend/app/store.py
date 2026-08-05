@@ -273,11 +273,8 @@ class Store:
                 if existing:
                     self.conn.commit()
                     return [MemoryProposal.model_validate_json(row[0]) for row in existing]
-                source_row = self.conn.execute("SELECT payload FROM runs WHERE id=?", (source_run_id,)).fetchone()
-                if not source_row:
+                if not self.conn.execute("SELECT 1 FROM runs WHERE id=?", (source_run_id,)).fetchone():
                     raise ValueError("source Run does not exist")
-                if RunRecord.model_validate_json(source_row[0]).council_mode == "traditional_culture":
-                    raise ValueError("传统文化解释不能沉淀为长期决策记忆")
                 for item in proposals:
                     self.conn.execute(
                         "INSERT INTO memory_proposals(id,workspace_id,source_run_id,payload_json,created_at) VALUES(?,?,?,?,?)",
@@ -323,11 +320,6 @@ class Store:
                 if not row:
                     raise ValueError("记忆候选不存在")
                 proposal = MemoryProposal.model_validate_json(row[0])
-                source_row = self.conn.execute(
-                    "SELECT payload FROM runs WHERE id=?", (proposal.source_run_id,)
-                ).fetchone()
-                if source_row and RunRecord.model_validate_json(source_row[0]).council_mode == "traditional_culture":
-                    raise ValueError("传统文化解释不能批准为长期决策记忆")
                 latest = self.conn.execute(
                     "SELECT action,memory_id FROM memory_actions WHERE proposal_id=? "
                     "AND action IN ('approved','rejected') ORDER BY sequence DESC LIMIT 1",
@@ -773,13 +765,27 @@ class Store:
             "SELECT 1 FROM high_risk_runs WHERE run_id=? LIMIT 1", (run_id,)
         ).fetchone() is not None
 
-    async def list_runs(self) -> list[RunRecord]:
-        rows = self.conn.execute("SELECT payload FROM runs ORDER BY created_at DESC").fetchall()
+    async def list_runs(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        include_total: bool = False,
+    ) -> list[RunRecord] | tuple[list[RunRecord], int]:
+        query = "SELECT payload FROM runs ORDER BY created_at DESC"
+        parameters: tuple[int, ...] = ()
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            parameters = (max(1, min(limit, 200)), max(0, offset))
+        rows = self.conn.execute(query, parameters).fetchall()
         runs = [RunRecord.model_validate_json(row[0]) for row in rows]
         for index, run in enumerate(runs):
             latest = await self.latest_decision_review(run.id)
             if latest:
                 runs[index] = run.model_copy(update={"decision_review": latest})
+        if include_total:
+            total = int(self.conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0])
+            return runs, total
         return runs
 
     def has_checkpoint(self, run_id: str) -> bool:

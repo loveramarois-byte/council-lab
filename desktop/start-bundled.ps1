@@ -9,6 +9,8 @@ $BackendExe = Join-Path $PackageRoot "backend\council-backend\council-backend.ex
 $NodeExe = Join-Path $PackageRoot "runtime\node.exe"
 $WebDir = Join-Path $PackageRoot "web"
 $ServerScript = Join-Path $WebDir "server.js"
+$WebBuildIdPath = Join-Path $WebDir ".next-release\BUILD_ID"
+$WebBuildId = ""
 $LocalRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME "AppData\Local" }
 $LogDir = if ($env:COUNCIL_LOG_DIR) { $env:COUNCIL_LOG_DIR } else { Join-Path $LocalRoot "Council\logs" }
 $PidFile = Join-Path $LogDir "council-bundled-pids.json"
@@ -40,7 +42,7 @@ function Test-Backend {
 function Test-Frontend {
     try {
         $Response = Invoke-RestMethod -Uri "http://127.0.0.1:3000/mobile-access/health" -TimeoutSec 2
-        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.runtime_id -eq $env:COUNCIL_RUNTIME_ID -and $Response.internal_api_id -eq $InternalApiId
+        return $Response.status -eq "ok" -and $Response.service -eq "council-mobile-access" -and $Response.runtime_id -eq $env:COUNCIL_RUNTIME_ID -and $Response.web_build_id -eq $WebBuildId -and $Response.internal_api_id -eq $InternalApiId
     }
     catch { return $false }
 }
@@ -125,9 +127,11 @@ function Wait-Until([scriptblock]$Probe) {
 }
 
 try {
-    foreach ($Required in @($BackendExe, $NodeExe, $ServerScript)) {
+    foreach ($Required in @($BackendExe, $NodeExe, $ServerScript, $WebBuildIdPath)) {
         if (-not (Test-Path $Required)) { throw "The download is incomplete. Download and extract Council again." }
     }
+    $WebBuildId = (Get-Content -Raw $WebBuildIdPath).Trim()
+    $env:COUNCIL_WEB_BUILD_ID = $WebBuildId
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $Started = [ordered]@{ package_root = $PackageRoot }
     $InternalToken = if (Test-Path $InternalTokenFile) { (Get-Content -Raw $InternalTokenFile).Trim() } else { "" }

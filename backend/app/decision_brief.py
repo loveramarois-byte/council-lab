@@ -69,9 +69,17 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
                 resolution_method="使用第一方资料或可复现测试解决矛盾后重新审议。",
             )
         )
-    disagreement_texts = _deduplicate(
-        [*decision.disagreements, *(turn.content for turn in opposing_turns), *(turn.content for turn in partial_turns)]
-    )
+    public_disagreement_turns = [*opposing_turns, *partial_turns]
+    public_disagreement_texts = [turn.content for turn in public_disagreement_turns]
+    decision_only_disagreements = [
+        item
+        for item in decision.disagreements
+        if not any(
+            item.strip() in turn.content or turn.content.strip() in item
+            for turn in public_disagreement_turns
+        )
+    ]
+    disagreement_texts = _deduplicate([*public_disagreement_texts, *decision_only_disagreements])
     for index, issue in enumerate(disagreement_texts, 1):
         positions = [
             IssuePosition(seat_id=turn.speaker_id, position=turn.content)
@@ -108,7 +116,14 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
         status = "proceed"
 
     seat_ids = [turn.speaker_id for turn in agent_turns if turn not in opposing_turns]
-    decisive_reasons = [
+    synthesis_reasons = [
+        DecisionReason(
+            id=f"synthesis-reason-{index}",
+            summary=reason,
+        )
+        for index, reason in enumerate(_deduplicate(decision.key_reasons), 1)
+    ]
+    verified_reasons = [
         DecisionReason(
             id=f"verified-reason-{index}",
             summary=claim,
@@ -116,6 +131,7 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
         )
         for index, claim in enumerate(_deduplicate(decision.verified_claims), 1)
     ]
+    decisive_reasons = [*synthesis_reasons, *verified_reasons]
     actions = []
     if status != "proceed":
         actions.append(

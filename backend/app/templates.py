@@ -41,16 +41,6 @@ TEMPLATES = {
             prompt_hint="例如：假设半年后项目失败，最可能是什么原因？",
             system_guidance="假设方案已经失败，倒推具体原因、最早信号、预防动作和止损边界。",
         ),
-        DeliberationTemplate(
-            id="traditional_culture_review",
-            name="传统文化联合研判",
-            description="本地排盘后，由四席分别校历、辨典、参派与证伪",
-            prompt_hint="说明希望从传统文化角度研究的主题，不要用于医疗、法律或投资决策",
-            system_guidance=(
-                "严格分开本地引擎计算、传统体系解释、流派分歧和不可验证推断。"
-                "不得把术数结论描述为科学事实，也不得给出医疗、法律、投资、合规或生产操作建议。"
-            ),
-        ),
     ]
 }
 

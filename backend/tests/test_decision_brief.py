@@ -59,6 +59,7 @@ def completed_run(*stances: tuple[str, str], verified: bool = False) -> RunRecor
         discussion_turns=turns,
         final_decision=FinalDecision(
             final_answer="先做小范围发布，并保留回滚开关。",
+            key_reasons=["小范围发布可以先验证错误率，同时限制受影响用户。"],
             verified_claims=["回滚流程已演练"] if verified else [],
             unverified_claims=[] if verified else ["用户需求仍未经过外部核验"],
             disagreements=[content for _, content in stances if content.startswith("表态：反驳")],
@@ -112,6 +113,9 @@ def test_generator_derives_observable_support_and_preserves_opposition():
     assert brief.status == "conditional"
     assert brief.support == "contested"
     assert brief.minority_report is not None
+    assert [reason.summary for reason in brief.decisive_reasons] == [
+        "小范围发布可以先验证错误率，同时限制受影响用户。"
+    ]
     assert brief.minority_report.seat_ids == ["challenger"]
     assert "预算不足" in brief.minority_report.summary
     assert any(issue.blocking is False for issue in brief.unresolved)
@@ -221,6 +225,24 @@ async def test_brief_persistence_failure_is_retryable_without_repeating_model_ca
     assert events.count("decision_brief_validation_failed") == 1
     assert events.count("decision_brief_generated") == 1
     assert events[-1] == "final_completed"
+
+
+def test_final_decision_summarizes_disagreement_but_brief_keeps_public_position():
+    full_position = (
+        "表态：部分认同。先灰度，但必须先定义财务阈值。"
+        "若税额有误则应延期，并保留逐票对账记录。"
+    )
+    run = completed_run(("analyst", "先检查差异"), ("challenger", full_position))
+
+    summarized = Orchestrator._explicit_disagreements(run)
+    run.final_decision = run.final_decision.model_copy(update={"disagreements": summarized})
+    brief = build_decision_brief(run)
+
+    assert summarized == ["先灰度，但必须先定义财务阈值。"]
+    matching = [item for item in brief.unresolved if item.id.startswith("disagreement-")]
+    assert len(matching) == 1
+    assert matching[0].issue == full_position
+    assert matching[0].positions[0].seat_id == "challenger"
 
 
 def test_exports_render_structured_brief_without_fact_probability():

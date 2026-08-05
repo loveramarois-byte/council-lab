@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from math import ceil
 from typing import Protocol
@@ -49,9 +50,11 @@ class ConservativeTokenEstimator:
     def count(self, text: str) -> int:
         if not text:
             return 0
-        # Unknown tokenizers vary substantially. Two UTF-8 bytes per token is
-        # intentionally biased high for mixed CJK, code, URLs, and emoji.
-        return ceil(len(text.encode("utf-8")) / 2)
+        cjk_chars = sum(1 for character in text if unicodedata.east_asian_width(character) in {"W", "F"})
+        other_text = "".join(
+            character for character in text if unicodedata.east_asian_width(character) not in {"W", "F"}
+        )
+        return cjk_chars + ceil(len(other_text.encode("utf-8")) / 4)
 
 
 @dataclass(frozen=True)

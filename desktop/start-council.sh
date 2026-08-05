@@ -27,6 +27,8 @@ frontend_is_up() {
   local response
   response="$(curl -fsS --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null || true)"
   [[ "$response" == *'"service":"council-mobile-access"'* \
+    && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* \
+    && "$response" == *"\"web_build_id\":\"$FRONTEND_BUILD_ID\""* \
     && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
 }
 
@@ -34,7 +36,22 @@ backend_is_up() {
   local response
   response="$(curl -fsS --max-time 2 "http://127.0.0.1:8001/api/health" 2>/dev/null || true)"
   [[ "$response" == *'"service":"council-lab"'* \
+    && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* \
     && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
+}
+
+council_listener_owns_port() {
+  local port="$1"
+  local response
+  if [[ "$port" == "8001" ]]; then
+    response="$(curl -fsS --max-time 2 "http://127.0.0.1:8001/api/health" 2>/dev/null || true)"
+    [[ "$response" == *'"service":"council-lab"'* \
+      && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
+  else
+    response="$(curl -fsS --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null || true)"
+    [[ "$response" == *'"service":"council-mobile-access"'* \
+      && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
+  fi
 }
 
 stop_project_listener() {
@@ -43,21 +60,37 @@ stop_project_listener() {
   local pid
   local process_cwd
   local process_command
+  local replaceable_council=false
+  council_listener_owns_port "$port" && replaceable_council=true
   for pid in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null); do
     [[ "$pid" == <-> ]] || continue
     (( pid > 1 )) || continue
     process_cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
     process_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-    if [[ "$process_cwd" == "$project_path"* || "$process_command" == *"$project_path"* ]]; then
+    if [[ "$replaceable_council" == true || "$process_cwd" == "$project_path"* || "$process_command" == *"$project_path"* ]]; then
       kill "$pid" >/dev/null 2>&1 || true
     fi
   done
   local attempts=0
   while lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
-    (( attempts >= 30 )) && return 1
+    (( attempts >= 30 )) && break
     sleep 0.1
     attempts=$((attempts + 1))
   done
+  if lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && [[ "$replaceable_council" == true ]]; then
+    for pid in $(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null); do
+      [[ "$pid" == <-> ]] || continue
+      (( pid > 1 )) || continue
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+    done
+    attempts=0
+    while lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
+      (( attempts >= 20 )) && return 1
+      sleep 0.1
+      attempts=$((attempts + 1))
+    done
+  fi
+  lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 1
   return 0
 }
 
@@ -81,6 +114,10 @@ if [[ ! -x "$FRONTEND_DIR/node_modules/next/dist/bin/next" || ! -f "$FRONTEND_DI
   osascript -e 'display dialog "网页尚未构建。请双击项目文件夹里的“安装 Council.command”。" buttons {"好"} with title "Council 无法启动"' >/dev/null 2>&1 || true
   exit 1
 fi
+
+FRONTEND_BUILD_ID="$(tr -d '[:space:]' < "$FRONTEND_DIR/$FRONTEND_DIST_DIR/BUILD_ID")"
+export COUNCIL_RUNTIME_ID="source:$FRONTEND_BUILD_ID"
+export COUNCIL_WEB_BUILD_ID="$FRONTEND_BUILD_ID"
 
 umask 077
 INTERNAL_TOKEN=""
@@ -145,8 +182,10 @@ if ! frontend_is_up; then
   fi
 fi
 
-if [[ -n "$DESKTOP_TOKEN" ]]; then
-  open "http://localhost:3000/pair#desktop:$DESKTOP_TOKEN"
-else
-  open "http://localhost:3000"
+if [[ "${COUNCIL_NO_BROWSER:-0}" != "1" ]]; then
+  if [[ -n "$DESKTOP_TOKEN" ]]; then
+    open "http://localhost:3000/pair#desktop:$DESKTOP_TOKEN"
+  else
+    open "http://localhost:3000"
+  fi
 fi

@@ -6,29 +6,3 @@ This product includes software developed by Council Lab contributors.
 Council Lab can interoperate with CC Switch through its public HTTP API.
 CC Switch is a separate project and is not bundled with, endorsed by, or
 affiliated with Council Lab.
-
-Traditional-culture mode includes the following MIT-licensed packages:
-
-- lunar-javascript 1.7.7, Copyright 6tail
-  https://github.com/6tail/lunar-javascript
-- iztro 2.5.8, Copyright SylarLong and contributors
-  https://github.com/SylarLong/iztro
-- @noble/hashes 2.2.0, Copyright Paul Miller and contributors
-  https://github.com/paulmillr/noble-hashes
-
-Traditional-culture city-level coordinates are adapted from the MIT-licensed
-Ficere/tianji data set at commit d674635c810b167c616df5fd607418a38d290315:
-
-- city_coords.json, Copyright Ficere/tianji contributors
-  https://github.com/Ficere/tianji/blob/d674635c810b167c616df5fd607418a38d290315/references/city_coords.json
-
-The integration also studies public concepts from the following MIT-licensed
-projects without bundling their applications or datasets:
-
-- bazi-skill, Copyright jinchenma94 and contributors
-  https://github.com/jinchenma94/bazi-skill
-- ziwei-doushu, Copyright Renhuai123 and contributors
-  https://github.com/Renhuai123/ziwei-doushu
-
-ziwei-doushu depends on iztro and lunar-javascript. Shared underlying results
-are not represented as independent cross-validation.

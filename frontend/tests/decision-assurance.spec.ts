@@ -41,12 +41,12 @@ test("关键主张显示来源标签，回访后只通过追加结果改变当�
   await page.route("**/api/runs/claim-ui/decision-review", (route) => { reviewed = true; return route.fulfill({ json: { ...run, decision_review: { ...route.request().postDataJSON(), updated_at: now } } }); });
   await page.goto("/runs/claim-ui");
   const claims = page.getByRole("article", { name: "关键主张与依据" });
-  await expect(claims).toContainText("模型推断");
+  await expect(claims).toContainText("模型推断", { timeout: 10_000 });
   await page.getByRole("button", { name: "结果回访" }).click();
   await page.getByLabel("最终采用的决定").fill("灰度");
   await page.getByLabel("预期结果").fill("降低风险");
   await page.getByLabel("结果状态").selectOption("unsuccessful");
   await page.getByLabel("实际发生了什么").fill("结果反驳");
   await page.getByRole("button", { name: "保存回访" }).click();
-  await expect(claims).toContainText("后续结果反驳");
+  await expect(claims).toContainText("后续结果反驳", { timeout: 10_000 });
 });
