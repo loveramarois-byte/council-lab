@@ -42,6 +42,7 @@ struct CouncilWebView: NSViewRepresentable {
         ))
     }
 
+    @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         let navigation: CouncilNavigationModel
         var lastRequestID: UUID?
