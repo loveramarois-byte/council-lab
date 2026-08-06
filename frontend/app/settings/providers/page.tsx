@@ -30,7 +30,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, Provider } from "../../../lib/api";
 
 const providerMarks: Record<string, { label: string; color: string }> = {
-  ccswitch: { label: "CC", color: "#c76645" },
+  ccswitch: { label: "CC", color: "#a64d36" },
   deepseek: { label: "DS", color: "#315eaa" },
   zhipu: { label: "GL", color: "#167b83" },
   kimi: { label: "K", color: "#25282d" },
@@ -39,6 +39,8 @@ const providerMarks: Record<string, { label: string; color: string }> = {
   custom: { label: "<>" , color: "#736b61" },
   mock: { label: "M", color: "#9a6a35" },
 };
+
+const settingsSections = [["providers", "模型供应商", Server], ["agents", "角色分配", Link2], ["mobile", "手机连接", Smartphone], ["budget", "预算与限制", FlaskConical], ["privacy", "数据与隐私", KeyRound], ["diagnostics", "诊断与支持", FileArchive], ["appearance", "外观", Globe2], ["update", "软件更新", UploadCloud]] as const;
 
 const statusCopy: Record<string, string> = {
   connected: "连接成功，可以用于新审议。",
@@ -104,9 +106,12 @@ export default function ProvidersSettingsPage() {
           const nextStatus = String(result.status || "unknown");
           const liveRoute = typeof result.available === "boolean" ? result.available : ["connected", "route_reachable"].includes(nextStatus);
           setConnectionStatus(nextStatus);
-          if (models.length && modelSource === "ccswitch_history") {
+          if (models.length && modelSource === "ccswitch_history" && !liveRoute) {
             setMessage(`读取到 ${models.length} 个近期成功模型记录，但当前 CC Switch 路由不可用。这些记录不代表模型现在可用。`);
             setMessageTone("error");
+          } else if (models.length && modelSource === "ccswitch_history") {
+            setMessage(`CC Switch 路由已连接；已载入 ${models.length} 个近期成功模型记录，实际可用性会在调用时确认。`);
+            setMessageTone("success");
           } else if (models.length && liveRoute) {
             setMessage(`已自动识别 ${models.length} 个可用模型。`);
             setMessageTone("success");
@@ -286,7 +291,8 @@ export default function ProvidersSettingsPage() {
       <span className="top-meta"><ShieldCheck size={15} />API Key 由系统凭据库保护</span>
     </header>
     <div className="settings-layout provider-settings-layout">
-      <aside className="settings-nav"><p className="eyebrow">设置</p>{[["providers", "模型供应商", Server], ["agents", "角色分配", Link2], ["mobile", "手机连接", Smartphone], ["budget", "预算与限制", FlaskConical], ["privacy", "数据与隐私", KeyRound], ["diagnostics", "诊断与支持", FileArchive], ["appearance", "外观", Globe2], ["update", "软件更新", UploadCloud]].map(([id, label, Icon]) => <a key={id as string} className={`settings-nav-link ${id === "providers" ? "active" : ""}`} href={id === "providers" ? "/settings/providers" : `/settings/${id}`}><Icon size={15} />{label as string}<ChevronRight size={14} /></a>)}</aside>
+      <details className="mobile-settings-index"><summary><span><Server size={16} />设置栏目</span><strong>模型供应商</strong><ChevronDown size={16} /></summary><nav aria-label="设置栏目">{settingsSections.map(([id, label, Icon]) => <a key={id} className={id === "providers" ? "active" : ""} href={id === "providers" ? "/settings/providers" : `/settings/${id}`}><Icon size={16} />{label}</a>)}</nav></details>
+      <aside className="settings-nav"><p className="eyebrow">设置</p>{settingsSections.map(([id, label, Icon]) => <a key={id} className={`settings-nav-link ${id === "providers" ? "active" : ""}`} href={id === "providers" ? "/settings/providers" : `/settings/${id}`}><Icon size={15} />{label}<ChevronRight size={14} /></a>)}</aside>
       <section className="settings-content provider-settings-content">
         <div className="provider-heading">
           <div><p className="eyebrow terracotta">连接中心</p><h1>选择服务，模型自动识别。</h1></div>
@@ -300,6 +306,7 @@ export default function ProvidersSettingsPage() {
         </div>
 
         <div className="provider-console">
+          <label className="provider-mobile-select"><span>正在配置</span><select aria-label="选择模型供应商" value={selected} onChange={(event) => chooseProvider(event.target.value)}>{providers.map((item) => <option key={item.id} value={item.id}>{item.display_name}{item.is_active ? " · 当前使用" : item.has_api_key ? " · 已保存密钥" : ""}</option>)}</select></label>
           <nav className="provider-directory" aria-label="供应商列表">
             <div className="provider-directory-label">供应商</div>
             <div className="provider-directory-scroll">

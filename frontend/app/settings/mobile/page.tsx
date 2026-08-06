@@ -7,6 +7,7 @@ import QRCode from "qrcode";
 
 type MobileAccessInfo = {
   enabled: boolean;
+  distribution?: "app_store";
   lanAddress: string;
   origin: string;
   pairUrl: string;
@@ -68,6 +69,7 @@ export default function MobileAccessPage() {
   };
 
   const ready = Boolean(info?.enabled && info.pairUrl && qrCode);
+  const appStoreLocalOnly = info?.distribution === "app_store";
 
   return <div className="page-wrap simple-settings mobile-access-page">
     <header className="topbar">
@@ -76,8 +78,8 @@ export default function MobileAccessPage() {
     </header>
 
     <div className="mobile-access-heading">
-      <div><p className="eyebrow terracotta">MOBILE ACCESS / 09</p><h1>把这一席带到手机上。</h1></div>
-      <span className={`mobile-access-state ${ready ? "ready" : ""}`}><i />{ready ? "等待扫码" : info ? "未启用" : "读取中"}</span>
+      <div><p className="eyebrow terracotta">手机连接</p><h1>{appStoreLocalOnly ? "商店版仅在这台 Mac 上开放。" : "把这一席带到手机上。"}</h1></div>
+      <span className={`mobile-access-state ${ready ? "ready" : ""}`}><i />{ready ? "等待扫码" : appStoreLocalOnly ? "仅限本机" : info ? "未启用" : "读取中"}</span>
     </div>
 
     <section className="pairing-ticket" aria-label="手机配对">
@@ -101,8 +103,8 @@ export default function MobileAccessPage() {
 
       <div className="qr-stage">
         {qrCode ? <img src={qrCode} width="220" height="220" alt="Council 手机配对二维码" /> : <div className="qr-placeholder">{info ? <QrCode size={40} /> : <LoaderCircle className="spin" size={28} />}</div>}
-        <strong>{ready ? "扫码进入 Council" : "手机连接尚未启用"}</strong>
-        <small>{ready ? "打开后可添加到手机主屏幕" : "请从 Council 桌面图标重新启动"}</small>
+        <strong>{ready ? "扫码进入 Council" : appStoreLocalOnly ? "局域网访问已关闭" : "手机连接尚未启用"}</strong>
+        <small>{ready ? "打开后可添加到手机主屏幕" : appStoreLocalOnly ? "这是 Mac App Store 版本的本机安全边界" : "请从 Council 桌面图标重新启动"}</small>
       </div>
     </section>
 

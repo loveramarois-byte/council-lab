@@ -15,6 +15,9 @@ struct CouncilNativeApp: App {
                 .frame(minWidth: 900, minHeight: 620)
                 .tint(CouncilPalette.lacquer)
                 .onAppear { service.start() }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    service.stop()
+                }
         }
         .defaultSize(width: 1280, height: 820)
         .windowStyle(.hiddenTitleBar)

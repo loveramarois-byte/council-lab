@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, LoaderCircle, LockKeyhole, Save, ShieldAlert, X } from "lucide-react";
 
+import { ModalDialog } from "../../../../components/ModalDialog";
 import type { HighRiskApproval, HighRiskAuditEvent, HighRiskRun, RequiredFact } from "../../../../lib/api";
 
 export type EvidenceDraft = {
@@ -66,9 +67,9 @@ export function HighRiskPanel(props: HighRiskPanelProps) {
     onDecideApproval, onComplete,
   } = props;
   const terminal = TERMINAL_STATUSES.includes(highRisk.status);
+  const reviewerCopy = professionalReviewerCopy(reviewDomain);
 
-  return <div className="high-risk-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="high-risk-dialog" role="dialog" aria-modal="true" aria-labelledby="high-risk-title">
+  return <ModalDialog backdropClassName="high-risk-backdrop" className="high-risk-dialog" labelledBy="high-risk-title" onClose={onClose}>
       <header><div><span>HIGH-RISK CONTROL</span><h2 id="high-risk-title">高风险决策支持</h2><p>{highRiskStatusLabel(highRisk.status)} · 版本 {highRisk.version}</p></div><button className="icon-button" onClick={onClose} aria-label="关闭高风险控制面"><X size={16} /></button></header>
       <div className="high-risk-scroll">
         <section className="risk-assessment-line"><ShieldAlert size={17} /><div><strong>{highRisk.risk_assessment.risk_tier.toUpperCase()}</strong><span>{highRisk.risk_assessment.reasons.join("；")} · 规则置信度 {Math.round(highRisk.risk_assessment.confidence * 100)}%，需人工确认领域</span></div></section>
@@ -101,11 +102,11 @@ export function HighRiskPanel(props: HighRiskPanelProps) {
           })}
         </section>
 
-        {!terminal && <section className="professional-identity-form"><header><strong>独立专业复核身份</strong><span>角色为复核人自我声明；系统只验证服务端授权密钥和领域匹配，不验证执照真伪。</span></header><div><label><span>复核人 ID</span><input value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} maxLength={128} autoComplete="off" /></label><label><span>服务端复核凭据</span><input type="password" value={reviewerKey} onChange={(event) => setReviewerKey(event.target.value)} autoComplete="off" /></label><label><span>专业角色（英文标识）</span><input value={reviewerRole} onChange={(event) => setReviewerRole(event.target.value)} maxLength={160} placeholder={rolePlaceholder(reviewDomain)} /></label><label><span>复核领域</span><select value={reviewDomain} onChange={(event) => setReviewDomain(event.target.value)}>{highRisk.risk_assessment.detected_domains.map((domain) => <option key={domain} value={domain}>{domainLabel(domain)}</option>)}</select></label></div></section>}
+        {!terminal && <section className="professional-identity-form"><header><strong>独立{reviewerCopy.person}复核身份</strong><span>角色为复核人自我声明；系统只验证服务端授权密钥和领域匹配，不验证执照或资质真伪。</span></header><div><label><span>复核人 ID</span><input value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} maxLength={128} autoComplete="off" /></label><label><span>服务端复核凭据</span><input type="password" value={reviewerKey} onChange={(event) => setReviewerKey(event.target.value)} autoComplete="off" /></label><label><span>专业角色（英文标识）</span><input value={reviewerRole} onChange={(event) => setReviewerRole(event.target.value)} maxLength={160} placeholder={rolePlaceholder(reviewDomain)} /></label><label><span>复核领域</span><select value={reviewDomain} onChange={(event) => setReviewDomain(event.target.value)}>{highRisk.risk_assessment.detected_domains.map((domain) => <option key={domain} value={domain}>{domainLabel(domain)}</option>)}</select></label></div></section>}
 
         {highRisk.status === "EVIDENCE_REQUIRED" && <section className="review-report-form"><header><strong>非约束性决策支持报告</strong><span>正文保存在本地记录，安全审计只保存 SHA-256；证据未全部核验时不能提交。</span></header><textarea aria-label="高风险决策支持报告" rows={7} maxLength={50000} value={reportDraft} onChange={(event) => setReportDraft(event.target.value)} /><button className="send-button" onClick={onSubmitReview} disabled={busy || !reportDraft.trim() || !highRisk.assurance.evidence_complete || !highRisk.assurance.evidence_current || highRisk.assurance.evidence_conflict || highRisk.assurance.medical_red_flag}>{busy ? <LoaderCircle className="spin" size={15} /> : <ClipboardCheck size={15} />}提交报告，进入专业复核</button></section>}
 
-        {highRisk.status === "READY_FOR_HUMAN_REVIEW" && !highRisk.assurance.professional_review_complete && <section className="professional-review-form"><header><strong>{domainLabel(reviewDomain)}专业复核</strong><span>必须覆盖每个检测到的高风险领域，并绑定当前证据快照与报告哈希。</span></header><label><span>复核范围</span><textarea rows={2} maxLength={2000} value={professionalScope} onChange={(event) => setProfessionalScope(event.target.value)} placeholder="说明已检查的事实、来源、法域/适当性/红旗和限制" /></label><label><span>专业声明</span><textarea rows={3} maxLength={4000} value={professionalAttestation} onChange={(event) => setProfessionalAttestation(event.target.value)} placeholder="声明本人承担此次复核责任，已核对证据、适用范围与报告限制（系统不验证执照真伪）" /></label><footer><button className="quiet-button danger" onClick={() => onSubmitProfessionalReview("escalation_required")} disabled={busy || !reviewerId.trim() || !reviewerKey || !reviewerRole.trim() || !professionalScope.trim() || professionalAttestation.trim().length < 8}>要求专业接管</button><button className="send-button" onClick={() => onSubmitProfessionalReview("approved")} disabled={busy || !reviewerId.trim() || !reviewerKey || !reviewerRole.trim() || !professionalScope.trim() || professionalAttestation.trim().length < 8}>提交专业复核</button></footer></section>}
+        {highRisk.status === "READY_FOR_HUMAN_REVIEW" && !highRisk.assurance.professional_review_complete && <section className="professional-review-form"><header><strong>{reviewerCopy.person}复核</strong><span>必须覆盖每个检测到的高风险领域，并绑定当前证据快照与报告哈希。</span></header><label><span>复核范围</span><textarea rows={2} maxLength={2000} value={professionalScope} onChange={(event) => setProfessionalScope(event.target.value)} placeholder={reviewerCopy.scopePlaceholder} /></label><label><span>专业声明</span><textarea rows={3} maxLength={4000} value={professionalAttestation} onChange={(event) => setProfessionalAttestation(event.target.value)} placeholder={`${reviewerCopy.attestation}（系统不验证执照或资质真伪）`} /></label><footer><button className="quiet-button danger" onClick={() => onSubmitProfessionalReview("escalation_required")} disabled={busy || !reviewerId.trim() || !reviewerKey || !reviewerRole.trim() || !professionalScope.trim() || professionalAttestation.trim().length < 8}>要求专业接管</button><button className="send-button" onClick={() => onSubmitProfessionalReview("approved")} disabled={busy || !reviewerId.trim() || !reviewerKey || !reviewerRole.trim() || !professionalScope.trim() || professionalAttestation.trim().length < 8}>提交{reviewerCopy.person}复核</button></footer></section>}
         {highRisk.status === "READY_FOR_HUMAN_REVIEW" && highRisk.assurance.professional_review_complete && <section className="approval-result approved"><CheckCircle2 size={20} /><div><strong>专业复核已覆盖全部领域</strong><span>下一步创建独立内容审批；复核与审批都不会执行外部动作。</span></div><button className="send-button" onClick={onRequestApproval} disabled={busy}>请求独立审批</button></section>}
 
         {highRisk.status === "APPROVAL_REQUIRED" && approval?.status === "pending" && <section className="approval-form"><header><strong>独立复核</strong><span>审批 {approval.approval_id.slice(0, 8)} · {new Date(approval.expires_at).toLocaleString()}</span></header><div><label><span>复核人 ID</span><input value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} maxLength={128} autoComplete="off" /></label><label><span>服务端复核凭据</span><input type="password" value={reviewerKey} onChange={(event) => setReviewerKey(event.target.value)} autoComplete="off" /></label></div><label><span>审批理由</span><textarea rows={2} maxLength={1000} value={approvalReason} onChange={(event) => setApprovalReason(event.target.value)} /></label><footer><button className="quiet-button danger" onClick={() => onDecideApproval("rejected")} disabled={busy || !reviewerId.trim() || !reviewerKey || !approvalReason.trim()}>拒绝</button><button className="send-button" onClick={() => onDecideApproval("approved")} disabled={busy || !reviewerId.trim() || !reviewerKey || !approvalReason.trim()}><LockKeyhole size={15} />批准报告</button></footer></section>}
@@ -126,8 +127,7 @@ export function HighRiskPanel(props: HighRiskPanelProps) {
         {error && <p className="high-risk-error" role="alert">{error}</p>}
       </div>
       <footer><LockKeyhole size={14} /><span>非约束性决策支持 · 关键事实缺失时停止 · P0 不执行外部动作</span></footer>
-    </section>
-  </div>;
+  </ModalDialog>;
 }
 
 export function highRiskStatusLabel(status: string) {
@@ -151,6 +151,14 @@ function verificationStatusLabel(status: RequiredFact["verification_status"]) {
 
 function rolePlaceholder(domain: string) {
   return ({ medical: "physician / pharmacist", legal: "lawyer / legal_counsel", investment: "licensed_adviser / risk_officer", compliance: "compliance_officer / internal_auditor", production_incident: "incident_commander / site_reliability_engineer", general_high_risk: "domain_professional / risk_officer" } as Record<string, string>)[domain] || "domain_professional";
+}
+
+function professionalReviewerCopy(domain: string) {
+  return ({
+    medical: { person: "执业医师", scopePlaceholder: "说明已核对的病历、检查、用药、红旗症状和临床限制", attestation: "声明本人承担此次医疗信息复核责任，已结合完整病历核对证据与适用范围" },
+    legal: { person: "执业律师", scopePlaceholder: "说明已核对的文件原文、司法辖区、时效、程序阶段和法律限制", attestation: "声明本人承担此次法律风险复核责任，已核对适用法域、证据与报告限制" },
+    investment: { person: "财务专业人士", scopePlaceholder: "说明已核对的金额口径、现金流、适当性、最大损失和数据时间", attestation: "声明本人承担此次财务风险复核责任，已核对数字、假设与适用范围" },
+  } as Record<string, { person: string; scopePlaceholder: string; attestation: string }>)[domain] || { person: "专业人员", scopePlaceholder: "说明已检查的事实、来源、适用范围和限制", attestation: "声明本人承担此次专业复核责任，已核对证据、适用范围与报告限制" };
 }
 
 function auditEventLabel(eventType: string) {

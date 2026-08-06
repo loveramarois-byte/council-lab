@@ -126,9 +126,9 @@ export type ReadinessCheck = { id: "goal_defined" | "constraints_defined" | "opt
 export type DecisionReadiness = { ready: boolean; task_labels: string[]; checks: ReadinessCheck[]; clarification_questions: string[]; recommended_mode: "direct" | "quick_council" | "full_council" | "high_risk_council"; rules_version: string };
 export type DecisionClaim = { id: string; run_id: string; text: string; basis: "user_provided" | "model_inference" | "cited_unverified" | "seat_disputed" | "outcome_supported" | "outcome_contradicted"; source_seat_ids: string[]; related_entity_ids: string[]; citation?: { url: string; provided_by: "user" | "model"; externally_checked: false } | null; dispute_summary?: string | null; created_at: string };
 export type DecisionClaimView = { claim: DecisionClaim; current_basis: DecisionClaim["basis"]; latest_outcome?: { result: "supported" | "contradicted"; note: string } | null };
-export type DeliberationTemplate = { id: string; name: string; description: string; prompt_hint: string; system_guidance: string };
-export type OutputContractId = "general_decision" | "product_review" | "technical_architecture";
-export type OutputContractDefinition = { id: OutputContractId; name: string; description: string; input_checks: string[]; prompt_hint: string; system_guidance: string };
+export type DeliberationTemplate = { id: string; name: string; description: string; prompt_hint: string; system_guidance: string; seat_guidance?: Record<string, string>; default_output_contract?: OutputContractId; requires_high_risk?: boolean };
+export type OutputContractId = "general_decision" | "product_review" | "technical_architecture" | "medical_second_opinion" | "legal_risk_review" | "financial_decision_review";
+export type OutputContractDefinition = { id: OutputContractId; name: string; description: string; input_checks: string[]; prompt_hint: string; system_guidance: string; required_disclaimer?: string | null; requires_high_risk?: boolean };
 export type SeatOutcomeReview = { role: "analyst" | "challenger" | "builder" | "observer"; status: "pending" | "supported" | "mixed" | "contradicted"; note: string };
 export type DecisionReview = { selected_decision: string; expected_result: string; review_date?: string | null; actual_result: string; outcome_status: "pending" | "successful" | "partial" | "unsuccessful" | "unclear"; seat_outcomes: SeatOutcomeReview[]; updated_at: string };
 export type DecisionReviewInput = Omit<DecisionReview, "updated_at">;
@@ -136,13 +136,15 @@ export type UpdateInfo = {
   current_version: string;
   latest_version: string;
   update_available: boolean;
+  current_is_newer: boolean;
   can_auto_update: boolean;
-  installation_kind: "macos" | "windows" | "development" | "unsupported";
+  installation_kind: "macos" | "windows" | "app_store" | "development" | "unsupported";
   reason: string;
   release_url: string;
   published_at?: string | null;
   notes: string;
   package_name?: string | null;
+  check_error?: string | null;
 };
 export type UpdateStatus = {
   current_version: string;
@@ -272,6 +274,9 @@ export type DecisionBrief = {
     | { contract: "general_decision"; decision_criteria: string[]; key_tradeoffs: string[] }
     | { contract: "product_review"; target_users: string[]; user_problem: string; value_proposition: string; failure_conditions: string[]; validation_experiments: { hypothesis: string; method: string; success_threshold: string }[]; stop_conditions: string[] }
     | { contract: "technical_architecture"; requirements: string[]; constraints: string[]; proposed_architecture: string; alternatives: { option: string; tradeoffs: string[] }[]; failure_modes: string[]; migration_plan: string[]; rollback_plan: string[]; observability_requirements: string[] }
+    | { contract: "medical_second_opinion"; scope: string; verified_information: string[]; unverified_information: string[]; risk_factors: string[]; professional_questions: string[]; required_disclaimer: string }
+    | { contract: "legal_risk_review"; scope: string; verified_information: string[]; unverified_information: string[]; risk_factors: string[]; professional_questions: string[]; required_disclaimer: string }
+    | { contract: "financial_decision_review"; scope: string; verified_information: string[]; unverified_information: string[]; risk_factors: string[]; professional_questions: string[]; required_disclaimer: string }
     | null;
 };
 export type ForkCheckpoint = "before_deliberation" | "after_seat_1" | "after_seat_2" | "after_seat_3" | "after_seat_4" | "before_synthesis";

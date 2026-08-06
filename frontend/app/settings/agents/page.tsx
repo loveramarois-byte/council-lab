@@ -70,7 +70,7 @@ export default function AgentsSettingsPage() {
 
   return <div className="page-wrap simple-settings">
     <header className="topbar"><div><Link href="/settings/providers" className="back-link"><ArrowLeft size={15} />设置</Link><span className="top-title">席位模型</span></div></header>
-    <div className="settings-heading"><p className="eyebrow terracotta">ASSIGNMENTS / 05</p><h1>让每个席位真正独立。</h1><p>四个讨论席与总结席可以分别选择 Provider 和模型。配置会在创建运行时固化，之后修改不会篡改历史记录。</p></div>
+    <div className="settings-heading"><p className="eyebrow terracotta">席位分工</p><h1>让每个席位真正独立。</h1><p>四个讨论席与总结席可以分别选择 Provider 和模型。配置会在创建运行时固化，之后修改不会篡改历史记录。</p></div>
     <div className="assignment-list">
       {roles.map(([roleId, name, detail], index) => {
         const assignment = assignments[index];

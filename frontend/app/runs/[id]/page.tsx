@@ -1,14 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ChevronDown, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ModalDialog } from "../../../components/ModalDialog";
 import { api, CouncilApiError, DecisionBrief, DecisionBriefComparison, DecisionClaimView, DecisionReviewInput, ForkCheckpoint, HighRiskApproval, HighRiskAuditEvent, HighRiskRun, MemoryProposalView, Participant, RequiredFact, ResolvedAssignment, Run, RunForkLineage, runExportUrl, subscribeToRun } from "../../../lib/api";
 import { domainLabel, EvidenceDraft, HighRiskPanel, highRiskStatusLabel } from "./components/HighRiskPanel";
 
 const DEFAULT_RUN_LIMITS = { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 };
 const EMPTY_REVIEW: DecisionReviewInput = { selected_decision: "", expected_result: "", review_date: null, actual_result: "", outcome_status: "pending", seat_outcomes: [] };
+const DOMAIN_DISCLAIMERS: Partial<Record<NonNullable<Run["output_contract"]>, { label: string; className: string; text: string }>> = {
+  medical_second_opinion: { label: "医疗信息边界", className: "medical-disclaimer", text: "本次审议仅用于医疗信息整理和问题梳理，不构成诊断或治疗建议；所有结论须由执业医师结合完整病历确认。" },
+  legal_risk_review: { label: "法律信息边界", className: "legal-disclaimer", text: "本次审议仅用于法律风险识别，不构成法律意见；重要权利义务和程序选择请由适用司法辖区的执业律师确认。" },
+  financial_decision_review: { label: "财务信息边界", className: "financial-disclaimer", text: "本次审议仅用于财务风险因素分析，不构成投资、借贷、保险或税务建议；重要决定请由具备相应资质的专业人士确认。" },
+};
 
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
@@ -144,7 +150,13 @@ export default function RunDetailPage() {
   }, [run?.id, run?.status]);
   useEffect(() => {
     if (!transcriptRef.current) return;
-    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+    if (run?.status === "completed") {
+      transcriptRef.current.scrollTop = 0;
+      return;
+    }
+    if (["queued", "running", "awaiting_final_input"].includes(run?.status || "")) {
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+    }
   }, [run?.discussion_turns.length, run?.awaiting_user, run?.status]);
   useEffect(() => {
     if (!run || run.status !== "running" || run.awaiting_user) return;
@@ -514,8 +526,9 @@ export default function RunDetailPage() {
   };
 
   if (!run) return <div className="loading-state"><LoaderCircle className="spin" size={22} />正在进入圆桌…</div>;
+  const domainDisclaimer = run.output_contract ? DOMAIN_DISCLAIMERS[run.output_contract] : undefined;
 
-  return <div ref={pageRef} className={`council-page ${immersive ? "immersive" : ""}`}>
+  return <div ref={pageRef} className={`council-page ${run.status === "completed" ? "is-completed" : ""} ${immersive ? "immersive" : ""}`}>
     <header className="council-topbar">
       <Link href="/" className="back-link"><ArrowLeft size={15} />退出圆桌</Link>
       <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {highRisk ? "高风险决策支持" : run.mode === "quick" ? "引导模式" : run.mode === "rigorous" ? "深挖模式" : "圆桌模式"}</div>
@@ -531,15 +544,18 @@ export default function RunDetailPage() {
         <p>{run.status === "completed" ? `${seatCount} 席与总结席调用完成，答案和过程均已保留。` : awaitingFinal ? `${seatCount} 席已完成；补充信息或直接确认生成最终答案。` : runStopped ? run.error : runFailed ? `${nextParticipant?.name || "记录员"}调用失败，已保留前面的公开讨论。` : discussionComplete ? "总结席正在综合公开讨论。" : `${nextParticipant?.name || "成员"}正在调用中，你可随时插话。`}</p>
       </section>
 
-      <section className="council-callboard" aria-label="AI 独立调用顺序">
-        <div className="callboard-meta"><Bot size={14} /><strong>{seatCount} 席顺序调用</strong><span className="api-attempt-meta" title={providerAttempts.length ? "实际发出的 Provider HTTP 请求，包含可重试请求。" : "此历史记录创建于请求审计上线前。"}><Gauge size={12} />API {providerAttempts.length ? `${successfulProviderAttempts} / ${providerAttempts.length} 成功` : "旧记录未采集"}</span><span>{run.analysis?.short_task_route ? "短任务精简路线" : "各席独立配置"}</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="成功模型调用的实际次数和系统预计总次数"><Gauge size={12} />调用 {run.usage.model_calls} / 预计 {expectedModelCalls}</span><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
-        <div className="council-seats">
-          {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} assignment={run.seat_assignments?.[index]} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
-          <div className={`summary-node ${run.status === "completed" ? "completed" : runFailed && discussionComplete ? "failed" : discussionComplete ? "active" : "queued"}`} aria-label={`第 ${summaryCallNumber} 次调用：记录员总结`}>
-            <FileCheck2 size={17} /><span><strong>最终答案</strong><small>第 {summaryCallNumber} 次调用</small></span>
+      <details className="council-callboard" aria-label="AI 独立调用顺序" open>
+        <summary className="callboard-summary"><span><Bot size={15} /><strong>审议路径</strong><small>{seatCount} 席与总结席 · {run.usage.model_calls} 次调用</small><b className="callboard-api">API {providerAttempts.length ? `${successfulProviderAttempts} / ${providerAttempts.length} 成功` : "旧记录未采集"}</b></span><span>查看运行细节<ChevronDown size={15} /></span></summary>
+        <div className="callboard-body">
+          <div className="callboard-meta"><Bot size={14} /><strong>{seatCount} 席顺序调用</strong><span className="api-attempt-meta" title={providerAttempts.length ? "实际发出的 Provider HTTP 请求，包含可重试请求。" : "此历史记录创建于请求审计上线前。"}><Gauge size={12} />{run.status === "completed" ? "请求" : "API"} {providerAttempts.length ? `${successfulProviderAttempts} / ${providerAttempts.length} 成功` : "旧记录未采集"}</span><span>{run.analysis?.short_task_route ? "短任务精简路线" : "各席独立配置"}</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="成功模型调用的实际次数和系统预计总次数"><Gauge size={12} />调用 {run.usage.model_calls} / 预计 {expectedModelCalls}</span><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
+          <div className="council-seats">
+            {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} assignment={run.seat_assignments?.[index]} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
+            <div className={`summary-node ${run.status === "completed" ? "completed" : runFailed && discussionComplete ? "failed" : discussionComplete ? "active" : "queued"}`} aria-label={`第 ${summaryCallNumber} 次调用：记录员总结`}>
+              <FileCheck2 size={17} /><span><strong>最终答案</strong><small>第 {summaryCallNumber} 次调用</small></span>
+            </div>
           </div>
         </div>
-      </section>
+      </details>
 
       {highRisk && <section className={`high-risk-gate status-${highRisk.status.toLowerCase()}`} aria-label="高风险决策支持状态">
         <ShieldAlert size={17} />
@@ -557,7 +573,18 @@ export default function RunDetailPage() {
         {Boolean(run.source_snapshots?.length) && <div className="source-strip" aria-label="本次资料快照"><strong>资料快照</strong>{run.source_snapshots!.map((source, index) => <span key={source.id} title={`${source.url || source.filename || "本地文字"}\nSHA-256 ${source.sha256}`}><b>[S{index + 1}]</b>{source.title}</span>)}</div>}
         {Boolean(run.memory_snapshot?.length) && <div className="source-strip memory-snapshot-strip" aria-label="本次已批准记忆快照"><strong>已批准记忆</strong>{run.memory_snapshot!.map((item) => <span key={item.memory_id} title={`来源 Run ${item.source_run_id}`}><b>{item.type}</b>{item.content}</span>)}</div>}
 
-        <div className="dialogue-scroll" ref={transcriptRef} aria-live="polite">
+        <div className="dialogue-scroll" ref={transcriptRef} aria-live="polite" aria-label="审议内容" tabIndex={0}>
+          {run.status === "completed" && domainDisclaimer && <aside className={`domain-disclaimer ${domainDisclaimer.className}`} role="note" aria-label={domainDisclaimer.label}><ShieldAlert size={16} /><div><strong>{domainDisclaimer.label}</strong><span>{domainDisclaimer.text}</span></div></aside>}
+          {run.status === "completed" && <section className="decision-reading" aria-label="最终判断与证据">
+            <header><span>最终判断</span><p>先读结论、依据与不确定性；完整讨论记录保留在后面。</p></header>
+            {decisionBrief && <DecisionBriefView brief={decisionBrief} />}
+            {claims.length > 0 && <DecisionClaimsView claims={claims} />}
+            {comparison && <DecisionComparisonView comparison={comparison} />}
+            {run.final_decision && (decisionBrief
+              ? <details className="roundtable-summary raw-summary"><summary>查看原始综合文本</summary><RichText content={run.final_decision.final_answer} /></details>
+              : <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>未经过外部事实核验</strong><small>模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。</small></span></div><RichText content={run.final_decision.final_answer} /></article>)}
+          </section>}
+          {run.status === "completed" && <div className="transcript-separator"><span>完整审议记录</span><small>{agentTurnCount} 次 AI 发言 · {run.discussion_turns.filter((turn) => turn.speaker_type === "user").length} 次你的参与</small></div>}
           <article className="opening-question"><span>你提出</span><p>{run.question}</p></article>
           {run.discussion_turns.map((turn) => <article key={turn.id} className={`discussion-turn ${turn.speaker_type} speaker-${turn.speaker_id}`}>
             <header><span className="speaker-avatar">{turn.speaker_type === "user" ? <UserRound size={15} /> : turn.speaker_name.slice(0, 1)}</span><div><strong>{turn.speaker_name}</strong><small>{turn.role_label || "参与者"} · 第 {turn.round} 轮{turn.provider_name ? ` · ${turn.provider_name} / ${turn.model}` : ""}{turn.reused_from_run_id ? " · 复用父 Run" : ""}</small></div></header>
@@ -575,12 +602,6 @@ export default function RunDetailPage() {
               </div>}
             </div>
           </article>}
-          {run.status === "completed" && decisionBrief && <DecisionBriefView brief={decisionBrief} />}
-          {run.status === "completed" && claims.length > 0 && <DecisionClaimsView claims={claims} />}
-          {run.status === "completed" && comparison && <DecisionComparisonView comparison={comparison} />}
-          {run.status === "completed" && run.final_decision && (decisionBrief
-            ? <details className="roundtable-summary raw-summary"><summary>查看原始综合文本</summary><RichText content={run.final_decision.final_answer} /></details>
-            : <article className="roundtable-summary"><header><Check size={16} /><span><strong>圆桌最终答案</strong><small>第 {summaryCallNumber} 次调用 · 共 {run.usage.model_calls} 次模型调用</small></span></header><div className="verification-warning" role="note"><AlertTriangle size={16} /><span><strong>未经过外部事实核验</strong><small>模型共识不等于事实。关键结论请使用第一方资料或可复现测试核对。</small></span></div><RichText content={run.final_decision.final_answer} /></article>)}
         </div>
 
         {runFailed && <div className="failed-actions" role="alert">
@@ -625,8 +646,7 @@ export default function RunDetailPage() {
       onSubmitReview={submitHighRiskReview} onSubmitProfessionalReview={submitProfessionalReview}
       onRequestApproval={requestHighRiskApproval} onDecideApproval={decideHighRisk} onComplete={completeHighRisk}
     />}
-    {reviewOpen && <div className="decision-review-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReviewOpen(false); }}>
-      <section className="decision-review-dialog" role="dialog" aria-modal="true" aria-labelledby="decision-review-title">
+    {reviewOpen && <ModalDialog className="decision-review-dialog" labelledBy="decision-review-title" onClose={() => setReviewOpen(false)}>
         <header><div><span>DECISION FOLLOW-UP</span><h2 id="decision-review-title">结果回访</h2><p>把当时的判断和后来发生的事放在一起。</p></div><button className="icon-button" onClick={() => setReviewOpen(false)} aria-label="关闭结果回访"><X size={16} /></button></header>
         <div className="decision-review-fields">
           <label className="review-field review-wide"><span>最终采用的决定</span><textarea aria-label="最终采用的决定" rows={2} maxLength={6000} value={reviewDraft.selected_decision} onChange={(event) => setReviewDraft({ ...reviewDraft, selected_decision: event.target.value })} /></label>
@@ -640,10 +660,8 @@ export default function RunDetailPage() {
           return <div key={item.role}><strong>{participant?.name || item.role}</strong><select aria-label={`${participant?.name || item.role}观点验证`} value={item.status} onChange={(event) => { const next = [...reviewDraft.seat_outcomes]; next[index] = { ...item, status: event.target.value as typeof item.status }; setReviewDraft({ ...reviewDraft, seat_outcomes: next }); }}><option value="pending">待验证</option><option value="supported">得到支持</option><option value="mixed">部分成立</option><option value="contradicted">被结果反驳</option></select><input aria-label={`${participant?.name || item.role}验证备注`} value={item.note} maxLength={1000} onChange={(event) => { const next = [...reviewDraft.seat_outcomes]; next[index] = { ...item, note: event.target.value }; setReviewDraft({ ...reviewDraft, seat_outcomes: next }); }} placeholder="备注（可选）" /></div>;
         })}</div>
         <footer>{reviewError ? <span className="review-error">{reviewError}</span> : <span>回访会写入本地记录和导出报告。</span>}<button className="send-button" onClick={saveDecisionReview} disabled={reviewBusy || !reviewDraft.selected_decision.trim() || !reviewDraft.expected_result.trim()}>{reviewBusy ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存回访</button></footer>
-      </section>
-    </div>}
-    {forkOpen && <div className="decision-review-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setForkOpen(false); }}>
-      <section className="decision-review-dialog fork-dialog" role="dialog" aria-modal="true" aria-labelledby="fork-title">
+    </ModalDialog>}
+    {forkOpen && <ModalDialog className="decision-review-dialog fork-dialog" labelledBy="fork-title" onClose={() => setForkOpen(false)}>
         <header><div><span>IMMUTABLE FORK</span><h2 id="fork-title">创建情景分叉</h2><p>父 Run、原发言、审批和简报都不会被改写。</p></div><button className="icon-button" onClick={() => setForkOpen(false)} aria-label="关闭情景分叉"><X size={16} /></button></header>
         <div className="decision-review-fields">
           <label className="review-field review-wide"><span>从哪个检查点继续</span><select aria-label="分叉检查点" value={forkCheckpoint} onChange={(event) => setForkCheckpoint(event.target.value as ForkCheckpoint)}><option value="before_deliberation">讨论开始前</option>{run.participant_roles.map((seat, index) => <option key={seat.id} value={`after_seat_${index + 1}`}>复用到第 {index + 1} 席 · {seat.name}</option>)}<option value="before_synthesis">四席完成后、总结前</option></select></label>
@@ -651,15 +669,12 @@ export default function RunDetailPage() {
           <label className="review-field review-wide"><span>新增情景约束（可选）</span><textarea aria-label="新增情景约束" rows={4} maxLength={6000} value={forkPrompt} onChange={(event) => setForkPrompt(event.target.value)} placeholder="只写变化，不用重复原问题" /></label>
         </div>
         <footer>{forkError ? <span className="review-error">{forkError}</span> : <span>{highRisk ? "高风险分叉会创建全新的控制记录，旧审批不会继承。" : "复用内容会明确标记，不计入新 Run 的模型用量。"}</span>}<button className="send-button" onClick={createFork} disabled={forkBusy || forkReason.trim().length < 3}>{forkBusy ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}创建新 Run</button></footer>
-      </section>
-    </div>}
-    {memoryOpen && <div className="decision-review-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMemoryOpen(false); }}>
-      <section className="decision-review-dialog memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-title">
+    </ModalDialog>}
+    {memoryOpen && <ModalDialog className="decision-review-dialog memory-dialog" labelledBy="memory-title" onClose={() => setMemoryOpen(false)}>
         <header><div><span>USER-APPROVED MEMORY</span><h2 id="memory-title">沉淀长期记忆</h2><p>系统只提出候选；未经你逐条批准的内容永远不会跨 Run 注入。</p></div><button className="icon-button" onClick={() => setMemoryOpen(false)} aria-label="关闭长期记忆"><X size={16} /></button></header>
         <div className="memory-proposal-list">{memoryBusy && memoryProposals.length === 0 ? <p>正在生成候选…</p> : memoryProposals.map((item) => <article key={item.proposal.id} data-status={item.status}><header><span>{item.proposal.type}</span><small>{item.status === "pending" ? "待你决定" : item.status === "approved" ? "已批准" : "已拒绝"}</small></header><textarea aria-label={`记忆候选 ${item.proposal.type}`} rows={3} maxLength={3000} value={memoryDrafts[item.proposal.id] ?? item.proposal.content} disabled={item.status !== "pending" || memoryBusy} onChange={(event) => setMemoryDrafts({ ...memoryDrafts, [item.proposal.id]: event.target.value })} /><p>{item.proposal.rationale}</p>{item.status === "pending" && <footer><button className="quiet-button danger" disabled={memoryBusy} onClick={() => decideMemory(item.proposal.id, "reject")}>拒绝</button><button className="send-button" disabled={memoryBusy || !(memoryDrafts[item.proposal.id] || "").trim()} onClick={() => decideMemory(item.proposal.id, "approve")}>批准此条</button></footer>}</article>)}</div>
         <footer>{memoryError ? <span className="review-error">{memoryError}</span> : <span>批准记录与后续停用、删除操作都保留追加式审计轨迹。</span>}</footer>
-      </section>
-    </div>}
+    </ModalDialog>}
   </div>;
 }
 
@@ -732,6 +747,24 @@ function ContractExtensionView({ extension }: { extension: NonNullable<DecisionB
         <BriefSection title="迁移计划" items={extension.migration_plan} />
         <BriefSection title="回滚计划" items={extension.rollback_plan} />
         <BriefSection title="可观测性" items={extension.observability_requirements} />
+      </div>
+    </section>;
+  }
+  if (extension.contract === "medical_second_opinion" || extension.contract === "legal_risk_review" || extension.contract === "financial_decision_review") {
+    const label = {
+      medical_second_opinion: "医疗信息整理契约",
+      legal_risk_review: "法律风险梳理契约",
+      financial_decision_review: "财务决策分析契约",
+    }[extension.contract];
+    return <section className="contract-extension-card professional-contract-extension" role="region" aria-label={label}>
+      <header><strong>{label}</strong><span>已核验、未核验与专业确认边界</span></header>
+      <div className="contract-extension-grid">
+        <section className="contract-wide"><h3>本次范围</h3><p>{extension.scope}</p></section>
+        <BriefSection title="已核验信息" items={extension.verified_information} />
+        <BriefSection title="未核验信息" items={extension.unverified_information} />
+        <BriefSection title="风险因素" items={extension.risk_factors} />
+        <BriefSection title="交给专业人士的问题" items={extension.professional_questions} />
+        <section className="contract-wide contract-disclaimer"><h3>使用边界</h3><p>{extension.required_disclaimer}</p></section>
       </div>
     </section>;
   }
