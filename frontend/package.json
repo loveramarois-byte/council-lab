@@ -12,7 +12,7 @@
     "test:a11y": "playwright test accessibility.spec.ts"
   },
   "dependencies": {
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.28.0",
     "next": "^16.2.12",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
