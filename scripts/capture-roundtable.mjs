@@ -79,6 +79,7 @@ const run = {
   usage: { model_calls: 5, tool_calls: 0, input_tokens: 18320, output_tokens: 3710, duration_ms: 78240 },
   degraded: false, error: null, protocol: "responses", discussion_turns: turns, participant_roles: participants,
   current_speaker_index: 4, discussion_round: 1, awaiting_user: false,
+  high_risk_control: false,
   limits: { max_model_calls: 8, max_tokens: 40000, timeout_seconds: 120 },
   seat_assignments: assignments, template_name: "演示会话 · 示例模型配置",
   finalizer_assignment: { ...assignments[0], role: "finalizer" },
@@ -98,8 +99,9 @@ try {
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   await page.route("**/api/providers", (route) => route.fulfill({ json: [provider] }));
   await page.route("**/api/runs/showcase", (route) => route.fulfill({ json: run }));
+  await page.route("**/api/runs/showcase/decision-brief", (route) => route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "showcase fixture has no brief" }) }));
   await page.goto(`${baseURL}/runs/showcase`, { waitUntil: "networkidle" });
-  await page.getByRole("heading", { name: question }).waitFor();
+  await page.locator(".council-stage").waitFor();
   await page.addStyleTag({ content: `
     .council-stage { width: min(1320px, 100%); padding-top: 14px; }
     .council-question { grid-template-columns: 72px minmax(0, 1fr); }
@@ -114,12 +116,13 @@ try {
     .discussion-turn .rich-text { margin-top: 6px; font-size: 12.5px; line-height: 1.48; }
     .roundtable-summary { margin-top: 10px; padding: 10px 13px 12px; }
     .roundtable-summary > .rich-text { margin-top: 7px; font-size: 12.5px; line-height: 1.5; }
+    .decision-reading, .transcript-separator { display: none; }
     .completed-actions { display: none; }
   ` });
   await page.evaluate(() => document.fonts.ready);
   const layout = await page.evaluate(() => {
     const transcript = document.querySelector(".dialogue-scroll");
-    const required = [...document.querySelectorAll(".discussion-turn, .roundtable-summary")];
+    const required = [...document.querySelectorAll(".discussion-turn")];
     return {
       overflow: transcript ? transcript.scrollHeight - transcript.clientHeight : 1,
       visibleBlocks: required.filter((node) => {

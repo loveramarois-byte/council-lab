@@ -7,8 +7,8 @@
 <p align="center"><strong>Complex questions deserve more than one voice.</strong></p>
 
 <p align="center">
-  Four seats deliberate in public. You can step in at any time.<br>
-  What remains is a decision you can revisit, challenge, and act on.
+  Four distinct seats analyze and challenge one another in public.<br>
+  Once you confirm the boundaries, Council delivers a decision brief you can revisit and act on.
 </p>
 
 <p align="center">
@@ -17,36 +17,58 @@
   <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.17.0/Council-v0.17.0-Windows.zip"><strong>Download for Windows</strong></a>
 </p>
 
-<p align="center"><sub>Free and open source · Local-first · Runtime included</sub></p>
+<p align="center"><sub>Free and open source · Local-first · Try the local demo without an API key</sub></p>
 
-<p align="center"><a href="README.md">中文</a> · <a href="#your-first-run">Get started</a> · <a href="docs/INSTALL.md">Installation</a> · <a href="SECURITY.md">Security</a></p>
+<p align="center"><a href="README.md">中文</a> · <a href="#start-in-three-steps">Get started</a> · <a href="docs/INSTALL.md">Installation</a> · <a href="SECURITY.md">Security</a></p>
 
-![Council workspace: four AI seats deliberating one complex question in public](docs/images/roundtable-v2.png)
+![Council workflow: ask, challenge in public, and receive a decision brief](docs/images/council-workflow.gif)
 
-## See how a decision takes shape
+## Council in 30 seconds
 
-A regular chat gives you an answer. Council preserves the public path behind it: who made each case, who challenged it, which facts remain unverified, when to stop, and why the final recommendation was reached.
+> **Ask a real question → four seats analyze and challenge → add facts at any time → confirm and receive a `DecisionBrief`**
 
-Council never displays or stores hidden chain-of-thought. What you can inspect is the public discussion, your own interjections, and a structured `DecisionBrief`.
+Council does not stack four answers on top of each other. Later seats can respond to the public record, or independent first answers can isolate viewpoints before comparison. Disagreement, open questions, and minority views are not quietly erased by the final summary.
 
 | A regular chat | Council |
 | --- | --- |
-| One model generates one answer | Four roles analyze, challenge, build, and observe |
-| Assumptions disappear inside prose | Disagreement, limits, open issues, and minority views remain visible |
-| The model decides when it is done | The default workflow pauses for your confirmation |
+| One model generates an answer | Analyze, challenge, build, and observe in sequence |
+| Assumptions disappear inside prose | Counterexamples, limits, and open issues remain visible |
+| The model decides when it is done | The workflow pauses for your confirmation by default |
 | The result stays in chat history | Reasons, actions, stop conditions, and reopen triggers are recorded |
 
-## Your first run
+Council never displays or stores hidden chain-of-thought. What you can inspect is the public discussion, your own interjections, and the structured result.
+
+## Turn discussion into action
+
+![Council structured decision brief: from public deliberation to constraints and action conditions](docs/images/decision-brief-v2.png)
+
+Every run preserves how the decision took shape instead of leaving only a plausible-sounding conclusion:
+
+- **Public discussion:** inspect viewpoints, counterexamples, and how your additions changed later judgments.
+- **Human confirmation:** approve the final synthesis; high-risk runs cannot finalize automatically.
+- **Structured briefs:** keep reasons, open issues, actions, stop conditions, and reopen triggers separate.
+- **Evidence boundaries:** distinguish user material, model inference, and unverified claims; agreement never becomes fact.
+- **Resumable runs:** continue after a disconnect, closed window, or restart without paying to rerun completed work.
+
+## Start in three steps
 
 You do not need to understand models, providers, or workflows first.
 
 1. Download the desktop app and choose **Local Demo**. It is offline, free, and needs no API key.
-2. Ask a real question and watch the four seats respond. Interject or add facts whenever you need to.
+2. Ask a real question and watch the seats break it down. Interject or add facts whenever you need to.
 3. When you want real models, open **Settings → Model Providers** and connect CC Switch, OpenAI, or a compatible service.
+
+If you are unsure which depth to use, keep the default **Roundtable** mode. Use **Guided** for simple definitions and deterministic calculations; use **Deep** for complex strategy, material risk, and ambiguous questions.
 
 Both desktop packages include Python, Node.js, and their required dependencies. Your API key never enters Council's database, logs, or browser storage.
 
-## A deliberation you can join
+### Not sure what to ask? Start here
+
+- **Product decision:** Should we launch a paid plan within six weeks? Review user value, validation cost, failure conditions, and stop conditions.
+- **Technical plan:** What are the main failure modes in this database migration? Give staged checks, rollback steps, and a launch gate.
+- **Information review:** Sort these materials into verified facts, claims to verify, critical gaps, and questions for a qualified professional.
+
+## How the four seats work
 
 ```mermaid
 flowchart LR
@@ -62,31 +84,20 @@ flowchart LR
     U -.public context.-> F
 ```
 
-**Sequential deliberation** lets later seats read and respond to earlier turns. **Independent first answers** freeze the question and materials, collect isolated views, then compare them in public. Short definitions and deterministic calculations can use a shorter path; decisions, predictions, risks, and ambiguous questions retain the full council.
+**Sequential deliberation** lets later seats read and respond to earlier turns. **Independent first answers** freeze the question and materials, collect isolated views, then compare them in public. Every step shows the roles, models, providers, and usage actually involved.
 
-Every step shows the roles, models, providers, and usage actually involved. If you close the window, lose the connection, or restart, completed work can resume instead of being paid for again.
+## Clear boundaries for professional questions
 
-## More than a conclusion
+Council includes templates for general decisions, product reviews, architecture reviews, and medical, legal, and financial information organization. A template changes the facts it requests, the risks it surfaces, and the shape of the brief. It does not expand the product's authority.
 
-| What you get | Why it matters |
-| --- | --- |
-| Public multi-seat discussion | Inspect viewpoints, counterexamples, and your own interjections instead of trusting the last paragraph |
-| Human confirmation | You approve the final synthesis; high-risk runs cannot finalize automatically |
-| Structured briefs | Keep key reasons, open issues, actions, stop conditions, and reopen triggers separate |
-| Evidence boundaries | Distinguish user material, model inference, and unverified claims; agreement never becomes fact |
-| Local-first storage | Run data stays on the current computer by default; credentials use the OS secret store |
-| Controlled mobile access | The phone is a remote view; provider calls, keys, and the database stay on the computer |
+| Area | Council can | Council will not |
+| --- | --- | --- |
+| Medical | Organize symptoms, timelines, red flags, and questions for care | Diagnose or decide treatment |
+| Legal | Organize facts, deadlines, jurisdiction, and questions for counsel | Provide legal advice or file documents |
+| Financial | Organize goals, horizon, liquidity, fees, and risk | Give investment advice or place trades |
+| Technical | Review architecture, risk, verification, and rollback conditions | Execute production changes without approval |
 
-## Built for different questions, not omniscience
-
-Council includes templates for general decisions, product reviews, architecture reviews, and medical, legal, and financial information organization. A template changes the facts it asks for, the risks it surfaces, and the shape of the brief. It does not change the safety boundary.
-
-- Medical mode is bounded to organizing symptoms, timelines, red flags, and questions for care. It should not be used for diagnosis or treatment decisions.
-- Legal mode is bounded to organizing facts, deadlines, jurisdiction, and questions for counsel. It should not be used as legal advice.
-- Financial mode is bounded to organizing goals, time horizon, liquidity, fees, and risk. It should not be used as investment advice.
-- Missing critical facts, stale evidence, or a safety objection can block a high-risk run from producing an actionable conclusion.
-
-Professional modes support decisions; they do not replace professionals. Council does not verify licenses, prescribe medication, place trades, file legal documents, or execute production changes.
+Missing critical facts, stale evidence, or a safety objection can block a high-risk run from producing an actionable conclusion. Professional modes support decisions; they do not replace professionals. Council does not verify licenses, prescribe medication, place trades, file legal documents, or execute production changes.
 
 ## Download and install
 
@@ -100,15 +111,21 @@ Download [`Council-v0.17.0-Windows.zip`](https://github.com/loveramarois-byte/co
 
 Every formal Release includes `SHA256SUMS.txt` and GitHub build-provenance attestation. The desktop app can check for new versions and open the official Release under **Settings → Software Update**; current public builds do not execute downloaded packages in-app. Manual installation does not overwrite local history or credentials.
 
-## Where your data lives
+## Data and credentials
 
-Real providers receive your question and selected public context and may charge for requests. `Quick / Standard / Rigorous` are Council workflow tiers, not automatic aliases for an upstream model's reasoning effort.
+Real providers receive your question and selected public context and may charge for requests. `Guided / Roundtable / Deep` are Council workflow tiers, not automatic aliases for an upstream model's reasoning effort.
 
 - API keys never enter SQLite, logs, or browser storage. Desktop builds use macOS Keychain, Windows Credential Manager, or Linux Secret Service.
-- The browser talks only to the same-origin Next.js proxy. Every FastAPI route except health requires a launcher-generated internal token.
-- Run data defaults to `~/Library/Application Support/Council/data/` on macOS, `%LOCALAPPDATA%\\Council\\data\\` on Windows, and `${XDG_DATA_HOME:-~/.local/share}/council/data/` on Linux.
-- Mobile pairing lasts at most 12 hours, can be revoked on the computer, and expires when Council restarts. LAN access uses plain HTTP; do not use it on open public Wi-Fi.
+- Run records stay on the current computer by default. A paired phone is a remote interface; provider calls, keys, and the database remain on the computer.
+- Mobile pairing lasts at most 12 hours, can be revoked on the computer, and expires when Council restarts. Do not use LAN access on open public Wi-Fi.
 - Schema upgrades create a consistency backup and restore it after migration failure. This is not an off-machine backup.
+
+<details>
+<summary>Default storage paths and local service boundary</summary>
+
+Run data defaults to `~/Library/Application Support/Council/data/` on macOS, `%LOCALAPPDATA%\\Council\\data\\` on Windows, and `${XDG_DATA_HOME:-~/.local/share}/council/data/` on Linux. The browser talks only to the same-origin Next.js proxy; every FastAPI route except health requires a launcher-generated internal token.
+
+</details>
 
 Read the [security boundary](SECURITY.md), [threat model](docs/THREAT_MODEL.md), [redacted diagnostics guide](docs/DIAGNOSTICS.md), and [CC Switch integration boundary](docs/CCSWITCH_INTEGRATION.md).
 
