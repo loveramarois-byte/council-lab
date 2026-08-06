@@ -81,9 +81,9 @@ Every step shows the roles, models, providers, and usage actually involved. If y
 
 Council includes templates for general decisions, product reviews, architecture reviews, and medical, legal, and financial information organization. A template changes the facts it asks for, the risks it surfaces, and the shape of the brief. It does not change the safety boundary.
 
-- Medical mode organizes symptoms, timelines, red flags, and questions for care. It does not diagnose or choose treatment.
-- Legal mode organizes facts, deadlines, jurisdiction, and questions for counsel. It is not legal advice.
-- Financial mode organizes goals, time horizon, liquidity, fees, and risk. It is not investment advice.
+- Medical mode is bounded to organizing symptoms, timelines, red flags, and questions for care. It should not be used for diagnosis or treatment decisions.
+- Legal mode is bounded to organizing facts, deadlines, jurisdiction, and questions for counsel. It should not be used as legal advice.
+- Financial mode is bounded to organizing goals, time horizon, liquidity, fees, and risk. It should not be used as investment advice.
 - Missing critical facts, stale evidence, or a safety objection can block a high-risk run from producing an actionable conclusion.
 
 Professional modes support decisions; they do not replace professionals. Council does not verify licenses, prescribe medication, place trades, file legal documents, or execute production changes.
