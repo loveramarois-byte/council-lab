@@ -12,12 +12,15 @@ from app.store import Store
 from evals.scoring import aggregate_execution_by_contract
 
 
-def test_contract_registry_has_three_stable_contracts_and_general_default():
+def test_contract_registry_has_six_stable_contracts_and_general_default():
     contracts = list_output_contracts()
     assert [item.id for item in contracts] == [
         "general_decision",
         "product_review",
         "technical_architecture",
+        "medical_second_opinion",
+        "legal_risk_review",
+        "financial_decision_review",
     ]
     assert get_output_contract("general_decision").name == "一般决策"
     with pytest.raises(ValueError, match="输出契约不存在"):

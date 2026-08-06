@@ -273,6 +273,45 @@ def test_native_macos_shell_embeds_and_checks_the_matching_web_build():
     assert "testHealthIdentityRejectsAnotherInstallationWithTheSameWebBuild" in runtime_tests
 
 
+def test_app_store_packaging_is_sandboxed_loopback_only_and_credential_strict():
+    package_script = (ROOT / "packaging/build-macos-app-store.sh").read_text(encoding="utf-8")
+    service = (ROOT / "macos/CouncilNative/Sources/CouncilNative/ServiceController.swift").read_text(
+        encoding="utf-8"
+    )
+    outer_entitlements = (ROOT / "macos/CouncilNative/Resources/CouncilAppStore.entitlements").read_text(
+        encoding="utf-8"
+    )
+    child_entitlements = (ROOT / "macos/CouncilNative/Resources/CouncilAppStoreChild.entitlements").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'COUNCIL_APP_STORE_MODE:-preview' in package_script
+    assert 'require_identity "$APP_SIGN_IDENTITY" "Mac App Distribution"' in package_script
+    assert 'require_identity "$INSTALLER_SIGN_IDENTITY" "Mac Installer Distribution"' in package_script
+    assert "embedded.provisionprofile" in package_script
+    assert 'rm -rf "$RESOURCES/launcher"' in package_script
+    assert "source payload version" in package_script
+    assert "PrivacyInfo.xcprivacy" in package_script
+    assert "find \"$APP_PATH\" -type f -print0" in package_script
+    assert "--entitlements \"$CHILD_ENTITLEMENTS\"" in package_script
+    assert "--entitlements \"$OUTER_ENTITLEMENTS\"" in package_script
+    assert "codesign --verify --deep --strict" in package_script
+    assert "productbuild --component" in package_script
+    assert 'package-component/Council.app' in package_script
+    assert "./Council.app/Contents/MacOS/CouncilNative" in package_script
+    assert "pkgutil --check-signature" in package_script
+    assert "pkgutil --payload-files" in package_script
+
+    assert '"HOSTNAME": "127.0.0.1"' in service
+    assert '"COUNCIL_DISTRIBUTION": "app_store"' in service
+    assert 'executableURL = URL(fileURLWithPath: "/bin/zsh")' in service
+    assert "if isAppStoreDistribution" in service
+    assert "stopEmbeddedServices()" in service
+    assert "com.apple.security.app-sandbox" in outer_entitlements
+    assert "com.apple.security.files.user-selected.read-write" in outer_entitlements
+    assert "com.apple.security.inherit" in child_entitlements
+
+
 def _free_port() -> int:
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))

@@ -144,6 +144,35 @@ def test_generator_supports_all_three_statuses_without_percentage_confidence():
     assert "%" not in proceed.model_dump_json()
 
 
+@pytest.mark.parametrize(
+    ("contract_id", "contract_label", "disclaimer_fragment"),
+    [
+        ("medical_second_opinion", "医疗信息整理契约", "不构成诊断或治疗建议"),
+        ("legal_risk_review", "法律风险梳理契约", "不构成法律意见"),
+        ("financial_decision_review", "财务决策分析契约", "不构成投资、借贷、保险或税务建议"),
+    ],
+)
+def test_professional_brief_and_exports_preserve_verification_boundary(contract_id, contract_label, disclaimer_fragment):
+    run = completed_run(
+        ("analyst", "表态：部分认同。资料仍需专业人士核对。"),
+        ("challenger", "表态：反驳。关键事实尚未验证。"),
+        ("builder", "表态：部分认同。只整理可确认的问题。"),
+        ("observer", "表态：认同。保留专业判断边界。"),
+    ).model_copy(update={"output_contract": contract_id})
+
+    brief = build_decision_brief(run)
+
+    assert brief.contract_extension is not None
+    assert brief.contract_extension.contract == contract_id
+    assert brief.contract_extension.verified_information == []
+    assert brief.contract_extension.unverified_information
+    assert disclaimer_fragment in brief.contract_extension.required_disclaimer
+    for exported in (run_markdown(run, decision_brief=brief), run_html(run, decision_brief=brief)):
+        assert contract_label in exported
+        assert disclaimer_fragment in exported
+        assert "未核验信息" in exported
+
+
 async def test_decision_brief_store_is_append_only_and_idempotent(tmp_path):
     store = Store(tmp_path / "council.sqlite3")
     run = completed_run(("analyst", "初步方案"), verified=True)

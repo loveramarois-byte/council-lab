@@ -22,7 +22,7 @@ from .idempotency import execute_idempotent_model_action, execute_idempotent_run
 from .legacy import legacy_workspace_enabled, mark_legacy_response, require_legacy_workspace_write
 from .decision_lifecycle import DecisionBriefComparison, RunForkCreate, RunForkLineage, compare_briefs
 from .decision_memory import MemoryPreview, MemoryPreviewRequest, MemoryProposalDecision, MemoryProposalView, MemoryView, build_memory_proposals
-from .decision_assurance import DecisionClaimView, DecisionOutcomeRecord, ReadinessRequest, analyze_readiness
+from .decision_assurance import DecisionClaimView, DecisionOutcomeRecord, ReadinessRequest, analyze_readiness, question_requires_high_risk_control
 from .models import AgentAssignmentsConfig, AgentAssignmentsPayload, AgentModelAssignment, DecisionBrief, DecisionReview, DecisionReviewUpdate, DiscussionAction, ProjectCreate, ProjectPatch, ProjectRecord, ProjectSource, ProviderCreate, ProviderPatch, ProviderProfile, ProviderType, RunCreate, RunLimits, SourceTextCreate, SourceURLCreate, utc_now
 from .orchestrator import Orchestrator
 from .paths import database_path
@@ -34,9 +34,9 @@ from .reports import run_html, run_markdown
 from .request_boundary import load_internal_api_token, token_identifier
 from .runtime_config import assignment_config_is_valid, restore_provider_profiles, select_active_profile
 from .store import Store, serialize_public_provider
-from .templates import list_templates
-from .output_contracts import list_output_contracts
-from .updater import UpdateError, current_version, fetch_release, install_request_is_allowed, public_update_info, runtime_identity, update_manager
+from .templates import get_template, list_templates
+from .output_contracts import get_output_contract, list_output_contracts
+from .updater import UpdateError, app_store_update_info, current_version, fetch_release, install_request_is_allowed, installation_info, is_app_store_distribution, public_update_info, runtime_identity, unavailable_update_info, update_manager
 
 store = Store(database_path())
 providers = restore_provider_profiles(store.load_providers())
@@ -139,11 +139,15 @@ async def health() -> dict[str, str]:
 
 @app.get("/api/update/check")
 async def check_for_update(refresh: bool = False, x_council_request: str | None = Header(default=None)):
+    if is_app_store_distribution():
+        return app_store_update_info()
     if refresh and not install_request_is_allowed(x_council_request):
         raise HTTPException(403, "只能从 Council 软件内强制刷新版本信息。")
     try:
         return public_update_info(await fetch_release(refresh=refresh))
     except UpdateError as exc:
+        if not refresh:
+            return unavailable_update_info(str(exc))
         raise HTTPException(503, str(exc)) from exc
 
 
@@ -170,9 +174,17 @@ async def export_diagnostics(x_council_request: str | None = Header(default=None
 
 @app.post("/api/update/install")
 async def install_update(x_council_request: str | None = Header(default=None)):
+    if is_app_store_distribution():
+        raise HTTPException(409, "Mac App Store 版本只能通过 App Store 更新。")
     if not install_request_is_allowed(x_council_request):
         raise HTTPException(403, "只能从 Council 软件内启动更新。")
-    return await update_manager.start()
+    installation = installation_info()
+    if not installation.can_auto_update:
+        raise HTTPException(409, installation.reason)
+    try:
+        return await update_manager.start()
+    except UpdateError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/runs")
@@ -184,6 +196,28 @@ async def create_run(
 ):
     if not legacy_workspace_enabled() and (request.project_id or request.source_ids):
         raise HTTPException(410, "新建审议已不再接受资料空间字段；历史 Run 和不可变快照仍可读取。")
+    template = get_template(request.template_id)
+    output_contract = get_output_contract(request.output_contract)
+    if not request.high_risk and (
+        question_requires_high_risk_control(request.question)
+        or output_contract.requires_high_risk
+        or template.requires_high_risk
+    ):
+        from .errors import ApiError
+
+        raise ApiError(
+            409,
+            "HIGH_RISK_CONTROL_REQUIRED",
+            "此问题、模板或输出契约必须启用高风险决策支持，不能通过普通流程或准备度覆盖继续。",
+        )
+    if template.requires_high_risk and request.output_contract != template.default_output_contract:
+        from .errors import ApiError
+
+        raise ApiError(
+            409,
+            "TEMPLATE_OUTPUT_CONTRACT_REQUIRED",
+            f"{template.name}必须使用对应的输出契约，不能通过普通契约继续。",
+        )
     if request.use_saved_assignments and request.assignment_config is None:
         request = request.model_copy(update={"assignment_config": assignments})
     elif request.assignment_config is None:

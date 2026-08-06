@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .context import build_context_window, context_budget_for_mode, token_estimator_for
 from .decision_brief import build_decision_brief
-from .decision_assurance import ReadinessOverride, analyze_readiness, build_decision_claims
+from .decision_assurance import ReadinessOverride, analyze_readiness, build_decision_claims, question_requires_high_risk_control
 from .decision_lifecycle import RunFork, RunForkCreate, reusable_seat_count
 from .credentials import get_provider_secret
 from .models import (
@@ -37,6 +37,7 @@ from .models import (
 )
 from .output_contracts import get_output_contract
 from .providers import ModelBackend, ProviderRequestError, build_backend
+from .domain_rules import detect_risk_domains
 from .risk.schemas import HighRiskCreate
 from .risk.service import HighRiskService
 from .store import Store
@@ -157,16 +158,7 @@ def analyze_question(question: str, mode: str, token_limit: int = 40000) -> Ques
     coding_tokens = ("代码", "报错", "异常", "函数", "脚本", "调试", "python", "javascript", "typescript", " bug", "bug ")
     definition_tokens = ("一句话解释", "用一句话", "什么是", "是什么意思", "定义")
     math_request_tokens = ("计算", "算一下", "等于多少", "得多少", "结果是多少")
-    high_risk_map = {
-        "medical": ("医疗", "诊断", "用药", "病症"),
-        "legal": ("法律", "诉讼", "合同责任"),
-        "investment": ("投资", "金融", "股票", "基金", "收益率"),
-        "compliance": ("合规", "监管", "审计"),
-        "production": ("生产事故", "生产故障", "线上事故"),
-    }
-    high_risk_domains = [
-        domain for domain, tokens in high_risk_map.items() if any(token in lower for token in tokens)
-    ]
+    high_risk_domains = detect_risk_domains(normalized)
     needs_realtime = any(token in lower for token in current_tokens)
     forecast_or_ambiguous_quantity = any(token in lower for token in forecast_tokens)
     decision_or_risk = any(token in lower for token in decision_tokens)
@@ -392,6 +384,16 @@ class Orchestrator:
         seats, finalizer = self._resolve_config(request)
         analysis = analyze_question(request.question, request.mode, request.limits.max_tokens)
         readiness = analyze_readiness(request.question, high_risk=request.high_risk)
+        template = get_template(request.template_id)
+        output_contract = get_output_contract(request.output_contract)
+        if (
+            question_requires_high_risk_control(request.question)
+            or output_contract.requires_high_risk
+            or template.requires_high_risk
+        ) and not request.high_risk:
+            raise ValueError("此问题、模板或输出契约必须启用高风险控制，不能通过普通流程继续")
+        if template.requires_high_risk and request.output_contract != template.default_output_contract:
+            raise ValueError(f"{template.name}必须使用对应的输出契约")
         memory_preview = await self.store.preview_memories(request.selected_memory_ids)
         if memory_preview.excluded_memory_ids:
             raise ValueError("部分所选记忆不存在、已停用、已删除或已过期，请重新预览")
@@ -453,8 +455,15 @@ class Orchestrator:
             project_context = "\n\n".join(
                 item for item in (project_context, memory_section) if item
             )[:12_000]
-        template = get_template(request.template_id)
-        output_contract = get_output_contract(request.output_contract)
+        effective_input = "\n\n".join(
+            [
+                request.question,
+                project_context,
+                *(f"{source.title}\n{source.content}" for source in source_snapshots),
+            ]
+        )
+        if question_requires_high_risk_control(effective_input) and not request.high_risk:
+            raise ValueError("所选记忆、资料或项目上下文包含专业风险内容，必须启用高风险控制")
         run_id = str(uuid.uuid4())
         primary = seats[0]
         run = RunRecord(
@@ -1057,6 +1066,7 @@ class Orchestrator:
         template = get_template(run.template_id)
         output_contract = get_output_contract(run.output_contract)
         output_contract_guidance = output_contract.system_guidance
+        template_role_guidance = template.seat_guidance.get(participant["id"], "")
         source_instruction = (
             "已提供带 [S编号] 的资料。涉及资料中的事实时引用对应编号；没有资料支持的内容必须标为推断或未知，禁止编造来源。"
             if run.source_snapshots
@@ -1066,6 +1076,7 @@ class Orchestrator:
         system = (
             f"你是本次 {participant_count} 席圆桌中的{participant['name']}，角色是{participant['role']}：{participant['brief']}。\n"
             f"{debate_instruction}\n{role_instruction}\n本次模板要求：{template.system_guidance}\n"
+            f"本席专项职责：{template_role_guidance or '按通用席位职责工作。'}\n"
             f"本次输出契约：{output_contract_guidance}\n{source_instruction}"
             "这是用户全程可参与的公开讨论。"
             + ("独立初答阶段不要读取或回应其他席位，也不要把用户在本阶段的插话当作其他席位意见。" if run.workflow_strategy == "independent" else "必须回应记录中最新的用户插话。")
