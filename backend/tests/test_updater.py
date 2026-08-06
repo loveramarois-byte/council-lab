@@ -15,9 +15,11 @@ from app.updater import (
     Release,
     UpdateError,
     UpdateManager,
+    app_store_update_info,
     expected_package_name,
     install_request_is_allowed,
     installation_info,
+    is_app_store_distribution,
     is_newer,
     parse_checksum,
     parse_release,
@@ -161,12 +163,41 @@ def test_packaged_macos_installation_and_public_update_info(tmp_path, monkeypatc
     monkeypatch.setenv("COUNCIL_VERSION", "0.3.0")
 
     installation = installation_info()
-    assert installation.can_auto_update
+    assert installation.can_auto_update is False
     info = public_update_info(parse_release(release_payload(), "macos"))
     assert info["current_version"] == "0.3.0"
     assert info["latest_version"] == "0.4.0"
     assert info["update_available"] is True
-    assert info["can_auto_update"] is True
+    assert info["can_auto_update"] is False
+    assert "手动下载" in info["reason"]
+
+
+def test_app_store_installation_never_uses_the_direct_updater(tmp_path, monkeypatch):
+    app_root = tmp_path / "Council.app"
+    (app_root / "Contents" / "Resources").mkdir(parents=True)
+    monkeypatch.setenv("COUNCIL_DISTRIBUTION", "app_store")
+    monkeypatch.setenv("COUNCIL_PACKAGED", "1")
+    monkeypatch.setenv("COUNCIL_INSTALL_ROOT", str(app_root))
+    monkeypatch.setenv("COUNCIL_VERSION", "0.16.0")
+
+    assert is_app_store_distribution() is True
+    installation = installation_info()
+    assert installation.platform == "app_store"
+    assert installation.can_auto_update is False
+    assert "Mac App Store" in installation.reason
+    assert app_store_update_info() == {
+        "current_version": "0.16.0",
+        "latest_version": "0.16.0",
+        "update_available": False,
+        "current_is_newer": False,
+        "can_auto_update": False,
+        "installation_kind": "app_store",
+        "reason": "更新由 Mac App Store 安全提供。",
+        "release_url": "",
+        "published_at": None,
+        "notes": "",
+        "package_name": None,
+    }
 
 
 def test_auto_update_refuses_install_root_that_contains_user_data(tmp_path, monkeypatch):
@@ -396,6 +427,10 @@ async def test_update_start_reuses_active_task_and_clears_previous_result(tmp_pa
         await release_task.wait()
 
     monkeypatch.setattr("app.updater.data_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "app.updater.installation_info",
+        lambda: Installation("macos", tmp_path / "Council.app", True, True, "test-only"),
+    )
     manager = UpdateManager()
     monkeypatch.setattr(manager, "_run", blocked_run)
     await manager.start()
@@ -405,6 +440,18 @@ async def test_update_start_reuses_active_task_and_clears_previous_result(tmp_pa
     assert not result.exists()
     release_task.set()
     await first_task
+
+
+async def test_update_start_refuses_unsigned_direct_release(tmp_path, monkeypatch):
+    app_root = tmp_path / "Council.app"
+    (app_root / "Contents" / "Resources").mkdir(parents=True)
+    monkeypatch.setenv("COUNCIL_UPDATE_PLATFORM", "macos")
+    monkeypatch.setenv("COUNCIL_PACKAGED", "1")
+    monkeypatch.setenv("COUNCIL_INSTALL_ROOT", str(app_root))
+    manager = UpdateManager()
+
+    with pytest.raises(UpdateError, match="发布者签名"):
+        await manager.start()
 
 
 def test_update_status_surfaces_persisted_error_and_ignores_corrupt_result(tmp_path, monkeypatch):

@@ -176,7 +176,7 @@ async def test_readiness_override_and_review_api_are_validated_and_idempotent(tm
     )
     run = await orchestrator.start(
         RunCreate(
-            question="是否投资？",
+            question="是否调整产品发布时间？",
             provider_id="mock",
             auto_summarize=True,
             readiness_override=True,
@@ -200,7 +200,7 @@ async def test_readiness_override_and_review_api_are_validated_and_idempotent(tm
     }
     transport = httpx.ASGITransport(app=main.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8001") as client:
-        readiness = await client.post("/api/readiness", headers=headers, json={"question": "是否投资？"})
+        readiness = await client.post("/api/readiness", headers=headers, json={"question": "是否调整产品发布时间？"})
         invalid = await client.post("/api/readiness", headers=headers, json={"question": "x", "unknown": True})
         first = await client.put(f"/api/runs/{run.id}/decision-review", headers=headers, json=payload)
         replay = await client.put(f"/api/runs/{run.id}/decision-review", headers=headers, json=payload)

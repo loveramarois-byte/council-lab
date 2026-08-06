@@ -114,7 +114,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </nav>
       <div className="sidebar-bottom">
         <Link href={updateAvailable ? "/settings/update" : "/settings/providers"} aria-label={updateAvailable ? "设置，有更新" : "设置"} className={`nav-link ${pathname.startsWith("/settings") ? "active" : ""}`}><Settings2 size={17} strokeWidth={1.7} /><span>设置</span>{updateAvailable && <span className="update-badge">有更新</span>}</Link>
-        <div className="provider-presence"><span className={`presence-dot ${providerReady ? "" : "presence-muted"}`} /><div><span>{provider?.display_name || "供应商"}</span><small>{providerDetail}</small></div><CircleHelp size={15} className="muted-icon" /></div>
+        <div className="provider-presence"><span className={`presence-dot ${providerReady ? "" : "presence-muted"}`} /><div><span>{provider?.display_name || "供应商"}</span><small>{providerDetail}</small></div><Link className="provider-help" href="/settings/providers" aria-label="Provider 连接帮助" title="查看 Provider 设置"><CircleHelp size={16} /></Link></div>
       </div>
       <div className="sidebar-footnote"><BookOpen size={14} /><span>答案先于日志，证据先于共识。</span></div>
       <button className="sidebar-resize-handle" type="button" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth} title="拖动调整侧边栏宽度" onPointerDown={(event) => { if (sidebarCollapsed) return; event.preventDefault(); setResizingSidebar(true); }} onKeyDown={adjustSidebarWithKeyboard}><span className="sidebar-resize-grip"><GripVertical size={12} aria-hidden="true" /></span></button>

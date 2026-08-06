@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .models import DecisionBrief, DecisionReadiness, DecisionReview, ReadinessCheck, utc_now
+from .domain_rules import detect_professional_domains, detect_risk_domains
 
 
 TaskLabel = Literal[
@@ -20,6 +21,24 @@ TaskLabel = Literal[
     "needs_calculation",
     "high_risk",
 ]
+
+PROFESSIONAL_CLARIFICATIONS: dict[str, tuple[str, ...]] = {
+    "medical": (
+        "请补充诊断或疑似诊断、检查结果与日期、当前治疗和全部用药。",
+        "是否存在需要立即就医的红旗症状？哪些问题必须由主治医师确认？",
+    ),
+    "legal": (
+        "请补充适用国家、地区和具体司法辖区，以及关键日期和程序阶段。",
+        "请提供合同或通知原文，并说明希望由执业律师确认的具体风险。",
+    ),
+    "investment": (
+        "请补充金额、币种、期限、现金流、费用税务和计算口径。",
+        "请明确可承受的最大损失、流动性需求和需要专业顾问确认的问题。",
+    ),
+}
+
+def question_requires_high_risk_control(question: str) -> bool:
+    return bool(detect_risk_domains(question))
 ClaimBasis = Literal[
     "user_provided",
     "model_inference",
@@ -105,11 +124,13 @@ def analyze_readiness(question: str, *, high_risk: bool = False) -> DecisionRead
     labels: list[TaskLabel] = []
     decision_terms = ("是否", "应该", "选择", "方案", "取舍", "决定", "还是", "should", "choose", "decision")
     current_terms = ("最新", "现在", "目前", "今天", "今日", "实时", "latest", "current", "today")
-    risk_terms = ("医疗", "法律", "投资", "金融", "合规", "生产事故", "medical", "legal", "financial", "compliance")
+    risk_terms = ("合规", "生产事故", "compliance", "production incident")
     calculation_terms = ("计算", "多少", "合计", "概率", "calculate", "how many")
     creative_terms = ("写一", "创作", "故事", "文案", "口号", "creative", "story")
     is_decision = any(term in lower for term in decision_terms)
-    is_high_risk = high_risk or any(term in lower for term in risk_terms)
+    risk_domains = detect_risk_domains(text)
+    professional_domains = [domain for domain in risk_domains if domain in PROFESSIONAL_CLARIFICATIONS]
+    is_high_risk = high_risk or bool(risk_domains) or any(term in lower for term in risk_terms)
     if is_decision:
         labels.append("decision")
     elif len(text) <= 30:
@@ -151,13 +172,16 @@ def analyze_readiness(question: str, *, high_risk: bool = False) -> DecisionRead
         status="pass" if any(term in lower for term in success_terms) else ("warning" if is_decision else "pass"),
         message="已看到成功标准。" if any(term in lower for term in success_terms) else "可补充怎样才算成功，便于输出可验收行动。",
     ))
-    critical_status: Literal["pass", "warning", "fail"] = "fail" if is_high_risk and len(text) < 80 else ("warning" if is_high_risk else "pass")
+    critical_status: Literal["pass", "warning", "fail"] = "fail" if is_high_risk else "pass"
     checks.append(ReadinessCheck(
         id="critical_facts_available",
         status=critical_status,
-        message="高风险问题仍需在控制面逐项确认关键事实。" if is_high_risk else "当前未触发高风险关键事实门禁。",
+        message="高风险问题必须进入控制面逐项确认关键事实。" if is_high_risk else "当前未触发高风险关键事实门禁。",
     ))
     questions = [item.message for item in checks if item.status in {"warning", "fail"}]
+    for domain in professional_domains:
+        questions.extend(PROFESSIONAL_CLARIFICATIONS[domain])
+    questions = list(dict.fromkeys(questions))
     ready = all(item.status != "fail" for item in checks)
     recommended = "high_risk_council" if is_high_risk else "full_council" if is_decision else "direct" if "simple_answer" in labels else "quick_council"
     return DecisionReadiness(

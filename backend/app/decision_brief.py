@@ -12,11 +12,13 @@ from .models import (
     MinorityReport,
     ProductReviewExtension,
     ProductValidationExperiment,
+    ProfessionalDomainExtension,
     ReopenTrigger,
     RunRecord,
     TechnicalArchitectureExtension,
     UnresolvedIssue,
 )
+from .output_contracts import get_output_contract
 
 
 AGREE_MARKERS = ("表态：认同", "表态:认同")
@@ -203,6 +205,34 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
             migration_plan=[item.action for item in actions],
             rollback_plan=["关键约束、故障模式或验证结果触发重开条件时，停止推进并恢复到已验证状态。"],
             observability_requirements=["迁移前定义关键健康指标、错误率、延迟、容量和告警阈值，并保留可复盘记录。"],
+        )
+    elif run.output_contract in {"medical_second_opinion", "legal_risk_review", "financial_decision_review"}:
+        professional_questions = {
+            "medical_second_opinion": [
+                "哪些信息或检查结果会改变主治医师的判断？",
+                "当前方案的目标、替代路径和需要立即就医的红旗是什么？",
+            ],
+            "legal_risk_review": [
+                "适用司法辖区、时效和程序阶段会怎样改变风险判断？",
+                "哪些原文、证据或权利义务必须由执业律师核对？",
+            ],
+            "financial_decision_review": [
+                "费用、税务、现金流和最坏情景的计算口径是否完整？",
+                "这个方案是否符合损失承受力与流动性需求，应由谁核验？",
+            ],
+        }[run.output_contract]
+        contract = get_output_contract(run.output_contract)
+        contract_extension = ProfessionalDomainExtension(
+            contract=run.output_contract,
+            scope=run.question,
+            verified_information=_deduplicate(decision.verified_claims),
+            unverified_information=unverified,
+            risk_factors=_deduplicate([
+                *decision.risks_and_limitations,
+                *(item.issue for item in unresolved),
+            ]),
+            professional_questions=professional_questions,
+            required_disclaimer=contract.required_disclaimer or "必须由相应领域专业人员复核。",
         )
     else:
         contract_extension = GeneralDecisionExtension(

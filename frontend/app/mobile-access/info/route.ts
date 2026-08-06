@@ -21,6 +21,12 @@ export async function GET(request: Request) {
     return Response.json({ detail: "手机连接信息只在电脑端显示" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
   const port = process.env.PORT || "3000";
+  if (process.env.COUNCIL_DISTRIBUTION === "app_store") {
+    return Response.json(
+      { enabled: false, distribution: "app_store", lanAddress: "", origin: "", pairUrl: "", ...mobileSessionSummary() },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
   const lanAddress = process.env.COUNCIL_MOBILE_HOST || findLanAddress();
   const origin = lanAddress ? `http://${lanAddress}:${port}` : "";
   const pairUrl = origin ? `${origin}/pair#mobile:${encodeURIComponent(mobileToken)}` : "";

@@ -33,6 +33,15 @@ test("用户批准记忆后可在新 Run 前预览并明确选择注入", async 
   await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
   await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: { schema_version: 2, seats: ["analyst", "challenger", "builder", "observer"].map(assignment), finalizer: assignment("finalizer") } }));
   await page.route("**/api/templates", (route) => route.fulfill({ json: [{ id: "open_discussion", name: "开放讨论", description: "依次讨论", prompt_hint: "写下需要四席共同审议的问题", system_guidance: "" }] }));
+  await page.route("**/api/readiness", (route) => route.fulfill({
+    json: {
+      ready: true,
+      task_labels: ["decision"],
+      checks: [],
+      clarification_questions: [],
+      recommended_mode: "full_council",
+    },
+  }));
   await page.route("**/api/memory", (route) => route.fulfill({ json: approved ? [memoryView] : [] }));
   await page.route("**/api/memory/preview", (route) => {
     const ids = route.request().postDataJSON().selected_memory_ids as string[];

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 import WebKit
 
 @MainActor
@@ -15,6 +16,14 @@ final class ServiceController: ObservableObject {
     @Published private(set) var entryURL: URL?
 
     private var startupTask: Task<Void, Never>?
+    private var backendProcess: Process?
+    private var frontendProcess: Process?
+    private var backendLogHandle: FileHandle?
+    private var frontendLogHandle: FileHandle?
+
+    private var isAppStoreDistribution: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "CouncilDistribution") as? String == "app-store"
+    }
 
     deinit {
         startupTask?.cancel()
@@ -30,13 +39,20 @@ final class ServiceController: ObservableObject {
         startupTask?.cancel()
         startupTask = nil
         entryURL = nil
+        if isAppStoreDistribution {
+            stopEmbeddedServices()
+        }
         start()
     }
 
+    func stop() {
+        startupTask?.cancel()
+        startupTask = nil
+        stopEmbeddedServices()
+    }
+
     func openLogs() {
-        let logs = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Council", isDirectory: true)
-        NSWorkspace.shared.open(logs)
+        NSWorkspace.shared.open(logDirectoryURL())
     }
 
     private func startOrReuseService() async {
@@ -46,9 +62,14 @@ final class ServiceController: ObservableObject {
         }
 
         do {
-            let launcher = try resolveLauncher(named: "start-council.sh")
-            try await launch(script: launcher)
+            if isAppStoreDistribution {
+                try launchEmbeddedServices()
+            } else {
+                let launcher = try resolveLauncher(named: "start-council.sh")
+                try await launch(script: launcher)
+            }
         } catch {
+            stopEmbeddedServices()
             state = .failed(error.localizedDescription)
             startupTask = nil
             return
@@ -125,8 +146,10 @@ final class ServiceController: ObservableObject {
     }
 
     private func expectedInternalAPIID() -> String? {
-        let tokenFile = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Council/backend-access.token")
+        let tokenFile = isAppStoreDistribution
+            ? tokenDirectoryURL().appendingPathComponent("backend-access.token")
+            : FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/Council/backend-access.token")
         guard let token = try? String(contentsOf: tokenFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), token.count >= 32 else {
             return nil
@@ -154,7 +177,7 @@ final class ServiceController: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = [script.path]
-        process.currentDirectoryURL = script.deletingLastPathComponent()
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
         var environment = ProcessInfo.processInfo.environment
         environment["COUNCIL_NO_BROWSER"] = "1"
         process.environment = environment
@@ -177,9 +200,178 @@ final class ServiceController: ObservableObject {
         }
     }
 
+    private func launchEmbeddedServices() throws {
+        guard let resources = Bundle.main.resourceURL else {
+            throw CouncilServiceError.embeddedRuntimeMissing
+        }
+        let backendURL = resources
+            .appendingPathComponent("backend/council-backend/council-backend")
+        let nodeURL = resources.appendingPathComponent("runtime/node")
+        let webURL = resources.appendingPathComponent("web", isDirectory: true)
+        let serverURL = webURL.appendingPathComponent("server.js")
+        guard FileManager.default.isExecutableFile(atPath: backendURL.path),
+              FileManager.default.isExecutableFile(atPath: nodeURL.path),
+              FileManager.default.fileExists(atPath: serverURL.path),
+              let webBuildID = bundledWebBuildID(),
+              let version = Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+              ) as? String, !version.isEmpty else {
+            throw CouncilServiceError.embeddedRuntimeMissing
+        }
+
+        let applicationSupport = applicationSupportURL()
+        let dataDirectory = applicationSupport.appendingPathComponent("data", isDirectory: true)
+        let tokens = tokenDirectoryURL()
+        let logs = logDirectoryURL()
+        for directory in [applicationSupport, dataDirectory, tokens, logs] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+
+        let internalToken = try readOrCreateToken(
+            at: tokens.appendingPathComponent("backend-access.token")
+        )
+        let desktopToken = try readOrCreateToken(
+            at: tokens.appendingPathComponent("desktop-access.token")
+        )
+        // The session key is deliberately ephemeral. App Store builds expose no LAN listener or mobile token file.
+        let localSessionToken = try randomToken()
+        let appRoot = Bundle.main.bundleURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL.path
+        let runtimeID = CouncilRuntimeIdentity.packaged(appRoot: appRoot, version: version)
+
+        var commonEnvironment = ProcessInfo.processInfo.environment
+        commonEnvironment.merge([
+            "COUNCIL_PACKAGED": "1",
+            "COUNCIL_DISTRIBUTION": "app_store",
+            "COUNCIL_DATA_DIR": dataDirectory.path,
+            "COUNCIL_LOG_DIR": logs.path,
+            "COUNCIL_INSTALL_ROOT": appRoot,
+            "COUNCIL_VERSION": version,
+            "COUNCIL_RUNTIME_ID": runtimeID,
+            "COUNCIL_WEB_BUILD_ID": webBuildID,
+            "COUNCIL_INTERNAL_API_TOKEN": internalToken,
+        ]) { _, new in new }
+
+        let backendLog = try logHandle(at: logs.appendingPathComponent("backend.log"))
+        let frontendLog = try logHandle(at: logs.appendingPathComponent("frontend.log"))
+        let backend = Process()
+        backend.executableURL = backendURL
+        backend.currentDirectoryURL = backendURL.deletingLastPathComponent()
+        backend.environment = commonEnvironment
+        backend.standardInput = FileHandle.nullDevice
+        backend.standardOutput = backendLog
+        backend.standardError = backendLog
+
+        let frontend = Process()
+        frontend.executableURL = nodeURL
+        frontend.arguments = [serverURL.path]
+        frontend.currentDirectoryURL = webURL
+        frontend.environment = commonEnvironment.merging([
+            "HOSTNAME": "127.0.0.1",
+            "PORT": "3000",
+            "NODE_ENV": "production",
+            "COUNCIL_DESKTOP_TOKEN": desktopToken,
+            "COUNCIL_REMOTE_TOKEN": localSessionToken,
+        ]) { _, new in new }
+        frontend.standardInput = FileHandle.nullDevice
+        frontend.standardOutput = frontendLog
+        frontend.standardError = frontendLog
+
+        backendProcess = backend
+        frontendProcess = frontend
+        backendLogHandle = backendLog
+        frontendLogHandle = frontendLog
+        do {
+            try backend.run()
+            try frontend.run()
+        } catch {
+            stopEmbeddedServices()
+            throw error
+        }
+    }
+
+    private func stopEmbeddedServices() {
+        for process in [frontendProcess, backendProcess] where process?.isRunning == true {
+            process?.terminate()
+        }
+        frontendProcess = nil
+        backendProcess = nil
+        try? frontendLogHandle?.close()
+        try? backendLogHandle?.close()
+        frontendLogHandle = nil
+        backendLogHandle = nil
+    }
+
+    private func applicationSupportURL() -> URL {
+        let root = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return root.appendingPathComponent("Council", isDirectory: true)
+    }
+
+    private func tokenDirectoryURL() -> URL {
+        applicationSupportURL().appendingPathComponent("runtime", isDirectory: true)
+    }
+
+    private func logDirectoryURL() -> URL {
+        if !isAppStoreDistribution {
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/Council", isDirectory: true)
+        }
+        let library = FileManager.default.urls(
+            for: .libraryDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")
+        return library.appendingPathComponent("Logs/Council", isDirectory: true)
+    }
+
+    private func readOrCreateToken(at url: URL) throws -> String {
+        if let token = try? String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), token.count >= 32 {
+            return token
+        }
+        let token = try randomToken()
+        try Data("\(token)\n".utf8).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
+        return token
+    }
+
+    private func randomToken() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = bytes.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+        }
+        guard status == errSecSuccess else {
+            throw CouncilServiceError.tokenCreationFailed
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func logHandle(at url: URL) throws -> FileHandle {
+        if !FileManager.default.fileExists(atPath: url.path) {
+            guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+                throw CouncilServiceError.logCreationFailed
+            }
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        return handle
+    }
+
     private func pairDesktopSession() async -> Bool {
-        let tokenFile = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/Council/desktop-access.token")
+        let tokenFile = isAppStoreDistribution
+            ? tokenDirectoryURL().appendingPathComponent("desktop-access.token")
+            : FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/Council/desktop-access.token")
         guard let token = try? String(contentsOf: tokenFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines), token.count >= 32,
             let url = URL(string: "http://127.0.0.1:3000/mobile-access/pair") else {
@@ -229,6 +421,9 @@ final class ServiceController: ObservableObject {
 private enum CouncilServiceError: LocalizedError {
     case launcherMissing
     case launcherFailed(Int32)
+    case embeddedRuntimeMissing
+    case tokenCreationFailed
+    case logCreationFailed
 
     var errorDescription: String? {
         switch self {
@@ -236,6 +431,12 @@ private enum CouncilServiceError: LocalizedError {
             "没有找到 Council 运行服务。请重新构建应用，或确认项目文件夹仍在原位置。"
         case .launcherFailed(let status):
             "Council 本机服务启动失败（状态码 \(status)）。请查看日志中的具体错误。"
+        case .embeddedRuntimeMissing:
+            "Council App Store 运行组件不完整，请从 Mac App Store 重新安装。"
+        case .tokenCreationFailed:
+            "Council 无法创建本机安全令牌。"
+        case .logCreationFailed:
+            "Council 无法创建本机日志文件。"
         }
     }
 }

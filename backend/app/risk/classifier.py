@@ -1,17 +1,10 @@
 from __future__ import annotations
 
+from ..domain_rules import match_risk_domains
 from .schemas import RequiredFact, RiskAssessment
 
 
-CLASSIFIER_VERSION = "high-risk-rules-v2"
-
-DOMAIN_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("medical", ("医疗", "诊断", "症状", "用药", "药物", "急救", "medical", "diagnosis", "medication")),
-    ("legal", ("法律", "诉讼", "合同", "律师", "法域", "legal", "lawsuit", "jurisdiction")),
-    ("investment", ("投资", "证券", "股票", "基金", "加密资产", "杠杆", "investment", "trading", "portfolio")),
-    ("compliance", ("合规", "监管", "审计例外", "政策豁免", "compliance", "regulatory")),
-    ("production_incident", ("生产事故", "线上事故", "生产环境", "回滚", "数据库泄漏", "incident", "outage", "production")),
-)
+CLASSIFIER_VERSION = "high-risk-rules-v3"
 
 CRITICAL_MARKERS = (
     "紧急", "立即", "急救", "自杀", "大出血", "删除证据", "数据泄漏",
@@ -21,14 +14,20 @@ CRITICAL_MARKERS = (
 DOMAIN_FACTS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "medical": (
         ("medical_context", "医疗背景", "年龄、症状时间线、关键病史、当前用药和过敏情况。"),
+        ("medical_diagnosis_evidence", "诊断与检查依据", "诊断或疑似诊断、检查原文、检查日期和医疗机构。"),
+        ("medical_treatment_plan", "当前治疗计划", "当前治疗、剂量、疗程和主治医师已说明的目标与风险。"),
         ("medical_red_flags", "紧急红旗", "是否存在需要立即就医或急救的红旗症状。"),
     ),
     "legal": (
         ("legal_jurisdiction", "司法辖区", "适用国家、地区和具体司法辖区。"),
+        ("legal_source_document", "文件与核心条款", "合同、通知或裁判文书的完整原文、签署主体和核心条款。"),
         ("legal_timeline", "事项时间与阶段", "关键日期、程序阶段和适用规则版本。"),
     ),
     "investment": (
+        ("investment_decision_type", "财务决策类型", "投资、借贷、保险或其他类型，以及当事方和产品名称。"),
+        ("investment_amounts", "金额与计算口径", "金额、币种、期限、年化或月化、税前或税后、费用和现金流。"),
         ("investment_constraints", "投资约束", "目标、期限、流动性、损失承受力、杠杆和集中度。"),
+        ("investment_maximum_loss", "最大损失", "可承受的最大损失金额或比例，以及触发停止的条件。"),
         ("investment_data_time", "数据时间戳", "价格和财务数据的来源与时间。"),
     ),
     "compliance": (
@@ -47,10 +46,7 @@ DOMAIN_FACTS: dict[str, tuple[tuple[str, str, str], ...]] = {
 
 def assess_risk(question: str, run_id: str) -> RiskAssessment:
     lower = question.casefold()
-    matched = {
-        domain: [marker for marker in markers if marker in lower]
-        for domain, markers in DOMAIN_RULES
-    }
+    matched = match_risk_domains(question)
     domains = [domain for domain, markers in matched.items() if markers]
     if not domains:
         domains = ["general_high_risk"]

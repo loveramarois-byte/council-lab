@@ -36,7 +36,7 @@ export default function DiagnosticsSettingsPage() {
 
   return <div className="page-wrap simple-settings">
     <header className="topbar"><div><Link href="/settings/providers" className="back-link"><ArrowLeft size={15} />设置</Link><span className="top-title">诊断与支持</span></div></header>
-    <div className="settings-heading"><p className="eyebrow terracotta">DIAGNOSTICS / 09</p><h1>把问题说清楚，不把隐私带出去。</h1><p>生成一份可交给维护者的脱敏诊断包，用于定位安装、存储、Provider 和运行环境问题。</p></div>
+    <div className="settings-heading"><p className="eyebrow terracotta">脱敏诊断</p><h1>把问题说清楚，不把隐私带出去。</h1><p>生成一份可交给维护者的脱敏诊断包，用于定位安装、存储、Provider 和运行环境问题。</p></div>
     <div className="privacy-list">
       <div><Activity size={17} /><span><strong>运行与存储检查</strong><small>包含版本、平台、数据库完整性、记录数量和 Provider 就绪状态。</small></span></div>
       <div><ShieldCheck size={17} /><span><strong>默认脱敏</strong><small>不包含问题、回答、资料正文、日志内容、API Key、Cookie、配对令牌、用户名或本机路径。</small></span></div>

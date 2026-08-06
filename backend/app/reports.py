@@ -86,6 +86,23 @@ def _contract_extension_markdown(brief: DecisionBrief) -> list[str]:
         for item in extension.alternatives:
             lines.append(f"- 备选架构：{item.option}；取舍：{'；'.join(item.tradeoffs)}")
         return [*lines, ""]
+    if extension.contract in {"medical_second_opinion", "legal_risk_review", "financial_decision_review"}:
+        labels = {
+            "medical_second_opinion": "医疗信息整理契约",
+            "legal_risk_review": "法律风险梳理契约",
+            "financial_decision_review": "财务决策分析契约",
+        }
+        lines = [f"### {labels[extension.contract]}", "", f"- 范围：{extension.scope}"]
+        sections = (
+            ("已核验信息", extension.verified_information),
+            ("未核验信息", extension.unverified_information),
+            ("风险因素", extension.risk_factors),
+            ("专业确认问题", extension.professional_questions),
+        )
+        for label, values in sections:
+            lines.extend(f"- {label}：{item}" for item in values)
+        lines.extend([f"- 免责声明：{extension.required_disclaimer}", ""])
+        return lines
     return [
         "### 一般决策契约",
         "",
@@ -294,6 +311,21 @@ def _contract_extension_html(brief: DecisionBrief) -> str:
             f"<h4>迁移计划</h4>{items(extension.migration_plan)}"
             f"<h4>回滚计划</h4>{items(extension.rollback_plan)}"
             f"<h4>可观测性</h4>{items(extension.observability_requirements)}</section>"
+        )
+    if extension.contract in {"medical_second_opinion", "legal_risk_review", "financial_decision_review"}:
+        labels = {
+            "medical_second_opinion": "医疗信息整理契约",
+            "legal_risk_review": "法律风险梳理契约",
+            "financial_decision_review": "财务决策分析契约",
+        }
+        return (
+            f"<section class='contract-extension'><h3>{escape(labels[extension.contract])}</h3>"
+            f"<p><strong>范围：</strong>{escape(extension.scope)}</p>"
+            f"<h4>已核验信息</h4>{items(extension.verified_information)}"
+            f"<h4>未核验信息</h4>{items(extension.unverified_information)}"
+            f"<h4>风险因素</h4>{items(extension.risk_factors)}"
+            f"<h4>专业确认问题</h4>{items(extension.professional_questions)}"
+            f"<p><strong>免责声明：</strong>{escape(extension.required_disclaimer)}</p></section>"
         )
     return (
         "<section class='contract-extension'><h3>一般决策契约</h3>"

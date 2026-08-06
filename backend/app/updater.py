@@ -78,6 +78,10 @@ def runtime_identity() -> str:
     return os.getenv("COUNCIL_RUNTIME_ID", "development").strip() or "development"
 
 
+def is_app_store_distribution() -> bool:
+    return os.getenv("COUNCIL_DISTRIBUTION", "").strip().lower() == "app_store"
+
+
 def version_key(value: str) -> tuple[int, int, int]:
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
     if not match:
@@ -101,6 +105,8 @@ def installation_info() -> Installation:
     packaged = os.getenv("COUNCIL_PACKAGED", "") == "1" or bool(getattr(sys, "frozen", False))
     root = Path(root_value).expanduser().resolve() if root_value else None
 
+    if is_app_store_distribution():
+        return Installation("app_store", root, packaged, False, "更新由 Mac App Store 安全提供。")
     if platform not in {"macos", "windows"}:
         return Installation(platform, root, packaged, False, "当前系统暂不支持应用内安装。")
     if not packaged or root is None:
@@ -111,7 +117,13 @@ def installation_info() -> Installation:
         return Installation(platform, root, packaged, False, "没有识别到完整的 Windows 安装目录。")
     if data_dir().resolve().is_relative_to(root):
         return Installation(platform, root, packaged, False, "数据目录位于应用目录内部；为避免覆盖数据，请手动安装新版到独立目录。")
-    return Installation(platform, root, packaged, True, "可以在软件内完成更新。")
+    return Installation(
+        platform,
+        root,
+        packaged,
+        False,
+        "当前公开构建没有可独立验证的发布者签名；请打开官方 Release 手动下载并安装。",
+    )
 
 
 def expected_package_name(version: str, platform: str) -> str | None:
@@ -181,6 +193,7 @@ def public_update_info(release: Release) -> dict[str, Any]:
         "current_version": installed,
         "latest_version": release.version,
         "update_available": available,
+        "current_is_newer": is_newer(installed, release.version),
         "can_auto_update": installation.can_auto_update and package_ready,
         "installation_kind": installation.platform if installation.packaged else "development",
         "reason": installation.reason if package_ready else "该版本缺少当前系统安装包或校验文件。",
@@ -188,6 +201,42 @@ def public_update_info(release: Release) -> dict[str, Any]:
         "published_at": release.published_at,
         "notes": release.notes[:4000],
         "package_name": release.package_name,
+    }
+
+
+def app_store_update_info() -> dict[str, Any]:
+    installed = current_version()
+    return {
+        "current_version": installed,
+        "latest_version": installed,
+        "update_available": False,
+        "current_is_newer": False,
+        "can_auto_update": False,
+        "installation_kind": "app_store",
+        "reason": "更新由 Mac App Store 安全提供。",
+        "release_url": "",
+        "published_at": None,
+        "notes": "",
+        "package_name": None,
+    }
+
+
+def unavailable_update_info(error: str) -> dict[str, Any]:
+    installed = current_version()
+    installation = installation_info()
+    return {
+        "current_version": installed,
+        "latest_version": installed,
+        "update_available": False,
+        "current_is_newer": False,
+        "can_auto_update": False,
+        "installation_kind": installation.platform if installation.packaged else "development",
+        "reason": "暂时无法确认最新版本；当前版本仍可正常使用。",
+        "release_url": RELEASE_PAGE,
+        "published_at": None,
+        "notes": "",
+        "package_name": None,
+        "check_error": error,
     }
 
 
@@ -279,6 +328,9 @@ class UpdateManager:
         async with self._lock:
             if self._task and not self._task.done():
                 return self.status()
+            installation = installation_info()
+            if not installation.can_auto_update:
+                raise UpdateError(installation.reason)
             result_path = data_dir() / "updates" / "last-result.json"
             result_path.unlink(missing_ok=True)
             self._state = {"phase": "checking", "progress": 0, "message": "正在确认最新版。", "target_version": None, "error": None}
@@ -304,12 +356,12 @@ class UpdateManager:
     async def _run(self) -> None:
         try:
             installation = installation_info()
+            if not installation.can_auto_update or installation.root is None:
+                raise UpdateError(installation.reason)
             release = await fetch_release(refresh=True)
             self._state["target_version"] = release.version
             if not is_newer(release.version, current_version()):
                 raise UpdateError("当前已经是最新版。")
-            if not installation.can_auto_update or installation.root is None:
-                raise UpdateError(installation.reason)
             if not release.package_name or not release.package_url or not release.checksum_url:
                 raise UpdateError("最新版缺少当前系统安装包或 SHA256 校验文件。")
 

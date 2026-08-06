@@ -13,10 +13,10 @@ Council Lab 采用本地优先的 FastAPI + Next.js 架构。浏览器只访问�
 | Immutable Run forks | Current | 完成 Run 可创建新情景 Run；父 Run、发言、审批和审计不改写，复用发言和新调用分开记录。 |
 | Approved decision memory | Current | 记忆候选、用户批准动作和实际注入快照均独立持久化；未批准或未明确选择的内容不会跨 Run 注入。 |
 | Readiness and claim provenance | Current | 审议前执行多标签准备度检查；主张、引用、席位争议和后续结果使用独立追加式记录，不从共识推导事实状态。 |
-| Output contracts | Current | 一般决策、产品评审和技术架构评审复用固定四席与同一安全控制，只改变检查项、Prompt 指导和结构化结果字段。 |
+| Output contracts | Current | 一般决策、产品评审、技术架构评审以及医疗、法律和财务信息整理复用固定四席与同一安全控制，只改变检查项、Prompt 指导和结构化结果字段；专业契约额外强制高风险控制和免责声明。 |
 | High-risk control plane | P0, non-binding | 独立状态机、关键事实门禁、人工审批和追加式审计已实现；不执行外部动作，也没有证据核验或专业身份系统。 |
 | Run event replay | Current | 事件写入业务库并使用单调序号；SSE 支持 `Last-Event-ID` 重放和独立多订阅者。 |
-| Mobile access | Current, local network only | 使用短期签名会话、失败限速、同源校验和手工撤销；普通 HTTP 仍只适用于可信私有网络。 |
+| Mobile access | Direct distribution only | GitHub 直发版使用短期签名会话、失败限速、同源校验和手工撤销；普通 HTTP 仍只适用于可信私有网络。App Store 版只监听 loopback 并禁用手机配对。 |
 | Diagnostics | Current, metadata only | 用户手工导出的 ZIP 只含白名单运行元数据，不含对话、日志正文、凭据、令牌、模型名或主机路径。 |
 | Legacy workspace | Compatibility only | 旧项目、来源和快照保留用于历史读取；当前 UI 和新建审议不再使用该能力。 |
 | Evaluation framework | Experimental | 数据集和评分脚本不构成多席优于单模型的产品声明。 |
@@ -38,7 +38,7 @@ Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `stru
 
 `DecisionBrief v1` 复用已经持久化的最终综合和公开席位表态，不增加 Provider 调用，也不从 Markdown 反向解析字段。`support` 只表达可观察到的席位支持，不是事实概率；阻塞矛盾禁止与无条件 `proceed` 共存，明确反对必须生成少数意见。最终综合先写入 Run，再固化独立简报；简报校验或持久化失败时，Run 回到 `awaiting_final_input`，保留综合结果并允许不重复模型调用地重试。旧完成 Run 不自动生成或回填简报，API 返回稳定的 `DECISION_BRIEF_NOT_FOUND`，界面和导出继续兼容原始最终答案。
 
-新完成 Run 使用 `DecisionBrief schema v2` 固化 `output_contract` 与对应的强类型扩展。一般决策记录决策标准和关键取舍；产品评审记录目标用户、用户问题、价值、失败条件、验证实验和停止条件；技术架构评审记录需求、约束、方案、故障模式、迁移、回滚和可观测性。扩展由已保存问题、公开总结和 v1 字段确定性投影，不增加 Provider 调用；其中通用验证方法和阈值占位必须被视为待用户补充，不能冒充真实实验结果。历史 v1 简报按默认一般决策继续读取。
+新完成 Run 使用 `DecisionBrief schema v2` 固化 `output_contract` 与对应的强类型扩展。一般决策记录决策标准和关键取舍；产品评审记录目标用户、用户问题、价值、失败条件、验证实验和停止条件；技术架构评审记录需求、约束、方案、故障模式、迁移、回滚和可观测性。医疗、法律和财务契约使用 `ProfessionalDomainExtension` 分开记录已核验信息、未核验信息、风险因素、需向专业人士确认的问题和固定免责声明。扩展由已保存问题、公开总结和 v1 字段确定性投影，不增加 Provider 调用；其中通用验证方法和阈值占位必须被视为待用户补充，不能冒充真实实验结果。历史 v1 简报按默认一般决策继续读取。
 
 情景分叉只接受已完成且已有最终答案的父 Run。`before_deliberation` 可改变模式；复用席位时要求父子模式和席位前缀完全一致，不存在的 checkpoint 会被拒绝而不是静默降级。子 Run 从零累计 usage，复用 Turn 在子快照中带 `reused_from_run_id`，原 Turn ID 同时记录在 `run_forks`。创建接口使用持久幂等键，断线重试不会重复创建或重复计费。高风险父 Run 的审批从不继承；子 Run 在任务启动前创建新的高风险控制记录，后续落库失败时保持阻断。旧 Run 若没有结构化简报仍可创建新情景，但要等父子双方都有简报后才提供结构化比较。
 
@@ -56,7 +56,7 @@ Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `stru
 
 业务记录和 checkpoint 分库，避免两个写入器争用同一个 SQLite 写锁。启动时扫描 `queued` 与 `running` Run：存在有效 checkpoint 且凭据可用时，工作流使用同一 `thread_id` 续跑；业务库已完整保存的席位会被跳过，避免 checkpoint 落后造成重复计费。缺少 checkpoint 或凭据时不回退 Mock，而是进入带原因的可恢复失败状态。`awaiting_final_input` 会保持等待，不会在重启后自行总结。
 
-业务库使用 `PRAGMA user_version` 执行顺序迁移，当前 schema 为 v9。打开已有且版本较旧的库时，先通过 SQLite backup API 在同一数据目录的 `backups/` 创建一致性副本，再在事务中逐版本升级；失败时关闭连接、移除 WAL/SHM sidecar 并恢复副本。只保留最近 5 份 schema 迁移备份，诊断数据同时报告当前/支持版本和备份数量。该机制用于升级回滚，不替代用户自己的异机备份。旧版本不理解 v9；需要降级时必须先停止 Council，再恢复升级前备份及其匹配的 checkpoint 文件。
+业务库使用 `PRAGMA user_version` 执行顺序迁移，当前 schema 为 v13。打开已有且版本较旧的库时，先通过 SQLite backup API 在同一数据目录的 `backups/` 创建一致性副本，再在事务中逐版本升级；失败时关闭连接、移除 WAL/SHM sidecar 并恢复副本。只保留最近 5 份 schema 迁移备份，诊断数据同时报告当前/支持版本和备份数量。该机制用于升级回滚，不替代用户自己的异机备份。旧版本不理解 v13；需要降级时必须先停止 Council，再恢复升级前备份及其匹配的 checkpoint 文件。
 
 上下文管理将不可变的完整公开日志与每次模型调用使用的工作上下文分离。工作上下文始终优先保留原始问题、最新用户插话和最近发言；超出模式预算时，从较早内容中确定性选取最旧、中段和较新锚点并裁剪。该过程不调用模型，也不是语义摘要。默认单次上下文预算为 Quick 1800、Standard 4000、Rigorous 7000 Token。OpenAI 和 CC Switch 中已知的 OpenAI-compatible 模型使用匹配的 `tiktoken`；未知模型使用预留余量的保守 UTF-8 估算。Run 快照和界面会记录“精确”或“估算”，不会把 fallback 冒充 Provider usage。原始发言不会因裁剪而从 Run 中删除。
 
@@ -66,13 +66,13 @@ Candidate 的 `answer` 是席位真实正文，附加结构化字段通过 `stru
 
 会产生模型调用或改变 Run 状态的 POST 接受 8–128 字符 `Idempotency-Key`。服务端持久保存作用域、请求指纹、执行状态和完成后的 Run 响应：同键同载荷返回原结果并标记 `Idempotency-Replayed: true`，同键不同载荷返回 `409`，并发重复或尚未过期的执行返回 `409`。前端只对网络级失败用同一键重试一次，不重试明确的 HTTP 业务错误。
 
-手机入口由 Next.js 对局域网开放，FastAPI 和 CC Switch 继续只监听 loopback。启动器分别生成电脑引导令牌和手机配对令牌，手机令牌不能申请电脑端权限；令牌经 URL fragment 到达对应浏览器，成功后换取不包含原始令牌的 HttpOnly、SameSite=Strict 签名会话。会话有 12 小时上限，绑定当前启动实例，可由电脑端立即撤销。配对接口限制失败频率，只接受当前 Host 的同源 JSON 请求，并在读取流时限制请求体。所有已配对状态修改同样经过 Origin 和 Host 校验。完整边界、普通 HTTP 剩余风险和滥用假设见 `docs/THREAT_MODEL.md`。
+GitHub 直发版的手机入口由 Next.js 对局域网开放，FastAPI 和 CC Switch 继续只监听 loopback。启动器分别生成电脑引导令牌和手机配对令牌，手机令牌不能申请电脑端权限；令牌经 URL fragment 到达对应浏览器，成功后换取不包含原始令牌的 HttpOnly、SameSite=Strict 签名会话。会话有 12 小时上限，绑定当前启动实例，可由电脑端立即撤销。配对接口限制失败频率，只接受当前 Host 的同源 JSON 请求，并在读取流时限制请求体。所有已配对状态修改同样经过 Origin 和 Host 校验。Mac App Store 版将 Next.js 和 FastAPI 都绑定到 loopback，并在 API 和界面禁用手机配对。完整边界、普通 HTTP 剩余风险和滥用假设见 `docs/THREAT_MODEL.md`。
 
 完成 Run 后可写入一份决策回访：最终采用的决定、预期结果、复盘日期、实际结果和四席观点验证状态。它属于同一 Run 的可编辑本地记录，不会触发额外模型调用，也不会反向改写当时的讨论和答案。
 
 桌面 Release 使用 PyInstaller 打包后端、Next standalone 打包网页，并附带 Node runtime。普通用户不依赖系统 Python/Node；源码开发仍使用项目虚拟环境和 npm。发布工作流为 ZIP 和校验清单生成 GitHub build provenance attestation，用于关联 workflow 与 commit。macOS 构建执行 ad-hoc codesign 但不做 Apple notarization，Windows 构建目前没有商业代码签名；provenance 不能替代这两种平台信任，这些限制必须在下载说明中保持可见。
 
-打包版本只从固定的 Council Lab GitHub 仓库检查正式 Release，并按版本和系统精确选择资产。更新器限制下载大小、校验 `SHA256SUMS.txt`、限制解压体积与文件数量，并拒绝路径穿越、越界符号链接和重复路径；哈希与解压在线程中执行，避免阻塞本地 API。校验完成后才启动包内独立助手：macOS 深度验证 app 签名结构后以备份替换，Windows 先镜像备份完整安装目录再覆盖，失败时恢复旧版。安装接口要求前端专用请求头，使普通网页不能用简单跨站 POST 触发本机重启。SHA-256 证明下载内容与同一 GitHub Release 一致，但不等同于 Apple notarization 或 Windows 商业代码签名。
+GitHub 直发版只从固定的 Council Lab 仓库检查正式 Release，并把用户带到官方 Release 手动下载。当前公开构建没有可独立验证的发布者签名，因此安装能力保持关闭，不在应用内下载或执行更新包。Mac App Store 版不联系 GitHub 检查更新，由商店提供更新。
 
 每次模型请求前执行真实边界检查：默认最多 8 次尝试（失败请求也计算）、40,000 Provider 累计 Token、每席最多等待上游 120 秒。CC Switch 同一席位内的推理降档尝试共享这一个等待预算，不会为每次降档重新计时；用户阅读和确认的时间不计入模型等待。上下文窗口与累计 usage 是两个指标；CC Switch Codex 路径可能附加约 4k-5k 基础 instructions，因此默认额度按五次真实调用预留。达到边界后 Run 进入 `stopped` 并保留已完成发言；用户可提高边界，通过原 checkpoint 从未完成席位继续。检查发生在请求前，无法预知本次返回的最终 usage，所以最后一次允许的请求可能使累计值超过边界。由于没有稳定的跨 Provider 定价数据，系统不伪造美元预算。
 

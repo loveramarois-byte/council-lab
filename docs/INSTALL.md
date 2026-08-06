@@ -29,6 +29,10 @@
 - 数据：`%LOCALAPPDATA%\Council\data\`
 - 日志：`%LOCALAPPDATA%\Council\logs\`
 
+## Mac App Store 分发（维护者）
+
+App Store 沙盒构建与提交材料见 [`docs/app-store/submission-checklist.md`](app-store/submission-checklist.md)。提交前还需核对[审核备注](app-store/review-notes-zh-CN.md)、[商店元数据](app-store/metadata-zh-CN.md)和[隐私政策](app-store/privacy-policy.md)；预览包不能上传。
+
 ## 首次接入真实 API
 
 1. 打开“设置 → 模型供应商”。
@@ -50,24 +54,17 @@ CC Switch 必须已在本机启动。Council 只检测本地路由、读取路�
 
 ## 软件内更新
 
-从 `v0.4.0` 开始，Council 启动时自动检查本仓库的正式 GitHub Release。发现新版本后，侧栏“设置”会显示“有更新”：
+GitHub 直发版启动时检查本仓库的正式 Release。发现新版本后，打开“设置 → 软件更新”，再从界面进入官方 Release 手动下载并安装。当前公开构建没有可独立验证的发布者签名，因此 Council 不会在应用内下载、执行或替换更新包。
 
-1. 打开“设置 → 软件更新”。
-2. 点击“下载并安装”。
-3. Council 下载当前系统的 Release ZIP，并与同一 Release 的 `SHA256SUMS.txt` 核对。
-4. 校验通过后停止本地服务、替换应用并自动重新打开。校验失败时不会替换当前版本。
+Mac App Store 版本不联系 GitHub 检查应用更新，也不包含直发版更新脚本；更新完全由 Mac App Store 管理。源码运行模式只提示版本，不覆盖 Git 工作区。
 
-> 如果桌面的 `Council.app` 是从源码目录执行 `setup.sh` 生成的轻量启动器，它只负责启动源码服务，不会覆盖项目文件，因此只能提示新版本。安装一次 GitHub Release 中的自包含 `Council.app` 后，后续版本即可在“设置 → 软件更新”中一键下载、校验、替换并重新打开。
-
-macOS 应用放在 `/Applications` 等受保护目录时会弹出系统授权窗口。Windows 在当前完整解压目录中原地更新，原桌面快捷方式继续有效。源码运行模式只检查版本，不自动覆盖 Git 项目文件。
-
-历史、旧版资料兼容数据和 API Key 位于应用目录之外，正常更新不会删除。`v0.3.0` 及更早版本没有内置更新器，需要先手动安装 `v0.4.0` 一次。
+历史、旧版资料兼容数据和 API Key 位于应用目录之外，按下方步骤手动更新不会删除这些数据。
 
 从 `v0.8.0` 开始，业务数据库升级采用显式 schema 迁移。已有数据库需要升级时，Council 会先在数据目录的 `backups/` 创建迁移前备份，失败则恢复原库，并只保留最近 5 份。该目录包含完整本地数据，不要直接上传；重要数据仍应由用户另行备份到受保护位置。
 
 旧资料空间写入默认关闭，历史内容仍可查看。只有处理旧版数据迁移故障时才临时设置 `COUNCIL_ENABLE_LEGACY_WORKSPACE=1`，完成后应删除该环境变量并重启 Council。
 
-## 旧版本手动更新
+## 手动更新
 
 ### macOS
 

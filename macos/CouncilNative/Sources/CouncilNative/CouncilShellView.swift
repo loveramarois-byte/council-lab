@@ -54,14 +54,6 @@ struct CouncilShellView: View {
             .help("前进")
         }
 
-        ToolbarItem(placement: .principal) {
-            HStack(spacing: 11) {
-                Text(navigation.selection.title)
-                    .font(.system(size: 12, weight: .semibold))
-                FourSeatRail(active: service.state == .ready)
-            }
-        }
-
         ToolbarItemGroup(placement: .primaryAction) {
             if navigation.isLoading {
                 ProgressView().controlSize(.small)
@@ -145,41 +137,32 @@ private struct CouncilWordmark: View {
     }
 }
 
-private struct FourSeatRail: View {
-    let active: Bool
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<4, id: \.self) { index in
-                Capsule()
-                    .fill(active ? seatColor(index) : Color.secondary.opacity(0.22))
-                    .frame(width: index == 3 ? 13 : 7, height: 3)
-            }
-        }
-        .accessibilityLabel(active ? "四席就绪" : "四席正在连接")
-    }
-
-    private func seatColor(_ index: Int) -> Color {
-        [CouncilPalette.lacquer, CouncilPalette.sage, CouncilPalette.brass, CouncilPalette.graphite][index]
-    }
-}
-
 private struct CouncilStartupView: View {
     var body: some View {
-        VStack(spacing: 18) {
-            ZStack {
-                Circle()
-                    .stroke(CouncilPalette.mineral, lineWidth: 2)
-                    .frame(width: 62, height: 62)
-                ProgressView().controlSize(.small)
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle()
+                .fill(CouncilPalette.lacquer)
+                .frame(width: 52, height: 2)
+                .padding(.bottom, 24)
+            HStack(alignment: .top, spacing: 15) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(CouncilPalette.lacquer.opacity(0.1))
+                    ProgressView().controlSize(.small)
+                        .tint(CouncilPalette.lacquer)
+                }
+                .frame(width: 44, height: 44)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("正在准备审议台")
+                        .font(.custom("Iowan Old Style", size: 22).weight(.medium))
+                    Text("连接本机服务并恢复上次工作状态")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
-            Text("正在准备审议台")
-                .font(.system(size: 16, weight: .semibold))
-            Text("连接本机服务并恢复上次工作状态")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: 480, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .background(CouncilPalette.frost)
     }
 }
@@ -189,25 +172,35 @@ private struct CouncilFailureView: View {
     let message: String
 
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 28, weight: .light))
-                .foregroundStyle(CouncilPalette.brass)
-            Text("本机服务未启动")
-                .font(.system(size: 17, weight: .semibold))
-            Text(message)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle()
+                .fill(CouncilPalette.brass)
+                .frame(width: 52, height: 2)
+                .padding(.bottom, 24)
+            HStack(alignment: .top, spacing: 15) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(CouncilPalette.brass)
+                    .frame(width: 44, height: 44)
+                    .background(CouncilPalette.brass.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("本机服务未启动")
+                        .font(.custom("Iowan Old Style", size: 22).weight(.medium))
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             HStack(spacing: 8) {
                 Button("查看日志") { service.openLogs() }
                 Button("重新连接") { service.retry() }
                     .buttonStyle(.borderedProminent)
             }
-            .padding(.top, 5)
+            .padding(.top, 22)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: 520, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .background(CouncilPalette.frost)
     }
 }

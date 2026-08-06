@@ -72,6 +72,11 @@ async def test_assignment_api_migrates_payload_without_schema_version(monkeypatc
 async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, monkeypatch):
     monkeypatch.setenv("COUNCIL_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("COUNCIL_VERSION", "0.4.0")
+    app_root = tmp_path / "Council.app"
+    (app_root / "Contents" / "Resources").mkdir(parents=True)
+    monkeypatch.setenv("COUNCIL_PACKAGED", "1")
+    monkeypatch.setenv("COUNCIL_UPDATE_PLATFORM", "macos")
+    monkeypatch.setenv("COUNCIL_INSTALL_ROOT", str(app_root))
     main = importlib.import_module("app.main")
     transport = httpx.ASGITransport(app=main.app)
 
@@ -101,13 +106,22 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
         start.assert_not_awaited()
 
         accepted = await client.post("/api/update/install", headers={"X-Council-Request": "app"})
-        assert accepted.status_code == 200
-        assert accepted.json()["phase"] == "checking"
-        start.assert_awaited_once()
+        assert accepted.status_code == 409
+        assert "发布者签名" in accepted.json()["detail"]
+        start.assert_not_awaited()
 
         monkeypatch.setattr(main, "fetch_release", AsyncMock(side_effect=UpdateError("offline")))
         blocked_refresh = await client.get("/api/update/check?refresh=true")
         assert blocked_refresh.status_code == 403
+
+        passive_unavailable = await client.get("/api/update/check")
+        assert passive_unavailable.status_code == 200
+        assert passive_unavailable.json()["current_version"] == "0.4.0"
+        assert passive_unavailable.json()["latest_version"] == "0.4.0"
+        assert passive_unavailable.json()["update_available"] is False
+        assert passive_unavailable.json()["current_is_newer"] is False
+        assert passive_unavailable.json()["package_name"] is None
+        assert passive_unavailable.json()["check_error"] == "offline"
 
         unavailable = await client.get("/api/update/check?refresh=true", headers={"X-Council-Request": "app"})
         assert unavailable.status_code == 503
@@ -127,6 +141,13 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
         available = await client.get("/api/update/check")
         assert available.status_code == 200
         assert available.json()["update_available"] is True
+        assert available.json()["current_is_newer"] is False
+
+        monkeypatch.setenv("COUNCIL_VERSION", "0.6.0")
+        current_ahead = await client.get("/api/update/check")
+        assert current_ahead.status_code == 200
+        assert current_ahead.json()["update_available"] is False
+        assert current_ahead.json()["current_is_newer"] is True
 
         monkeypatch.setattr(main.update_manager, "status", lambda: {"phase": "idle", "current_version": "0.4.0"})
         status = await client.get("/api/update/status")
@@ -138,6 +159,41 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
         assert invalid.status_code == 422
         assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
         assert invalid.json()["detail"] == "请求参数不完整或格式不正确。 请检查字段：question。"
+
+
+async def test_app_store_update_routes_never_contact_or_install_direct_releases(monkeypatch):
+    monkeypatch.setenv("COUNCIL_DISTRIBUTION", "app_store")
+    monkeypatch.setenv("COUNCIL_VERSION", "0.16.0")
+    main = importlib.import_module("app.main")
+    transport = httpx.ASGITransport(app=main.app)
+    fetch_release = AsyncMock(side_effect=AssertionError("App Store build contacted GitHub"))
+    start = AsyncMock(side_effect=AssertionError("App Store build started the direct updater"))
+    monkeypatch.setattr(main, "fetch_release", fetch_release)
+    monkeypatch.setattr(main.update_manager, "start", start)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://127.0.0.1:8001",
+        headers=INTERNAL_HEADERS,
+    ) as client:
+        check = await client.get("/api/update/check")
+        refresh = await client.get(
+            "/api/update/check?refresh=true",
+            headers={"X-Council-Request": "app"},
+        )
+        install = await client.post(
+            "/api/update/install",
+            headers={"X-Council-Request": "app"},
+        )
+
+    assert check.status_code == 200
+    assert check.json()["installation_kind"] == "app_store"
+    assert check.json()["can_auto_update"] is False
+    assert refresh.json() == check.json()
+    assert install.status_code == 409
+    assert "Mac App Store" in install.json()["detail"]
+    fetch_release.assert_not_awaited()
+    start.assert_not_awaited()
 
 
 async def test_legacy_workspace_is_read_only_unless_explicitly_enabled(monkeypatch):

@@ -17,9 +17,9 @@ FRONTEND_LOG="$LOG_DIR/frontend.log"
 TOKEN_FILE="$LOG_DIR/mobile-access.token"
 DESKTOP_TOKEN_FILE="$LOG_DIR/desktop-access.token"
 INTERNAL_TOKEN_FILE="$LOG_DIR/backend-access.token"
+STARTUP_LOCK_FILE="$LOG_DIR/startup.lock"
 
 mkdir -p "$LOG_DIR"
-/usr/bin/touch "$PID_FILE"
 export COUNCIL_PACKAGED=1
 export COUNCIL_INSTALL_ROOT="$APP_ROOT"
 export COUNCIL_VERSION="$(/usr/bin/tr -d '[:space:]' < "$RESOURCES_DIR/VERSION")"
@@ -28,6 +28,33 @@ export COUNCIL_RUNTIME_ID="macos:$(/usr/bin/printf '%s\0%s' "$APP_ROOT" "$COUNCI
 show_error() {
   /usr/bin/osascript -e "display dialog \"$1\" buttons {\"好\"} with title \"Council 无法启动\"" >/dev/null 2>&1 || true
 }
+
+release_startup_lock() {
+  local owner=""
+  [[ -f "$STARTUP_LOCK_FILE" ]] && owner="$(/usr/bin/tr -d '[:space:]' < "$STARTUP_LOCK_FILE")"
+  [[ "$owner" == "$$" ]] && /bin/rm -f "$STARTUP_LOCK_FILE"
+}
+
+acquire_startup_lock() {
+  local attempts=0
+  while (( attempts < 150 )); do
+    if /usr/bin/shlock -f "$STARTUP_LOCK_FILE" -p $$; then
+      return 0
+    fi
+    /bin/sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  return 1
+}
+
+if ! acquire_startup_lock
+then
+  show_error "Council 正在由另一个窗口启动，请稍后重试。"
+  exit 1
+fi
+trap release_startup_lock EXIT
+
+/usr/bin/touch "$PID_FILE"
 
 service_is_current() {
   local url="$1"
@@ -47,7 +74,14 @@ backend_is_current() {
 }
 
 frontend_is_current() {
-  service_is_current "http://127.0.0.1:3000/mobile-access/health" "council-mobile-access" "$COUNCIL_WEB_BUILD_ID"
+  local response
+  local web_build_id="$COUNCIL_WEB_BUILD_ID"
+  response="$(/usr/bin/curl -fsSi --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null || true)"
+  [[ "$response" == *'"service":"council-mobile-access"'* \
+    && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* \
+    && "$response" == *"\"web_build_id\":\"$web_build_id\""* \
+    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* \
+    && "${response:l}" == *"x-council-desktop-token-id: $DESKTOP_TOKEN_ID"* ]]
 }
 
 port_is_used() {
@@ -166,9 +200,13 @@ fi
 
 REMOTE_TOKEN=""
 DESKTOP_TOKEN=""
-if frontend_is_current && [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
+DESKTOP_TOKEN_ID=""
+if [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
   REMOTE_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$TOKEN_FILE")"
   DESKTOP_TOKEN="$(/usr/bin/tr -d '[:space:]' < "$DESKTOP_TOKEN_FILE")"
+  if (( ${#DESKTOP_TOKEN} >= 32 )); then
+    DESKTOP_TOKEN_ID="$(/usr/bin/printf '%s' "$DESKTOP_TOKEN" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print substr($1, 1, 16)}')"
+  fi
 fi
 
 if ! frontend_is_current; then
@@ -180,6 +218,7 @@ if ! frontend_is_current; then
   fi
   REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
   DESKTOP_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  DESKTOP_TOKEN_ID="$(/usr/bin/printf '%s' "$DESKTOP_TOKEN" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print substr($1, 1, 16)}')"
   printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
   printf '%s\n' "$DESKTOP_TOKEN" > "$DESKTOP_TOKEN_FILE"
   pushd "$WEB_DIR" >/dev/null

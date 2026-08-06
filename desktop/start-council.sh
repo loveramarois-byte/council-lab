@@ -15,8 +15,35 @@ FRONTEND_LOG="$LOG_DIR/frontend.log"
 TOKEN_FILE="$LOG_DIR/mobile-access.token"
 DESKTOP_TOKEN_FILE="$LOG_DIR/desktop-access.token"
 INTERNAL_TOKEN_FILE="$LOG_DIR/backend-access.token"
+STARTUP_LOCK_FILE="$LOG_DIR/startup.lock"
 
 mkdir -p "$LOG_DIR"
+
+release_startup_lock() {
+  local owner=""
+  [[ -f "$STARTUP_LOCK_FILE" ]] && owner="$(tr -d '[:space:]' < "$STARTUP_LOCK_FILE")"
+  [[ "$owner" == "$$" ]] && /bin/rm -f "$STARTUP_LOCK_FILE"
+}
+
+acquire_startup_lock() {
+  local attempts=0
+  while (( attempts < 150 )); do
+    if /usr/bin/shlock -f "$STARTUP_LOCK_FILE" -p $$; then
+      return 0
+    fi
+    /bin/sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  return 1
+}
+
+if ! acquire_startup_lock
+then
+  osascript -e 'display dialog "Council 正在由另一个窗口启动，请稍后重试。" buttons {"好"} with title "Council 无法启动"' >/dev/null 2>&1 || true
+  exit 1
+fi
+trap release_startup_lock EXIT
+
 : > "$PID_FILE"
 
 is_up() {
@@ -25,11 +52,12 @@ is_up() {
 
 frontend_is_up() {
   local response
-  response="$(curl -fsS --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null || true)"
+  response="$(curl -fsSi --max-time 2 "http://127.0.0.1:3000/mobile-access/health" 2>/dev/null || true)"
   [[ "$response" == *'"service":"council-mobile-access"'* \
     && "$response" == *"\"runtime_id\":\"$COUNCIL_RUNTIME_ID\""* \
     && "$response" == *"\"web_build_id\":\"$FRONTEND_BUILD_ID\""* \
-    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* ]]
+    && "$response" == *"\"internal_api_id\":\"$INTERNAL_API_ID\""* \
+    && "${response:l}" == *"x-council-desktop-token-id: $DESKTOP_TOKEN_ID"* ]]
 }
 
 backend_is_up() {
@@ -149,9 +177,13 @@ fi
 
 REMOTE_TOKEN=""
 DESKTOP_TOKEN=""
-if frontend_is_up && [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
+DESKTOP_TOKEN_ID=""
+if [[ -f "$TOKEN_FILE" && -f "$DESKTOP_TOKEN_FILE" ]]; then
   REMOTE_TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
   DESKTOP_TOKEN="$(tr -d '[:space:]' < "$DESKTOP_TOKEN_FILE")"
+  if (( ${#DESKTOP_TOKEN} >= 32 )); then
+    DESKTOP_TOKEN_ID="$(printf '%s' "$DESKTOP_TOKEN" | shasum -a 256 | awk '{print substr($1, 1, 16)}')"
+  fi
 fi
 
 if ! frontend_is_up; then
@@ -164,6 +196,7 @@ if ! frontend_is_up; then
   fi
   REMOTE_TOKEN="$(/usr/bin/openssl rand -hex 24)"
   DESKTOP_TOKEN="$(/usr/bin/openssl rand -hex 24)"
+  DESKTOP_TOKEN_ID="$(printf '%s' "$DESKTOP_TOKEN" | shasum -a 256 | awk '{print substr($1, 1, 16)}')"
   printf '%s\n' "$REMOTE_TOKEN" > "$TOKEN_FILE"
   printf '%s\n' "$DESKTOP_TOKEN" > "$DESKTOP_TOKEN_FILE"
   pushd "$FRONTEND_DIR" >/dev/null

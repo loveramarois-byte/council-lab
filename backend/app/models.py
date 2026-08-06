@@ -17,7 +17,14 @@ from pydantic import (
 
 
 CURRENT_ASSIGNMENT_SCHEMA_VERSION = 2
-OutputContractId = Literal["general_decision", "product_review", "technical_architecture"]
+OutputContractId = Literal[
+    "general_decision",
+    "product_review",
+    "technical_architecture",
+    "medical_second_opinion",
+    "legal_risk_review",
+    "financial_decision_review",
+]
 
 
 def utc_now() -> datetime:
@@ -413,6 +420,9 @@ class DeliberationTemplate(BaseModel):
     description: str
     prompt_hint: str
     system_guidance: str
+    seat_guidance: dict[str, str] = Field(default_factory=dict)
+    default_output_contract: OutputContractId = "general_decision"
+    requires_high_risk: bool = False
 
 
 class OutputContractDefinition(BaseModel):
@@ -424,6 +434,8 @@ class OutputContractDefinition(BaseModel):
     input_checks: list[str] = Field(min_length=1, max_length=20)
     prompt_hint: str = Field(min_length=1, max_length=500)
     system_guidance: str = Field(min_length=1, max_length=4000)
+    required_disclaimer: str | None = Field(default=None, max_length=1000)
+    requires_high_risk: bool = False
 
 
 class CandidateAnswer(BaseModel):
@@ -641,8 +653,22 @@ class TechnicalArchitectureExtension(DecisionBriefItem):
     observability_requirements: list[str] = Field(default_factory=list, max_length=30)
 
 
+class ProfessionalDomainExtension(DecisionBriefItem):
+    contract: Literal[
+        "medical_second_opinion",
+        "legal_risk_review",
+        "financial_decision_review",
+    ]
+    scope: str = Field(min_length=1, max_length=12000)
+    verified_information: list[str] = Field(default_factory=list, max_length=30)
+    unverified_information: list[str] = Field(default_factory=list, max_length=30)
+    risk_factors: list[str] = Field(default_factory=list, max_length=30)
+    professional_questions: list[str] = Field(default_factory=list, max_length=20)
+    required_disclaimer: str = Field(min_length=1, max_length=1000)
+
+
 DecisionContractExtension = Annotated[
-    GeneralDecisionExtension | ProductReviewExtension | TechnicalArchitectureExtension,
+    GeneralDecisionExtension | ProductReviewExtension | TechnicalArchitectureExtension | ProfessionalDomainExtension,
     Field(discriminator="contract"),
 ]
 
