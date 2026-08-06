@@ -1,126 +1,122 @@
 <p align="center">
-  <img src="desktop/Council.png" width="96" alt="Council Lab">
+  <img src="desktop/Council.png" width="88" alt="Council">
 </p>
 
-<h1 align="center">Council Lab</h1>
+<h1 align="center">Council</h1>
 
-<p align="center"><strong>Turn one complex question into a decision record you can inspect.</strong></p>
+<p align="center"><strong>Complex questions deserve more than one voice.</strong></p>
 
 <p align="center">
-  Four discussion seats analyze, challenge, build, and observe. A fifth seat synthesizes the agreement, disagreement, risks, and stop conditions.<br>
-  You can interject at any time and add facts before the final answer is created.
+  Four seats deliberate in public. You can step in at any time.<br>
+  What remains is a decision you can revisit, challenge, and act on.
 </p>
 
 <p align="center">
-  <a href="https://github.com/loveramarois-byte/council-lab/releases/latest"><img src="https://img.shields.io/github/v/release/loveramarois-byte/council-lab?label=download" alt="Latest release"></a>
-  <a href="https://github.com/loveramarois-byte/council-lab/actions/workflows/ci.yml"><img src="https://github.com/loveramarois-byte/council-lab/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/data-local--first-2f855a" alt="Local first">
+  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.17.0/Council-v0.17.0-macOS.zip"><strong>Download for macOS</strong></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.17.0/Council-v0.17.0-Windows.zip"><strong>Download for Windows</strong></a>
 </p>
 
-<p align="center"><a href="README.md">中文</a> · <a href="#download">Download</a> · <a href="docs/INSTALL.md">Install guide</a> · <a href="SECURITY.md">Security</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
+<p align="center"><sub>Free and open source · Local-first · Runtime included</sub></p>
 
-![Council Lab workspace: four AI seats deliberating one question in public](docs/images/roundtable-v2.png)
+<p align="center"><a href="README.md">中文</a> · <a href="#your-first-run">Get started</a> · <a href="docs/INSTALL.md">Installation</a> · <a href="SECURITY.md">Security</a></p>
 
-## Complex questions deserve more than one conclusion
+![Council workspace: four AI seats deliberating one complex question in public](docs/images/roundtable-v2.png)
 
-A single chat can produce a fluent, confident answer without leaving a path you can audit. Council Lab preserves the public decision path: who proposed each reason, who disagreed, which facts remain unverified, when to stop, and why the final recommendation was reached.
+## See how a decision takes shape
 
-It is built for product trade-offs, architecture, research planning, risk review, and other questions that benefit from explicit challenge. It never displays or stores hidden chain-of-thought. Only public answers and run records are kept.
+A regular chat gives you an answer. Council preserves the public path behind it: who made each case, who challenged it, which facts remain unverified, when to stop, and why the final recommendation was reached.
 
-| A single chat | Council Lab |
+Council never displays or stores hidden chain-of-thought. What you can inspect is the public discussion, your own interjections, and a structured `DecisionBrief`.
+
+| A regular chat | Council |
 | --- | --- |
-| One generation returns one answer | Multiple seats surface reasons, counterexamples, and alternatives |
-| Assumptions disappear inside prose | Disagreement, limitations, open questions, and minority views stay visible |
+| One model generates one answer | Four roles analyze, challenge, build, and observe |
+| Assumptions disappear inside prose | Disagreement, limits, open issues, and minority views remain visible |
 | The model decides when it is done | The default workflow pauses for your confirmation |
-| The result remains in chat history | A DecisionBrief records reasons, actions, stop conditions, and reopen triggers |
+| The result stays in chat history | Reasons, actions, stop conditions, and reopen triggers are recorded |
 
-## Start in three steps
+## Your first run
 
-1. Download the desktop app from [GitHub Releases](https://github.com/loveramarois-byte/council-lab/releases/latest). Run **Local Demo** first; it is offline, free, and requires no key.
-2. Open **Settings → Model Providers**, connect a real provider, and assign models to the four discussion seats and finalizer.
-3. Submit a question. Interject during the discussion, then confirm or add facts before final synthesis.
+You do not need to understand models, providers, or workflows first.
 
-## One deliberation, end to end
+1. Download the desktop app and choose **Local Demo**. It is offline, free, and needs no API key.
+2. Ask a real question and watch the four seats respond. Interject or add facts whenever you need to.
+3. When you want real models, open **Settings → Model Providers** and connect CC Switch, OpenAI, or a compatible service.
+
+Both desktop packages include Python, Node.js, and their required dependencies. Your API key never enters Council's database, logs, or browser storage.
+
+## A deliberation you can join
 
 ```mermaid
 flowchart LR
-    Q["Your question"] --> A["1 · Analyze"]
-    A --> C["2 · Challenge"]
-    C --> B["3 · Build"]
-    B --> O["4 · Observe"]
+    Q["Your question"] --> A["Analyze"]
+    A --> C["Challenge"]
+    C --> B["Build"]
+    B --> O["Observe"]
     O --> H["Your confirmation"]
-    H --> F["5 · Final synthesis"]
+    H --> F["Final synthesis"]
     U["Interject anytime"] -.public context.-> C
     U -.public context.-> B
     U -.public context.-> O
     U -.public context.-> F
 ```
 
-**Sequential deliberation** lets later seats read and respond to earlier turns. **Independent first answers** freeze the question and materials, collect four isolated views, then compare them in public. Both workflows support confirmation, recovery, idempotent requests, and report export.
+**Sequential deliberation** lets later seats read and respond to earlier turns. **Independent first answers** freeze the question and materials, collect isolated views, then compare them in public. Short definitions and deterministic calculations can use a shorter path; decisions, predictions, risks, and ambiguous questions retain the full council.
 
-Short definitions and deterministic arithmetic can use one discussion seat plus the finalizer. Decisions, predictions, risks, and ambiguous questions retain the full workflow. The run page shows the seats, models, providers, and reported usage that were actually used.
+Every step shows the roles, models, providers, and usage actually involved. If you close the window, lose the connection, or restart, completed work can resume instead of being paid for again.
 
-## Designed for inspection
+## More than a conclusion
 
-| Capability | What it means |
+| What you get | Why it matters |
 | --- | --- |
-| Public multi-seat discussion | Fixed roles make answers, objections, and user interjections visible |
-| Human confirmation | The default run does not finalize on its own; high-risk runs cannot auto-finalize |
-| Recoverable runs | SQLite and LangGraph checkpoints preserve completed work across restarts and disconnects |
-| Structured briefs | Store question-specific reasons, support, open issues, actions, stop conditions, and minority views |
-| Evidence boundaries | Separate user material, model inference, and unverified claims; agreement is not fact verification |
-| Local-first storage | Credentials use the operating-system secret store; run data stays on the current computer by default |
-| Paired mobile access | The phone is a controlled remote view; provider calls, keys, and the database remain on the computer |
-| Multiple providers | CC Switch, DeepSeek, Zhipu GLM, Kimi, SiliconFlow, OpenAI, and compatible endpoints |
+| Public multi-seat discussion | Inspect viewpoints, counterexamples, and your own interjections instead of trusting the last paragraph |
+| Human confirmation | You approve the final synthesis; high-risk runs cannot finalize automatically |
+| Structured briefs | Keep key reasons, open issues, actions, stop conditions, and reopen triggers separate |
+| Evidence boundaries | Distinguish user material, model inference, and unverified claims; agreement never becomes fact |
+| Local-first storage | Run data stays on the current computer by default; credentials use the OS secret store |
+| Controlled mobile access | The phone is a remote view; provider calls, keys, and the database stay on the computer |
 
-## Live API acceptance
+## Built for different questions, not omniscience
 
-On 2026-08-05, the repository's fixed acceptance set completed 10 full Council runs and 50 logical model requests:
+Council includes templates for general decisions, product reviews, architecture reviews, and medical, legal, and financial information organization. A template changes the facts it asks for, the risks it surfaces, and the shape of the brief. It does not change the safety boundary.
 
-| Configuration | Result |
-| --- | --- |
-| CC Switch + `gpt-5.6-sol`, four discussion seats and one finalizer | 50 / 50 requests succeeded |
-| Failures / retries / fallbacks | 0 / 0 / 0 |
-| Provider request latency | P50 9.487 s · P95 44.846 s · max 81.653 s |
+- Medical mode organizes symptoms, timelines, red flags, and questions for care. It does not diagnose or choose treatment.
+- Legal mode organizes facts, deadlines, jurisdiction, and questions for counsel. It is not legal advice.
+- Financial mode organizes goals, time horizon, liquidity, fees, and risk. It is not investment advice.
+- Missing critical facts, stale evidence, or a safety objection can block a high-risk run from producing an actionable conclusion.
 
-The public redacted statistics are available at [`evals/results/live-acceptance-50-summary-2026-08-05.json`](evals/results/live-acceptance-50-summary-2026-08-05.json). This is a release acceptance snapshot for one model, one route, and ten fixed cases. It is not evidence for every provider and is not a model-quality ranking.
+Professional modes support decisions; they do not replace professionals. Council does not verify licenses, prescribe medication, place trades, file legal documents, or execute production changes.
 
-## Download
+## Download and install
 
 ### macOS
 
-1. Download the latest `Council-v*-macOS.zip`.
-2. Unzip it and double-click **`Council.app`**.
-
-The package includes its runtime; Python and Node.js are not required. The current open-source build is not Apple-notarized. If macOS blocks the first launch, Control-click the app, choose **Open**, and confirm.
+Download [`Council-v0.17.0-macOS.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.17.0/Council-v0.17.0-macOS.zip), unzip it, and double-click `Council.app`. The open-source build is not Apple-notarized. If macOS blocks the first launch, Control-click the app, choose **Open**, and confirm.
 
 ### Windows 10 / 11
 
-1. Download `Council-v*-Windows.zip` and choose **Extract All**.
-2. Double-click **`Start Council.cmd`**. Run **`Create Desktop Shortcut.cmd`** only if needed.
+Download [`Council-v0.17.0-Windows.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.17.0/Council-v0.17.0-Windows.zip), choose **Extract All**, then double-click `Start Council.cmd`. No administrator access is required. The build is not commercially code-signed. If SmartScreen appears, confirm the file came from this repository's Release before choosing **More info → Run anyway**.
 
-The Windows package also includes its runtime and requires no administrator access. It is not commercially code-signed. If SmartScreen appears, verify that the file came from the official Release before choosing **More info → Run anyway**.
+Every formal Release includes `SHA256SUMS.txt` and GitHub build-provenance attestation. The desktop app can check for new versions and open the official Release under **Settings → Software Update**; current public builds do not execute downloaded packages in-app. Manual installation does not overwrite local history or credentials.
 
-Formal releases include `SHA256SUMS.txt` and a GitHub build-provenance attestation. The checksum verifies content; the attestation links an artifact to a workflow and commit. Neither replaces platform signing.
+## Where your data lives
 
-### Mobile access and updates
+Real providers receive your question and selected public context and may charge for requests. `Quick / Standard / Rigorous` are Council workflow tiers, not automatic aliases for an upstream model's reasoning effort.
 
-Keep Council running on the computer and pair under **Settings → Mobile Access**. The phone stores neither provider keys nor a second database. Sessions last at most 12 hours, can be revoked from the desktop, and expire when Council restarts. LAN access uses plain HTTP, so do not use it on open public Wi-Fi.
-
-The desktop app can download, verify, replace, and restart itself under **Settings → Software Update** without overwriting local history or credentials.
-
-## Provider and data boundaries
-
-Real providers receive your question and selected public context and may charge for requests. `Quick / Standard / Rigorous` are Council workflow tiers, not automatic aliases for an upstream model's Low / High / Ultra settings. Native reasoning effort is sent only when the provider and protocol explicitly support it.
-
-- API keys never enter Council SQLite, logs, or browser storage. The desktop app uses macOS Keychain, Windows Credential Manager, or Linux Secret Service.
+- API keys never enter SQLite, logs, or browser storage. Desktop builds use macOS Keychain, Windows Credential Manager, or Linux Secret Service.
 - The browser talks only to the same-origin Next.js proxy. Every FastAPI route except health requires a launcher-generated internal token.
 - Run data defaults to `~/Library/Application Support/Council/data/` on macOS, `%LOCALAPPDATA%\\Council\\data\\` on Windows, and `${XDG_DATA_HOME:-~/.local/share}/council/data/` on Linux.
-- Schema upgrades create a consistency backup and restore it on migration failure. This is not an off-machine backup.
-- The CC Switch integration reads only observable local routing state. It does not read or modify CC Switch credentials.
+- Mobile pairing lasts at most 12 hours, can be revoked on the computer, and expires when Council restarts. LAN access uses plain HTTP; do not use it on open public Wi-Fi.
+- Schema upgrades create a consistency backup and restore it after migration failure. This is not an off-machine backup.
 
-Also read [SECURITY.md](SECURITY.md), the [threat model](docs/THREAT_MODEL.md), [redacted diagnostics](docs/DIAGNOSTICS.md), and the [CC Switch integration boundary](docs/CCSWITCH_INTEGRATION.md).
+Read the [security boundary](SECURITY.md), [threat model](docs/THREAT_MODEL.md), [redacted diagnostics guide](docs/DIAGNOSTICS.md), and [CC Switch integration boundary](docs/CCSWITCH_INTEGRATION.md).
+
+## Public verification
+
+On 2026-08-05, the repository's fixed acceptance set completed 10 full runs and 50 logical model requests using `CC Switch + gpt-5.6-sol`: `50 / 50` succeeded, with `0` failures, retries, or fallbacks. Provider latency was P50 `9.487s`, P95 `44.846s`, and max `81.653s`.
+
+The redacted results are in [`live-acceptance-50-summary-2026-08-05.json`](evals/results/live-acceptance-50-summary-2026-08-05.json). This is release acceptance evidence for one model, one route, and a fixed case set. It does not represent every provider and is not a model-quality ranking.
 
 ## Development
 
@@ -133,20 +129,8 @@ cd council-lab
 ./start.sh
 ```
 
-Council opens at <http://localhost:3000>. Linux is supported through the source workflow. See [docs/INSTALL.md](docs/INSTALL.md) for setup and troubleshooting.
+Linux is supported through the source workflow. See [docs/INSTALL.md](docs/INSTALL.md) for setup and troubleshooting, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for architecture, and [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
 
-```text
-backend/       FastAPI, orchestration, providers, context, and persistence
-frontend/      Next.js, React, and TypeScript workspace
-macos/         Native SwiftUI and WKWebView shell for macOS
-desktop/       Desktop install, launch, stop, and compatibility scripts
-docs/          Architecture, evaluation, security, and integration notes
-```
+---
 
-## Project boundary
-
-Version `0.16.0` is intended for personal research, planning, and non-binding multi-perspective decision support. Council does not perform external web or code-sandbox verification. High-risk mode can record evidence, reviews, and responsibility statements, but it does not verify licenses and is not a medical device, legal service, investment adviser, or compliance certification. Do not use model output directly for high-risk execution.
-
-Council Lab thanks the [LINUX DO](https://linux.do/) community for supporting open-source exchange and the project's growth.
-
-Copyright 2026 Council Lab contributors. Licensed under the [Apache License 2.0](LICENSE). Council Lab is not affiliated with, authorized by, or endorsed by the CC Switch project.
+Version `0.17.0` is open source under the [Apache License 2.0](LICENSE). Thanks to the [LINUX DO](https://linux.do/) community for supporting open exchange and the project's growth. Council Lab is not affiliated with, authorized by, or endorsed by the CC Switch project.
