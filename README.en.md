@@ -12,9 +12,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.6/Council-v0.18.6-macOS.zip"><strong>Download for macOS</strong></a>
+  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.7/Council-v0.18.7-macOS.zip"><strong>Download for macOS</strong></a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
-  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.6/Council-v0.18.6-Windows.zip"><strong>Download for Windows</strong></a>
+  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.7/Council-v0.18.7-Windows.zip"><strong>Download for Windows</strong></a>
 </p>
 
 <p align="center"><sub>Free and open source · Local-first · Try the local demo without an API key</sub></p>
@@ -103,11 +103,11 @@ Missing critical facts, stale evidence, or a safety objection can block a high-r
 
 ### macOS
 
-Download [`Council-v0.18.6-macOS.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.6/Council-v0.18.6-macOS.zip), unzip it, and double-click `Council.app`. The open-source build is not Apple-notarized. If macOS blocks the first launch, Control-click the app, choose **Open**, and confirm.
+Download [`Council-v0.18.7-macOS.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.7/Council-v0.18.7-macOS.zip), unzip it, and double-click `Council.app`. The open-source build is not Apple-notarized. If macOS blocks the first launch, Control-click the app, choose **Open**, and confirm.
 
 ### Windows 10 / 11
 
-Download [`Council-v0.18.6-Windows.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.6/Council-v0.18.6-Windows.zip), choose **Extract All**, then double-click `Start Council.cmd`. No administrator access is required. The build is not commercially code-signed. If SmartScreen appears, confirm the file came from this repository's Release before choosing **More info → Run anyway**.
+Download [`Council-v0.18.7-Windows.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.7/Council-v0.18.7-Windows.zip), choose **Extract All**, then double-click `Start Council.cmd`. No administrator access is required. The build is not commercially code-signed. If SmartScreen appears, confirm the file came from this repository's Release before choosing **More info → Run anyway**.
 
 Every formal Release includes `SHA256SUMS.txt` and GitHub build-provenance attestation. The desktop app can check for new versions and securely download, verify, install, and restart under **Settings → Software Update**. Manual installation does not overwrite local history or credentials.
 
@@ -150,4 +150,4 @@ Linux is supported through the source workflow. See [docs/INSTALL.md](docs/INSTA
 
 ---
 
-Version `0.18.6` is open source under the [Apache License 2.0](LICENSE). Thanks to the [LINUX DO](https://linux.do/) community for supporting open exchange and the project's growth. Council Lab is not affiliated with, authorized by, or endorsed by the CC Switch project.
+Version `0.18.7` is open source under the [Apache License 2.0](LICENSE). Thanks to the [LINUX DO](https://linux.do/) community for supporting open exchange and the project's growth. Council Lab is not affiliated with, authorized by, or endorsed by the CC Switch project.
