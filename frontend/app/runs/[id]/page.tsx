@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ChevronDown, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCircle2, ChevronDown, ClipboardCheck, Clock3, Download, FileCheck2, Gauge, GitBranch, Layers3, LoaderCircle, LockKeyhole, Maximize2, MessageCircle, Minimize2, MoreHorizontal, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, UserRound, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ModalDialog } from "../../../components/ModalDialog";
@@ -532,7 +532,7 @@ export default function RunDetailPage() {
     <header className="council-topbar">
       <Link href="/" className="back-link"><ArrowLeft size={15} />退出圆桌</Link>
       <div className="council-session"><span className={`status-dot ${run.status === "completed" ? "success" : runFailed || runStopped ? "failed" : ""}`} />{run.status === "completed" ? "讨论完成" : awaitingFinal ? "等待你的确认" : runStopped ? "达到运行限制" : runFailed ? "调用失败" : `第 ${Math.max(1, run.discussion_round)} 轮`} <span /> {highRisk ? "高风险决策支持" : run.mode === "quick" ? "引导模式" : run.mode === "rigorous" ? "深挖模式" : "圆桌模式"}</div>
-      <div className="council-top-actions"><button ref={immersiveTriggerRef} className="icon-button immersive-enter" type="button" aria-label="进入沉浸模式" title="进入沉浸模式" aria-pressed={immersive} onClick={enterImmersive}><Maximize2 size={16} /></button><a className="icon-button" href={runExportUrl(run.id, "markdown")} download title="下载 Markdown 报告" aria-label="下载 Markdown 报告"><Download size={15} /></a><a className="icon-button" href={runExportUrl(run.id, "html")} download title="下载 HTML 报告" aria-label="下载 HTML 报告"><FileCheck2 size={15} /></a><button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => { if (highRisk) void api.cancelHighRiskRun(run.id).then((value) => { setHighRisk(value); void refresh(); }); else void api.cancelRun(run.id).then(setRun); }} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button></div>
+      <div className="council-top-actions"><button ref={immersiveTriggerRef} className="icon-button immersive-enter" type="button" aria-label="进入沉浸模式" title="进入沉浸模式" aria-pressed={immersive} onClick={enterImmersive}><Maximize2 size={16} /></button>{run.status !== "completed" && <><a className="icon-button" href={runExportUrl(run.id, "markdown")} download title="下载 Markdown 报告" aria-label="下载 Markdown 报告"><Download size={15} /></a><a className="icon-button" href={runExportUrl(run.id, "html")} download title="下载 HTML 报告" aria-label="下载 HTML 报告"><FileCheck2 size={15} /></a><button className="icon-button" aria-label="结束讨论" title="结束讨论" onClick={() => { if (highRisk) void api.cancelHighRiskRun(run.id).then((value) => { setHighRisk(value); void refresh(); }); else void api.cancelRun(run.id).then(setRun); }} disabled={!['running', 'awaiting_final_input'].includes(run.status)}><X size={16} /></button></>}</div>
     </header>
 
     {immersive && <button ref={immersiveExitRef} className="immersive-exit icon-button" type="button" aria-label="退出沉浸模式" title="退出沉浸模式" aria-pressed={true} onClick={exitImmersive}><Minimize2 size={17} /></button>}
@@ -628,7 +628,31 @@ export default function RunDetailPage() {
           {(error || run.error) && <p className="discussion-error">{error || run.error}</p>}
         </div>}
 
-        {run.status === "completed" && <div className="completed-actions"><a className="quiet-button" href={runExportUrl(run.id, "markdown")} download><Download size={15} />Markdown</a><a className="quiet-button" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} />HTML 报告</a><button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button><button className="quiet-button" onClick={openMemory}><Save size={15} />沉淀记忆</button>{lineage.parent && <Link className="quiet-button" href={`/runs/${lineage.parent.parent_run_id}`}><GitBranch size={15} />父 Run</Link>}{lineage.children.length > 0 && <span className="fork-child-count">{lineage.children.length} 个分支</span>}<span /><button className="quiet-button" onClick={() => { setForkError(""); setForkOpen(true); }}><GitBranch size={15} />创建情景分叉</button><button className="quiet-button" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} />重新开一桌</button><Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link></div>}
+        {run.status === "completed" && <div className="completed-actions">
+          <div className="completed-primary">
+            <button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button>
+            <Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link>
+          </div>
+          <div className="completed-secondary">
+            <details className="action-menu">
+              <summary className="quiet-button action-menu-trigger" role="button" aria-haspopup="true"><Download size={15} />导出<ChevronDown size={13} /></summary>
+              <div className="action-menu-panel" aria-label="导出格式">
+                <a className="action-menu-item" href={runExportUrl(run.id, "markdown")} download><Download size={15} /><span><strong>Markdown</strong><small>适合继续编辑或放进仓库</small></span></a>
+                <a className="action-menu-item" href={runExportUrl(run.id, "html")} download><FileCheck2 size={15} /><span><strong>HTML 报告</strong><small>适合直接发送或归档</small></span></a>
+              </div>
+            </details>
+            <details className="action-menu">
+              <summary className="quiet-button action-menu-trigger" role="button" aria-haspopup="true"><MoreHorizontal size={15} />更多<ChevronDown size={13} /></summary>
+              <div className="action-menu-panel" aria-label="更多操作">
+                <button className="action-menu-item" onClick={openMemory}><Save size={15} /><span><strong>沉淀记忆</strong><small>把这次判断交给未来的审议</small></span></button>
+                {lineage.parent && <Link className="action-menu-item" href={`/runs/${lineage.parent.parent_run_id}`}><GitBranch size={15} /><span><strong>查看父 Run</strong><small>回到分叉前的判断</small></span></Link>}
+                {lineage.children.length > 0 && <span className="action-menu-note">{lineage.children.length} 个情景分支已保存</span>}
+                <button className="action-menu-item" onClick={() => { setForkError(""); setForkOpen(true); }}><GitBranch size={15} /><span><strong>创建情景分叉</strong><small>只改变一个条件，再开一桌</small></span></button>
+                <button className="action-menu-item" onClick={async () => { const next = await api.rerun(run.id); router.push(`/runs/${next.id}`); }}><RotateCcw size={15} /><span><strong>重新开一桌</strong><small>用同一个问题重新审议</small></span></button>
+              </div>
+            </details>
+          </div>
+        </div>}
       </section>
     </main>
     {highRisk && highRiskOpen && <HighRiskPanel

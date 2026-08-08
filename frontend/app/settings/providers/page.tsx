@@ -26,8 +26,9 @@ import {
   UploadCloud,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, Provider } from "../../../lib/api";
+import { AgentAssignment, api, Provider } from "../../../lib/api";
 
 const providerMarks: Record<string, { label: string; color: string }> = {
   ccswitch: { label: "CC", color: "#a64d36" },
@@ -63,12 +64,13 @@ function providerStatus(provider: Provider, transientStatus: string) {
 }
 
 export default function ProvidersSettingsPage() {
+  const router = useRouter();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [selected, setSelected] = useState("ccswitch");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [busy, setBusy] = useState<"models" | "test" | "detect" | "delete" | "">("");
+  const [busy, setBusy] = useState<"models" | "test" | "detect" | "delete" | "assign" | "">("");
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"success" | "error" | "info">("info");
   const [connectionStatus, setConnectionStatus] = useState("idle");
@@ -267,6 +269,39 @@ export default function ProvidersSettingsPage() {
     }
   };
 
+  const useProviderForAllSeats = async () => {
+    if (!current || busy || !["connected", "route_connected_upstream_busy"].includes(connectionStatus)) return;
+    const model = current.default_model || current.available_models[0] || "";
+    if (!model) {
+      setMessage("当前供应商还没有可用模型，请先获取或填写模型 ID。");
+      setMessageTone("error");
+      return;
+    }
+    setBusy("assign");
+    setMessage("");
+    try {
+      const config = await api.assignments();
+      const applyProvider = (assignment: AgentAssignment): AgentAssignment => ({
+        ...assignment,
+        provider_id: current.id,
+        model,
+        protocol: current.protocol_mode as AgentAssignment["protocol"],
+        reasoning_effort: current.reasoning_effort,
+        timeout_seconds: current.timeout_seconds,
+      });
+      await api.saveAssignments({
+        ...config,
+        seats: config.seats.map(applyProvider),
+        finalizer: applyProvider(config.finalizer),
+      });
+      router.push("/?configured=1");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "五席配置失败，请稍后重试。");
+      setMessageTone("error");
+      setBusy("");
+    }
+  };
+
   const removeCredential = async () => {
     if (!current || busy || !window.confirm(`移除 ${current.display_name} 保存在系统凭据库中的 API Key？`)) return;
     setBusy("delete");
@@ -370,7 +405,10 @@ export default function ProvidersSettingsPage() {
               {current.id !== "mock" && current.id !== "ccswitch" && <button className="quiet-button" title="保存并获取模型" onClick={fetchModels} disabled={Boolean(busy)}>{busy === "models" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}保存并获取模型</button>}
               {current.id === "ccswitch" && <button className="quiet-button" title="检测本地路由" onClick={detectCCSwitch} disabled={Boolean(busy)}>{busy === "detect" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}检测本地路由</button>}
               {["connected", "route_connected_upstream_busy"].includes(connectionStatus)
-                ? <Link className="send-button" href="/settings/agents"><Link2 size={15} />下一步：配置五个席位<ChevronRight size={14} /></Link>
+                ? <div className="provider-completion-actions">
+                  <Link className="quiet-button" href="/settings/agents"><Link2 size={15} />分别配置</Link>
+                  <button className="send-button" type="button" onClick={useProviderForAllSeats} disabled={Boolean(busy)} aria-label={`五席直接使用 ${current.default_model || current.available_models[0] || "当前模型"}`} title="五个席位先使用同一个模型，以后可以随时分别调整">{busy === "assign" ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{busy === "assign" ? "正在配置" : "五席直接使用"}<ChevronRight size={14} /></button>
+                </div>
                 : <button className="send-button" onClick={testConnection} disabled={Boolean(busy)}>{busy === "test" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存并测试</button>}
             </footer>
           </section> : <div className="provider-config-loading"><LoaderCircle className="spin" size={22} />正在载入供应商</div>}

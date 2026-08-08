@@ -10,7 +10,11 @@ const ccswitchProvider = { ...mockProvider, id: "ccswitch", preset_id: "ccswitch
 const unreadyProvider = { ...readyProvider, has_api_key: false, credential_source: "none", last_health_check: null };
 const assignment = (role: string, providerId = "mock") => ({ role, provider_id: providerId, model: providerId === "mock" ? "council-mock" : "deepseek-chat", protocol: "auto", reasoning_effort: "low", max_output_tokens: 1200, temperature: 0.2, timeout_seconds: 30 });
 const assignments = (providerId = "mock") => ({ schema_version: 2, seats: [assignment("analyst", providerId), assignment("challenger", providerId), assignment("builder", providerId), assignment("observer", providerId)], finalizer: assignment("finalizer", providerId) });
-const templates = [{ id: "open_discussion", name: "开放讨论", description: "依次讨论", prompt_hint: "写下需要四席共同审议的问题", system_guidance: "" }];
+const templates = [
+  { id: "open_discussion", name: "开放讨论", description: "依次讨论", prompt_hint: "写下需要四席共同审议的问题", system_guidance: "" },
+  { id: "decision_review", name: "决策评审", description: "比较方案", prompt_hint: "说明目标、约束和选项", system_guidance: "" },
+  { id: "premortem", name: "事前验尸", description: "倒推失败", prompt_hint: "描述计划和约束", system_guidance: "" },
+];
 const readyReadiness = { ready: true, task_labels: ["decision"], checks: [], clarification_questions: [], recommended_mode: "full_council", rules_version: "decision-readiness-v1" };
 
 async function createMockRoundtable(request: import("@playwright/test").APIRequestContext) {
@@ -36,18 +40,20 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
   await expect(page.getByText("依次发言、公开回应；短定义与确定性计算会自动精简调用。")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "当前五席还是本地演示。" })).toBeVisible();
-  await expect(page.getByText(/预设示例，不调用真实 AI/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "无需 API Key，先完成一次决策。" })).toBeVisible();
+  await expect(page.getByText(/不联网、不产生模型费用/)).toBeVisible();
   await expect(page.getByRole("link", { name: /连接真实 AI/ })).toHaveAttribute("href", "/settings/providers");
   await expect(page.getByRole("link", { name: "资料空间" })).toHaveCount(0);
   await expect(page.getByText("资料空间", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /进入圆桌/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   await expect(page.getByText("本地演示模式")).toBeVisible();
+  await expect(page.locator(".top-meta")).toContainText("本地演示已就绪");
   await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /引导.*1.8k/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /圆桌.*4k/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /深挖.*7k/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /快速审视.*1.8k/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /标准评审.*4k/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /深度审议.*7k/ })).toBeVisible();
+  await expect(page.getByText(/通常 5 次调用，短任务自动精简为 2 次/)).toBeVisible();
   await expect(page.getByText("联网核验")).toHaveCount(0);
   await expect(page.getByText("代码沙箱")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "附件" })).toHaveCount(0);
@@ -66,6 +72,30 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
   expect(createPayload).toEqual({ question: "这个演示请求不应携带资料空间字段", mode: "standard", use_saved_assignments: true, template_id: "open_discussion" });
 });
 
+test("示例决策只填充可编辑问题，高级设置仍可访问", async ({ page }) => {
+  let createRequests = 0;
+  await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
+  await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
+  await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
+  await page.route("**/api/runs", (route) => { createRequests += 1; return route.fulfill({ json: { id: "unexpected" } }); });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "开始本地演示" }).click();
+  await page.getByRole("button", { name: /现在发布，还是延期/ }).click();
+
+  const question = page.getByRole("textbox", { name: "你的问题" });
+  await expect(question).toHaveValue(/核心功能已经完成/);
+  await expect(page.getByLabel("审议模板")).toHaveValue("decision_review");
+  expect(createRequests).toBe(0);
+  await question.fill("我们是否应该把发布日期延后一周？");
+  await expect(question).toHaveValue("我们是否应该把发布日期延后一周？");
+
+  await expect(page.getByLabel("发言策略")).toHaveCount(0);
+  await page.getByRole("button", { name: "高级设置" }).click();
+  await expect(page.getByLabel("发言策略")).toBeVisible();
+  await expect(page.getByLabel("输出契约")).toBeVisible();
+});
+
 test("自动总结必须由用户明确开启并进入同一个创建请求", async ({ page }) => {
   await page.route("**/api/providers", (route) => route.fulfill({ json: [mockProvider] }));
   await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
@@ -78,7 +108,7 @@ test("自动总结必须由用户明确开启并进入同一个创建请求", as
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   await page.getByText("自动总结", { exact: true }).click();
   await expect(page.getByText("讨论席结束后直接生成答案")).toBeVisible();
   await page.getByPlaceholder("写下需要四席共同审议的问题").fill("请评估是否应该上线付费订阅");
@@ -103,7 +133,7 @@ test("创建请求断线后使用同一幂等键重试", async ({ page }) => {
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   await page.getByPlaceholder("写下需要四席共同审议的问题").fill("网络断开后不能重复创建任务");
   await page.getByRole("button", { name: /进入圆桌/ }).click();
 
@@ -126,7 +156,7 @@ test("高风险开关由同一个创建请求原子启用服务端控制", async
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   await page.getByText("高风险决策支持", { exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /高风险决策支持/ })).toBeChecked();
   await page.getByPlaceholder("写下需要四席共同审议的问题").fill("这项医疗决定缺少哪些关键事实？");
@@ -253,10 +283,10 @@ test("混合席位保留本地演示披露并要求明确确认", async ({ page 
   await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "当前五席含 4 个本地演示席。" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "当前配置包含 4 个本地演示席。" })).toBeVisible();
   await expect(page.getByText(/4 个席位使用预设示例/)).toBeVisible();
   await expect(page.getByRole("button", { name: /进入圆桌/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "接受混合配置并继续" }).click();
+  await page.getByRole("button", { name: "确认混合配置并继续" }).click();
   await expect(page.getByText(/混合配置 · 4 个本地演示席/)).toBeVisible();
   await expect(page.getByRole("button", { name: /进入圆桌/ })).toBeVisible();
 });
@@ -523,6 +553,7 @@ test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商",
   let modelsRequested = 0;
   let tested = 0;
   let activated = 0;
+  let savedAssignments: ReturnType<typeof assignments> | null = null;
 
   await page.route("**/api/providers", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
@@ -530,7 +561,7 @@ test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商",
       id: "deepseek", preset_id: "deepseek", display_name: "DeepSeek", description: "官方 API",
       key_url: "https://platform.deepseek.com/api_keys", docs_url: "https://api-docs.deepseek.com/",
       provider_type: "compatible", protocol_mode: "chat_completions", base_url: "https://api.deepseek.com",
-      default_model: "deepseek-chat", reasoning_effort: "high",
+      default_model: "deepseek-chat", reasoning_effort: "high", timeout_seconds: 90,
       available_models: ["deepseek-chat", "deepseek-reasoner"], model_source: "recommended",
       local_only: false, has_api_key: false, credential_source: "none", supports_api_key: true,
       requires_api_key: true, is_active: false, capabilities: { supports_model_listing: true },
@@ -543,7 +574,7 @@ test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商",
     return route.fulfill({ json: {
       id: "deepseek", preset_id: "deepseek", display_name: "DeepSeek", description: "官方 API",
       provider_type: "compatible", protocol_mode: "chat_completions", base_url: "https://api.deepseek.com",
-      default_model: payload.default_model || "deepseek-chat", reasoning_effort: "high",
+      default_model: payload.default_model || "deepseek-chat", reasoning_effort: "high", timeout_seconds: 90,
       available_models: ["deepseek-chat", "deepseek-reasoner"], model_source: "provider",
       local_only: false, has_api_key: true, credential_source: "system", supports_api_key: true,
       requires_api_key: true, is_active: false, capabilities: { supports_model_listing: true },
@@ -561,6 +592,13 @@ test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商",
     activated += 1;
     return route.fulfill({ json: {} });
   });
+  await page.route("**/api/agent-assignments", (route) => {
+    if (route.request().method() === "PUT") {
+      savedAssignments = route.request().postDataJSON() as ReturnType<typeof assignments>;
+      return route.fulfill({ json: savedAssignments });
+    }
+    return route.fulfill({ json: assignments() });
+  });
 
   await page.goto("/settings/providers");
   await page.getByRole("button", { name: /DeepSeek/ }).click();
@@ -569,7 +607,17 @@ test("粘贴 API Key 后保存并测试会自动获取模型并启用供应商",
 
   await expect(page.getByText("连接成功，已设为当前供应商。")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByLabel("模型", { exact: true })).toHaveValue("deepseek-chat");
-  await expect(page.getByRole("link", { name: /下一步：配置五个席位/ })).toHaveAttribute("href", "/settings/agents");
+  await expect(page.getByRole("link", { name: "分别配置" })).toHaveAttribute("href", "/settings/agents");
+  await page.getByRole("button", { name: "五席直接使用 deepseek-chat" }).click();
+  await page.waitForURL("**/");
+  await expect(page.locator(".setup-complete-notice")).toContainText("五席已配置完成");
+  await expect(page.locator(".setup-complete-notice")).toContainText("现在可以直接输入问题开始审议");
+  await page.getByRole("button", { name: "关闭配置完成提示" }).click();
+  await expect(page.locator(".setup-complete-notice")).toHaveCount(0);
+  expect(savedAssignments).not.toBeNull();
+  expect([...savedAssignments!.seats, savedAssignments!.finalizer]).toHaveLength(5);
+  expect([...savedAssignments!.seats, savedAssignments!.finalizer].every((item) => item.provider_id === "deepseek" && item.model === "deepseek-chat" && item.protocol === "chat_completions" && item.reasoning_effort === "high" && item.timeout_seconds === 90)).toBe(true);
+  expect(savedAssignments!.seats[0]).toMatchObject({ max_output_tokens: 1200, temperature: 0.2 });
   expect(savedKey).toBe("sk-test-for-e2e-only");
   expect(modelsRequested).toBe(1);
   expect(tested).toBe(1);
@@ -1229,7 +1277,19 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
   await expect(card).toContainText("不代表事实正确概率");
   await expect(page.getByText("API 5 / 5 成功", { exact: true })).toBeVisible();
   await expect(page.getByText("查看原始综合文本")).toBeVisible();
-  await expect(page.locator(".completed-actions").getByRole("link", { name: "Markdown" })).toHaveAttribute("href", `/api/runs/${run.id}/export?format=markdown`);
+  await page.getByRole("button", { name: "导出" }).click();
+  await expect(page.locator(".completed-actions").getByRole("link", { name: /Markdown/ })).toHaveAttribute("href", `/api/runs/${run.id}/export?format=markdown`);
+  await page.getByRole("button", { name: "导出" }).click();
+  await page.getByRole("button", { name: "更多" }).click();
+  const moreMenu = page.getByLabel("更多操作");
+  await expect(moreMenu).toBeVisible();
+  const moreMenuBounds = await moreMenu.boundingBox();
+  expect(moreMenuBounds).not.toBeNull();
+  expect(moreMenuBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(moreMenuBounds!.x + moreMenuBounds!.width).toBeLessThanOrEqual(390);
+  await expect(page.getByRole("button", { name: "结果回访" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /讨论新问题/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "结束讨论" })).toHaveCount(0);
   const viewport = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
   expect(viewport.width).toBeLessThanOrEqual(viewport.viewportWidth);
 });

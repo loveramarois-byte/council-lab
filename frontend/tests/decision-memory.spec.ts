@@ -50,6 +50,7 @@ test("用户批准记忆后可在新 Run 前预览并明确选择注入", async 
   await page.route("**/api/runs", (route) => { createPayload = route.request().postDataJSON(); return route.fulfill({ json: { id: "memory-child" } }); });
 
   await page.goto("/runs/memory-source");
+  await page.getByRole("button", { name: "更多" }).click();
   await page.getByRole("button", { name: "沉淀记忆" }).click();
   const dialog = page.getByRole("dialog", { name: "沉淀长期记忆" });
   await dialog.getByLabel("记忆候选 decision").fill("必须支持五分钟回滚才灰度。");
@@ -58,7 +59,7 @@ test("用户批准记忆后可在新 Run 前预览并明确选择注入", async 
   await dialog.getByRole("button", { name: "关闭长期记忆" }).click();
 
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   const picker = page.getByRole("region", { name: "本次使用的已批准记忆" });
   await expect(picker).toContainText("默认不注入");
   await picker.getByRole("checkbox").check();

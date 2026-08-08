@@ -35,8 +35,9 @@ test("专业模板自动匹配契约并强制发送高风险控制", async ({ pa
   await page.route("**/api/runs", (route) => { payload = route.request().postDataJSON(); return route.fulfill({ json: { id: "medical-domain-run" } }); });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   await page.getByLabel("审议模板").selectOption("medical_information_review");
+  await page.getByRole("button", { name: "高级设置" }).click();
   await expect(page.getByLabel("输出契约")).toHaveValue("medical_second_opinion");
   const riskToggle = page.getByRole("checkbox", { name: /高风险决策支持/ });
   await expect(riskToggle).toBeChecked();

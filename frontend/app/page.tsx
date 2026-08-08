@@ -1,15 +1,41 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUp, Bot, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Settings2, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { ArrowUp, Bot, ChevronDown, ChevronRight, CircleAlert, CircleCheck, LoaderCircle, Play, RefreshCw, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AgentAssignmentsConfig, api, DecisionReadiness, DeliberationTemplate, MemoryPreview, MemoryView, OutputContractDefinition, OutputContractId, providerIsReady, Provider } from "../lib/api";
 
 const modes = [
-  { id: "quick", label: "引导", detail: "简单问题 · 较快", budget: "4 席 · 1.8k 上下文", icon: Zap },
-  { id: "standard", label: "圆桌", detail: "多数决策 · 推荐", budget: "4 席 · 4k 上下文", icon: ShieldCheck },
-  { id: "rigorous", label: "深挖", detail: "复杂取舍 · 更细", budget: "4 席 · 7k 上下文", icon: Sparkles },
+  { id: "quick", label: "快速审视", detail: "方向明确的小问题", budget: "1.8k", duration: "通常 1–3 分钟", icon: Zap },
+  { id: "standard", label: "标准评审", detail: "多数产品与技术决策", budget: "4k", duration: "通常 2–5 分钟", icon: ShieldCheck },
+  { id: "rigorous", label: "深度审议", detail: "复杂或难以逆转的选择", budget: "7k", duration: "通常 4–8 分钟", icon: Sparkles },
+];
+
+const exampleDecisions: Array<{
+  label: string;
+  question: string;
+  templateId: string;
+  outputContract: OutputContractId;
+}> = [
+  {
+    label: "现在发布，还是延期？",
+    question: "我们是否应该现在发布产品？核心功能已经完成，但仍有 3 个中等缺陷；本周发布能赶上行业活动。团队 4 人，可以在 48 小时内回滚。请比较现在发布与延期一周，给出选择、主要风险和退出条件。",
+    templateId: "decision_review",
+    outputContract: "product_review",
+  },
+  {
+    label: "两套架构如何选择？",
+    question: "新服务应该采用模块化单体还是微服务？团队 6 人，预计一年内从每天 5 万请求增长到 50 万请求，当前最重要的是交付速度和故障可恢复性。请比较两种方案，并给出迁移触发条件。",
+    templateId: "decision_review",
+    outputContract: "technical_architecture",
+  },
+  {
+    label: "这个计划会怎样失败？",
+    question: "假设我们的新产品在六个月后失败了：预算只能支撑 8 个月，目前有 20 位试用用户，还没有稳定付费渠道。请倒推最可能的失败原因、最早预警信号和本月应采取的预防动作。",
+    templateId: "premortem",
+    outputContract: "product_review",
+  },
 ];
 
 function readinessModeLabel(mode: string): string {
@@ -63,6 +89,8 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [readiness, setReadiness] = useState<DecisionReadiness | null>(null);
   const [readinessOverride, setReadinessOverride] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [setupNotice, setSetupNotice] = useState(false);
 
   const loadConfiguration = useCallback(async () => {
     setConfigState("loading");
@@ -83,6 +111,11 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => { void loadConfiguration(); }, [loadConfiguration]);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("configured") !== "1") return;
+    setSetupNotice(true);
+    window.history.replaceState({}, "", "/");
+  }, []);
   useEffect(() => {
     let cancelled = false;
     void api.memoryPreview(selectedMemoryIds).then((value) => { if (!cancelled) setMemoryPreview(value); }).catch(() => { if (!cancelled) setMemoryPreview(null); });
@@ -129,8 +162,18 @@ export default function HomePage() {
       : configurationReady
         ? "五席真实 AI 已就绪"
         : configurationRunnable
-          ? `${mockSeatCount} 个本地演示席 · 需确认`
+          ? demoAcknowledged
+            ? mockSeatCount === 5 ? "本地演示已就绪" : `混合配置已确认 · ${mockSeatCount} 个演示席`
+            : `${mockSeatCount} 个本地演示席 · 需确认`
           : "席位配置未就绪";
+
+  const useExample = (example: (typeof exampleDecisions)[number]) => {
+    setQuestion(example.question);
+    setTemplateId(example.templateId);
+    setOutputContract(example.outputContract);
+    setHighRisk(false);
+    setAutoSummarize(false);
+  };
 
   const submit = async (forceOverride = false) => {
     if (question.trim().length < 3 || sending || configState !== "ready" || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)) return;
@@ -190,7 +233,8 @@ export default function HomePage() {
       <div className="council-sequence" aria-label="四席顺序"><span>析</span><ChevronRight size={12} /><span>诘</span><ChevronRight size={12} /><span>构</span><ChevronRight size={12} /><span>观</span><ChevronRight size={12} /><strong>答</strong></div>
     </section>
 
-    <section className={`home-workbench ${hasDemoSeats ? "demo-workbench" : ""}`} aria-label="新建审议">
+    <section className={`home-workbench ${hasDemoSeats ? "demo-workbench" : ""} ${setupNotice ? "has-setup-notice" : ""}`} aria-label="新建审议">
+      {setupNotice && <div className="setup-complete-notice" role="status"><CircleCheck size={15} /><span><strong>五席已配置完成</strong><small>现在可以直接输入问题开始审议。</small></span><button type="button" aria-label="关闭配置完成提示" title="关闭" onClick={() => setSetupNotice(false)}>×</button></div>}
       {configState === "loading" ? <div className="first-run-gate" role="status" aria-label="正在读取席位配置">
         <div className="first-run-mark"><LoaderCircle className="spin" size={23} /></div>
         <div className="first-run-copy"><span className="section-label">席位检查</span><h2>正在读取五席配置。</h2><p>配置确认前不会开放提问，避免使用尚未就绪或来源不明的席位。</p></div>
@@ -207,16 +251,29 @@ export default function HomePage() {
         </div>
       </div> : hasDemoSeats && !demoAcknowledged ? <div className="first-run-gate" role="region" aria-label="本地演示席确认">
         <div className="first-run-mark"><Bot size={23} /></div>
-        <div className="first-run-copy"><span className="section-label">开始之前</span><h2>{mockSeatCount === 5 ? "当前五席还是本地演示。" : `当前五席含 ${mockSeatCount} 个本地演示席。`}</h2><p>{demoDisclosure} 正式使用前，请连接模型并为五个席位选择已就绪的 Provider 与模型。</p></div>
+        <div className="first-run-copy"><span className="section-label">第一次使用</span><h2>{mockSeatCount === 5 ? "无需 API Key，先完成一次决策。" : `当前配置包含 ${mockSeatCount} 个本地演示席。`}</h2><p>{mockSeatCount === 5 ? "本地演示使用预设回复，不联网、不产生模型费用。你可以先走完整个圆桌流程，再决定是否连接真实 AI。" : `${demoDisclosure} 继续前请确认你接受这套混合席位配置。`}</p></div>
         <div className="first-run-actions">
-          <Link className="send-button" href={setupHref}><Settings2 size={15} />{setupLabel}<ChevronRight size={14} /></Link>
-          <button type="button" className="quiet-button" onClick={() => setDemoAcknowledged(true)}>{mockSeatCount === 5 ? "仅体验本地演示" : "接受混合配置并继续"}</button>
+          <button type="button" className="send-button" onClick={() => setDemoAcknowledged(true)}>{mockSeatCount === 5 ? <><Play size={15} />开始本地演示</> : <>确认混合配置并继续<ChevronRight size={14} /></>}</button>
+          <Link className="quiet-button" href={setupHref}><Settings2 size={15} />{setupLabel}</Link>
         </div>
       </div> : <>
         {hasDemoSeats && <div className="demo-disclosure"><CircleAlert size={15} /><span><strong>{mockSeatCount === 5 ? "本地演示模式" : `混合配置 · ${mockSeatCount} 个本地演示席`}</strong> · {demoDisclosure}</span><Link href={setupHref}>{setupLabel}<ChevronRight size={13} /></Link></div>}
         <div className="composer-section">
-          <div className="composer-head"><div><span className="section-label">你的问题</span><span className="section-hint">{selectedTemplate?.name || "开放讨论"} · {selectedContract?.name || "一般决策"}</span></div><label className="template-select"><span>审议方式</span><select aria-label="审议模板" value={templateId} onChange={(event) => { const nextTemplate = event.target.value; const definition = templates.find((item) => item.id === nextTemplate); setTemplateId(nextTemplate); if (definition?.default_output_contract) setOutputContract(definition.default_output_contract); if (definition?.requires_high_risk) { setHighRisk(true); setAutoSummarize(false); } }}><optgroup label="通用">{generalTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>{professionalTemplates.length > 0 && <optgroup label="专业领域">{professionalTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}</select></label><label className="template-select"><span>发言策略</span><select aria-label="发言策略" value={workflowStrategy} onChange={(event) => setWorkflowStrategy(event.target.value as "sequential" | "independent")}><option value="sequential">连续审议</option><option value="independent">先独立初答</option></select></label><label className="template-select contract-select"><span>结果类型</span><select aria-label="输出契约" value={outputContract} onChange={(event) => { const nextContract = event.target.value as OutputContractId; const definition = outputContracts.find((item) => item.id === nextContract); setOutputContract(nextContract); if (definition?.requires_high_risk) { setHighRisk(true); setAutoSummarize(false); } }}>{generalContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.name}</option>)}{professionalContracts.length > 0 && <optgroup label="专业领域">{professionalContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.name}</option>)}</optgroup>}</select></label><span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span></div>
-          <textarea aria-label="你的问题" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} title={selectedContract?.prompt_hint} rows={5} />
+          <div className="composer-head">
+            <div><span className="section-label">你需要做什么决定？</span><span className="section-hint">写清目标、约束、选项和成功标准，结论会更可靠</span></div>
+            <label className="template-select"><span>决策类型</span><select aria-label="审议模板" value={templateId} onChange={(event) => { const nextTemplate = event.target.value; const definition = templates.find((item) => item.id === nextTemplate); setTemplateId(nextTemplate); if (definition?.default_output_contract) setOutputContract(definition.default_output_contract); if (definition?.requires_high_risk) { setHighRisk(true); setAutoSummarize(false); } }}><optgroup label="通用">{generalTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>{professionalTemplates.length > 0 && <optgroup label="专业领域">{professionalTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}</select></label>
+            <button type="button" className={`advanced-home-toggle ${advancedOpen ? "open" : ""}`} aria-expanded={advancedOpen} aria-controls="advanced-run-settings" onClick={() => setAdvancedOpen((value) => !value)}><SlidersHorizontal size={14} /><span>高级设置</span><ChevronDown size={14} /></button>
+            <span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span>
+          </div>
+          {advancedOpen && <div id="advanced-run-settings" className="advanced-run-settings">
+            <label className="template-select"><span>发言策略</span><select aria-label="发言策略" value={workflowStrategy} onChange={(event) => setWorkflowStrategy(event.target.value as "sequential" | "independent")}><option value="sequential">连续审议</option><option value="independent">先独立初答</option></select></label>
+            <label className="template-select contract-select"><span>结果结构</span><select aria-label="输出契约" value={outputContract} onChange={(event) => { const nextContract = event.target.value as OutputContractId; const definition = outputContracts.find((item) => item.id === nextContract); setOutputContract(nextContract); if (definition?.requires_high_risk) { setHighRisk(true); setAutoSummarize(false); } }}>{generalContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.name}</option>)}{professionalContracts.length > 0 && <optgroup label="专业领域">{professionalContracts.map((contract) => <option key={contract.id} value={contract.id}>{contract.name}</option>)}</optgroup>}</select></label>
+            <span>默认设置适合大多数决策；更改只影响本次圆桌。</span>
+          </div>}
+          <div className="composer-input">
+            <textarea aria-label="你的问题" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} title={selectedContract?.prompt_hint} rows={5} />
+            {question.length === 0 && <div className="prompt-starters" aria-label="示例决策"><span>从一个实际问题开始</span><div>{exampleDecisions.map((example) => <button key={example.label} type="button" onClick={() => useExample(example)}>{example.label}<ChevronRight size={13} /></button>)}</div></div>}
+          </div>
           {readiness && <section className={`readiness-panel ${readiness.ready ? "ready" : "needs-input"}`} aria-label="决策准备度"><header><div><strong>{readiness.ready ? "可以开始审议" : readiness.rules_version === "readiness_unavailable" ? "准备度检查暂时不可用" : "开始前还有信息缺口"}</strong><small>{readiness.rules_version === "readiness_unavailable" ? "请先自行确认这些关键信息" : `系统建议：${readinessModeLabel(readiness.recommended_mode)}`}</small></div><span>{readiness.task_labels.map(readinessTaskLabel).join(" · ")}</span></header>{readiness.clarification_questions.length > 0 && <ul>{readiness.clarification_questions.map((item) => <li key={item}>{item}</li>)}</ul>}{!readiness.ready && (professionalModeRequired ? <footer><span>该问题必须进入高风险控制面补充关键事实，系统会自动启用证据与专业复核流程。</span></footer> : <footer><span>{readiness.rules_version === "readiness_unavailable" ? "系统无法代你检查；确认信息足够后，仍可明确选择继续。" : "你可以补充问题，也可以明确保留这些缺口并继续。"}</span><button type="button" className="quiet-button" onClick={() => { setReadinessOverride(true); void submit(true); }}>仍然继续</button></footer>)}</section>}
           {memories.length > 0 && <section className="memory-picker" aria-label="本次使用的已批准记忆"><header><div><strong>本次可用的已批准记忆</strong><small>默认不注入，只有你明确勾选的内容才会进入本次 Run。</small></div><span>{selectedMemoryIds.length} / {memories.length}</span></header><div>{memories.map((item) => <label key={item.memory.id}><input type="checkbox" checked={selectedMemoryIds.includes(item.memory.id)} onChange={(event) => setSelectedMemoryIds((current) => event.target.checked ? [...current, item.memory.id] : current.filter((id) => id !== item.memory.id))} /><span><strong>{item.memory.type}</strong>{item.memory.content}</span></label>)}</div>{memoryPreview && selectedMemoryIds.length > 0 && <details><summary>查看实际注入快照</summary><pre>{memoryPreview.rendered_context || "所选记忆当前不可用，不会注入。"}</pre></details>}</section>}
           <div className="composer-footer"><label className={`risk-mode-toggle ${highRisk || professionalModeRequired ? "active" : ""}`}><input type="checkbox" checked={highRisk || professionalModeRequired} disabled={professionalModeRequired} onChange={(event) => { const checked = event.target.checked; setHighRisk(checked); if (checked) setAutoSummarize(false); }} /><span className={`toggle ${highRisk || professionalModeRequired ? "on" : ""}`} /><span><strong>高风险决策支持</strong><small>{professionalModeRequired ? "专业领域强制开启" : highRisk ? "关键事实与人工审批" : "关闭"}</small></span></label>{!highRisk && !professionalModeRequired && <label className={`risk-mode-toggle ${autoSummarize ? "active" : ""}`}><input type="checkbox" checked={autoSummarize} onChange={(event) => setAutoSummarize(event.target.checked)} /><span className={`toggle ${autoSummarize ? "on" : ""}`} /><span><strong>自动总结</strong><small>{autoSummarize ? "讨论席结束后直接生成答案" : "默认等待你的确认"}</small></span></label>}<button type="button" className="send-button" disabled={question.trim().length < 3 || sending || !configurationRunnable || (hasDemoSeats && !demoAcknowledged)} onClick={() => submit()}>{sending ? "正在入席" : "进入圆桌"}<ArrowUp size={17} /></button></div>
@@ -225,6 +282,6 @@ export default function HomePage() {
       </>}
     </section>
 
-    <section className="mode-section"><div className="mode-heading"><div><span className="section-label">审议深度</span><span className="section-hint">圆桌适合大多数决策</span></div><span className="section-hint">问题越复杂，越需要更多上下文和交叉检验</span></div><div className="mode-grid">{modes.map(({ id, label, detail, budget, icon: Icon }) => <button key={id} type="button" aria-label={`${label}，${detail}，${budget}`} aria-pressed={mode === id} className={`mode-option ${mode === id ? "selected" : ""}`} onClick={() => setMode(id)}><span className="mode-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>{detail}</small></span><span className="radio-dot" /></button>)}</div><div className="estimate-line"><span><span className="estimate-bar" />预计 {selectedMode.budget}</span><span>{configState === "loading" ? "席位配置加载中" : configState === "error" ? "席位配置读取失败" : configurationReady ? `${activeProviderNames.size} 个 Provider · 五席真实 AI` : configurationRunnable ? `${mockSeatCount} 个本地演示席 · 需明确确认` : "席位配置未就绪"}</span></div></section>
+    <section className="mode-section"><div className="mode-heading"><div><span className="section-label">审议深度</span><span className="section-hint">标准评审适合大多数决策</span></div><span className="section-hint">问题越复杂，越需要更多上下文和交叉检验</span></div><div className="mode-grid">{modes.map(({ id, label, detail, budget, duration, icon: Icon }) => <button key={id} type="button" aria-label={`${label}，${detail}，${duration}，${budget} 上下文`} aria-pressed={mode === id} className={`mode-option ${mode === id ? "selected" : ""}`} onClick={() => setMode(id)}><span className="mode-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>{detail}</small></span><span className="mode-duration">{duration}</span><span className="radio-dot" /></button>)}</div><div className="estimate-line"><span><span className="estimate-bar" />{selectedMode.duration} · 通常 5 次调用，短任务自动精简为 2 次</span><span>{selectedMode.budget} 席位上下文 · 实际耗时与费用由 Provider 决定 · {configState === "loading" ? "配置加载中" : configState === "error" ? "配置读取失败" : configurationReady ? `${activeProviderNames.size} 个 Provider 已就绪` : configurationRunnable ? `${mockSeatCount} 个本地演示席` : "席位未就绪"}</span></div></section>
   </div>;
 }

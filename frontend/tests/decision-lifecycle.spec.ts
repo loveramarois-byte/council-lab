@@ -48,6 +48,7 @@ test("完成 Run 可创建不可变分叉并在子 Run 比较结果", async ({ p
   });
 
   await page.goto("/runs/fork-parent");
+  await page.getByRole("button", { name: "更多" }).click();
   await page.getByRole("button", { name: "创建情景分叉" }).click();
   await page.getByLabel("分叉检查点").selectOption("after_seat_1");
   await page.getByLabel("分叉原因").fill("预算减半后重新评估");
@@ -61,5 +62,6 @@ test("完成 Run 可创建不可变分叉并在子 Run 比较结果", async ({ p
   const comparison = page.getByRole("article", { name: "父子 Run 结果比较" });
   await expect(comparison).toContainText("直接灰度发布");
   await expect(comparison).toContainText("先做 14 天试点");
-  await expect(page.getByRole("link", { name: "父 Run" })).toHaveAttribute("href", "/runs/fork-parent");
+  await page.getByRole("button", { name: "更多" }).click();
+  await expect(page.getByRole("link", { name: /查看父 Run/ })).toHaveAttribute("href", "/runs/fork-parent");
 });

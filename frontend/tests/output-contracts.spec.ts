@@ -22,7 +22,8 @@ test("selects a product contract and sends it with the new Run", async ({ page }
   await page.route("**/api/readiness", (route) => route.fulfill({ json: { ready: true, task_labels: ["decision"], checks: [], clarification_questions: [], recommended_mode: "full_council", rules_version: "decision-readiness-v1" } }));
   await page.route("**/api/runs", (route) => { payload = route.request().postDataJSON(); return route.fulfill({ json: { id: "product-contract-run" } }); });
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
+  await page.getByRole("button", { name: "高级设置" }).click();
   await page.getByLabel("输出契约").selectOption("product_review");
   await page.getByLabel("发言策略").selectOption("independent");
   await page.getByRole("textbox", { name: "你的问题" }).fill("是否发布这个产品？");

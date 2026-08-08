@@ -64,7 +64,7 @@ test("tablet composer keeps labels horizontal and controls inside the workspace"
   } }));
 
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
 
   const questionLabel = page.locator(".composer-head .section-label");
   const questionBox = await questionLabel.boundingBox();
@@ -74,7 +74,7 @@ test("tablet composer keeps labels horizontal and controls inside the workspace"
   const controlWidths = await page.locator(".composer-head .template-select").evaluateAll((items) =>
     items.map((item) => Math.round(item.getBoundingClientRect().width)),
   );
-  expect(controlWidths).toHaveLength(3);
+  expect(controlWidths).toHaveLength(1);
   expect(controlWidths.every((width) => width >= 100)).toBeTruthy();
 
   const viewport = await page.evaluate(() => ({

@@ -16,7 +16,7 @@ test("准备度不足时先显示缺口，用户明确覆盖后才创建 Run", a
   await page.route("**/api/readiness", (route) => route.fulfill({ json: { ready: false, task_labels: ["decision"], checks: [{ id: "goal_defined", status: "fail", message: "请补充希望解决的具体问题。" }], clarification_questions: ["请补充希望解决的具体问题。"], recommended_mode: "full_council", rules_version: "decision-readiness-v1" } }));
   await page.route("**/api/runs", (route) => { createPayload = route.request().postDataJSON(); return route.fulfill({ json: { id: "readiness-child" } }); });
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   await page.getByPlaceholder("写下需要四席共同审议的问题").fill("是否调整产品发布时间？");
   await page.getByRole("button", { name: /进入圆桌/ }).click();
   const panel = page.getByRole("region", { name: "决策准备度" });

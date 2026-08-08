@@ -21,7 +21,7 @@ test("准备度接口失败时明确阻断，用户覆盖后才创建 Run", asyn
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "仅体验本地演示" }).click();
+  await page.getByRole("button", { name: "开始本地演示" }).click();
   await page.getByRole("textbox", { name: "你的问题" }).fill("我们现在是否应该发布？");
   await page.getByRole("button", { name: "进入圆桌" }).click();
 
