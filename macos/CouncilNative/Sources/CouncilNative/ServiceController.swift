@@ -175,29 +175,30 @@ final class ServiceController: ObservableObject {
     }
 
     private func launch(script: URL) throws {
-        let launchedProcess = Process()
-        launchedProcess.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        launchedProcess.arguments = [script.path]
-        launchedProcess.currentDirectoryURL = FileManager.default.temporaryDirectory
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [script.path]
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
         var environment = ProcessInfo.processInfo.environment
         environment["COUNCIL_NO_BROWSER"] = "1"
-        launchedProcess.environment = environment
-        launchedProcess.standardOutput = FileHandle.nullDevice
-        launchedProcess.standardError = FileHandle.nullDevice
-        launcherProcess = launchedProcess
-        launchedProcess.terminationHandler = { [weak self, weak launchedProcess] _ in
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let processID = ObjectIdentifier(process)
+        launcherProcess = process
+        process.terminationHandler = { [weak self, processID] _ in
             guard let self else { return }
             Task { @MainActor in
-                if self.launcherProcess === launchedProcess {
+                if self.launcherProcess.map(ObjectIdentifier.init) == processID {
                     self.launcherProcess = nil
                 }
             }
         }
         do {
-            try launchedProcess.run()
+            try process.run()
         } catch {
             launcherProcess = nil
-            launchedProcess.terminationHandler = nil
+            process.terminationHandler = nil
             throw error
         }
     }
