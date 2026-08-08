@@ -230,7 +230,7 @@ export default function HomePage() {
 
     <section className="home-command">
       <div><h1>四种视角，你也在场。</h1><p>依次发言、公开回应；短定义与确定性计算会自动精简调用。</p></div>
-      <div className="council-sequence" aria-label="四席顺序"><span>析</span><ChevronRight size={12} /><span>诘</span><ChevronRight size={12} /><span>构</span><ChevronRight size={12} /><span>观</span><ChevronRight size={12} /><strong>答</strong></div>
+      <div className="council-sequence" aria-label="审议顺序"><span title="分析"><b>析</b><small>分析</small></span><ChevronRight size={12} /><span title="追问"><b>诘</b><small>追问</small></span><ChevronRight size={12} /><span title="构建"><b>构</b><small>构建</small></span><ChevronRight size={12} /><span title="反观"><b>观</b><small>反观</small></span><ChevronRight size={12} /><strong title="结论"><b>答</b><small>结论</small></strong></div>
     </section>
 
     <section className={`home-workbench ${hasDemoSeats ? "demo-workbench" : ""} ${setupNotice ? "has-setup-notice" : ""}`} aria-label="新建审议">
