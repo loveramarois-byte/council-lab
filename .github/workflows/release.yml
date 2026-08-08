@@ -13,13 +13,13 @@ jobs:
   verify-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.lock
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -52,13 +52,13 @@ jobs:
     needs: verify-version
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.lock
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -180,7 +180,7 @@ jobs:
           test "$(tr -d '[:space:]' < "$target/Contents/Resources/VERSION")" = "$(tr -d '[:space:]' < VERSION)"
           test "$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUNNER_TEMP/update-result.json")" = "success"
           codesign --verify --deep --strict "$target"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: council-macos
           path: artifacts/Council-v*-macOS.zip
@@ -190,13 +190,13 @@ jobs:
     needs: verify-version
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements.lock
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -366,7 +366,7 @@ jobs:
           if (-not (Test-Path (Join-Path $rollbackTarget "previous-version.txt"))) { throw "Rollback lost a previous-version file" }
           $rollbackResult = Get-Content -Raw (Join-Path $env:RUNNER_TEMP "rollback-result.json") | ConvertFrom-Json
           if ($rollbackResult.status -ne "error" -or $rollbackResult.message -notmatch "previous version was restored") { throw "Rollback result was not recorded" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: council-windows
           path: artifacts/Council-v*-Windows.zip
@@ -383,8 +383,8 @@ jobs:
     env:
       GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: council-*
           merge-multiple: true
@@ -393,7 +393,7 @@ jobs:
         working-directory: artifacts
         run: sha256sum *.zip > SHA256SUMS.txt
       - name: Attest release build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v3
         with:
           subject-path: |
             artifacts/*.zip
