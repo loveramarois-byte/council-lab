@@ -16,6 +16,7 @@ final class ServiceController: ObservableObject {
     @Published private(set) var entryURL: URL?
 
     private var startupTask: Task<Void, Never>?
+    private var launcherProcess: Process?
     private var backendProcess: Process?
     private var frontendProcess: Process?
     private var backendLogHandle: FileHandle?
@@ -66,7 +67,7 @@ final class ServiceController: ObservableObject {
                 try launchEmbeddedServices()
             } else {
                 let launcher = try resolveLauncher(named: "start-council.sh")
-                try await launch(script: launcher)
+                try launch(script: launcher)
             }
         } catch {
             stopEmbeddedServices()
@@ -173,7 +174,7 @@ final class ServiceController: ObservableObject {
         throw CouncilServiceError.launcherMissing
     }
 
-    private func launch(script: URL) async throws {
+    private func launch(script: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = [script.path]
@@ -183,20 +184,21 @@ final class ServiceController: ObservableObject {
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { completedProcess in
-                if completedProcess.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: CouncilServiceError.launcherFailed(completedProcess.terminationStatus))
+        launcherProcess = process
+        process.terminationHandler = { [weak self, weak process] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                if self.launcherProcess === process {
+                    self.launcherProcess = nil
                 }
             }
-            do {
-                try process.run()
-            } catch {
-                process.terminationHandler = nil
-                continuation.resume(throwing: error)
-            }
+        }
+        do {
+            try process.run()
+        } catch {
+            launcherProcess = nil
+            process.terminationHandler = nil
+            throw error
         }
     }
 
@@ -295,9 +297,10 @@ final class ServiceController: ObservableObject {
     }
 
     private func stopEmbeddedServices() {
-        for process in [frontendProcess, backendProcess] where process?.isRunning == true {
+        for process in [launcherProcess, frontendProcess, backendProcess] where process?.isRunning == true {
             process?.terminate()
         }
+        launcherProcess = nil
         frontendProcess = nil
         backendProcess = nil
         try? frontendLogHandle?.close()
