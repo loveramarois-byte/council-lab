@@ -12,9 +12,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.0/Council-v0.18.0-macOS.zip"><strong>下载 macOS 版</strong></a>
+  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.1/Council-v0.18.1-macOS.zip"><strong>下载 macOS 版</strong></a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
-  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.0/Council-v0.18.0-Windows.zip"><strong>下载 Windows 版</strong></a>
+  <a href="https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.1/Council-v0.18.1-Windows.zip"><strong>下载 Windows 版</strong></a>
 </p>
 
 <p align="center"><sub>免费开源 · 本地优先 · 可以先用本地演示，无需 API Key</sub></p>
@@ -103,11 +103,11 @@ Council 提供一般决策、产品评审、技术架构，以及医疗、法律
 
 ### macOS
 
-下载 [`Council-v0.18.0-macOS.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.0/Council-v0.18.0-macOS.zip)，解压后双击 `Council.app`。当前开源构建尚未经过 Apple 公证；如果首次启动被拦截，请按住 Control 点击 App，选择 **打开** 并确认。
+下载 [`Council-v0.18.1-macOS.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.1/Council-v0.18.1-macOS.zip)，解压后双击 `Council.app`。当前开源构建尚未经过 Apple 公证；如果首次启动被拦截，请按住 Control 点击 App，选择 **打开** 并确认。
 
 ### Windows 10 / 11
 
-下载 [`Council-v0.18.0-Windows.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.0/Council-v0.18.0-Windows.zip)，选择 **全部解压**，再双击 `Start Council.cmd`。不需要管理员权限。当前构建没有商业代码签名；如 SmartScreen 提示，请先确认文件来自本仓库 Release，再选择 **更多信息 → 仍要运行**。
+下载 [`Council-v0.18.1-Windows.zip`](https://github.com/loveramarois-byte/council-lab/releases/download/v0.18.1/Council-v0.18.1-Windows.zip)，选择 **全部解压**，再双击 `Start Council.cmd`。不需要管理员权限。当前构建没有商业代码签名；如 SmartScreen 提示，请先确认文件来自本仓库 Release，再选择 **更多信息 → 仍要运行**。
 
 正式 Release 同时提供 `SHA256SUMS.txt` 和 GitHub 构建来源证明。桌面版可以在 **设置 → 软件更新** 检查新版本并打开官方 Release；当前公开构建不会在应用内自动执行下载包。手动安装不会覆盖本地历史和凭据。
 
@@ -154,4 +154,4 @@ Council Lab 认可并感谢 [LINUX DO](https://linux.do/) 社区及佬友们对�
 
 ---
 
-Council 当前版本为 `0.18.0`，以 [Apache License 2.0](LICENSE) 开源。Council Lab 与 CC Switch 项目没有官方隶属、授权或背书关系。
+Council 当前版本为 `0.18.1`，以 [Apache License 2.0](LICENSE) 开源。Council Lab 与 CC Switch 项目没有官方隶属、授权或背书关系。
