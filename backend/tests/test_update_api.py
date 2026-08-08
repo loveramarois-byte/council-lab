@@ -106,9 +106,9 @@ async def test_update_routes_enforce_local_header_and_report_failures(tmp_path, 
         start.assert_not_awaited()
 
         accepted = await client.post("/api/update/install", headers={"X-Council-Request": "app"})
-        assert accepted.status_code == 409
-        assert "发布者签名" in accepted.json()["detail"]
-        start.assert_not_awaited()
+        assert accepted.status_code == 200
+        assert accepted.json()["phase"] == "checking"
+        start.assert_awaited_once()
 
         monkeypatch.setattr(main, "fetch_release", AsyncMock(side_effect=UpdateError("offline")))
         blocked_refresh = await client.get("/api/update/check?refresh=true")

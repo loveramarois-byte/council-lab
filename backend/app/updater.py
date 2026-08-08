@@ -121,8 +121,8 @@ def installation_info() -> Installation:
         platform,
         root,
         packaged,
-        False,
-        "当前公开构建没有可独立验证的发布者签名；请打开官方 Release 手动下载并安装。",
+        True,
+        "可以在软件内安全下载、校验并重启更新。",
     )
 
 

@@ -3,11 +3,7 @@ set -euo pipefail
 
 project_root="/Users/mac/Documents/Codex/2026-07-28/new-chat/council-lab-release-fix"
 artifact_root="$project_root/artifacts"
-
-if [[ ! -d "$artifact_root" ]]; then
-  /usr/bin/osascript -e 'display alert "找不到 Council 构建目录" message "请确认项目目录仍位于 Documents/Codex 下。"'
-  exit 1
-fi
+install_roots=("$HOME/Applications" "/Applications" "$artifact_root")
 
 latest_app=""
 latest_sort_key=""
@@ -28,7 +24,11 @@ while IFS= read -r -d '' app_path; do
     latest_sort_key="$sort_key"
     latest_app="$app_path"
   fi
-done < <(/usr/bin/find "$artifact_root" -maxdepth 3 -type d -path '*/Council.app' -print0)
+done < <(
+  for root in "${install_roots[@]}"; do
+    [[ -d "$root" ]] && /usr/bin/find "$root" -maxdepth 3 -type d -path '*/Council.app' -print0
+  done
+)
 
 if [[ -z "$latest_app" ]]; then
   /usr/bin/osascript -e 'display alert "没有找到 Council 应用" message "请先构建一个 macOS 版本。"'
@@ -49,7 +49,7 @@ old_apps=()
 
 while read -r pid command; do
   case "$command" in
-    "$artifact_root"/*/Council.app/Contents/MacOS/CouncilNative)
+    */Council.app/Contents/MacOS/CouncilNative)
       if [[ "$command" == "$latest_executable" && -n "$latest_build_id" && "$running_build_id" == "$latest_build_id" ]]; then
         /usr/bin/open "$latest_app"
         exit 0
