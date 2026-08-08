@@ -221,8 +221,11 @@ body:has(.home-page) { overflow: hidden; }
   .advanced-run-settings > span { grid-column: 1; }
   .advanced-run-settings .template-select { grid-template-columns: 76px minmax(0, 1fr); }
   .prompt-starters { right: 10px; bottom: 8px; left: 10px; }
-  .prompt-starters button { min-height: 44px; font-size: 12px; }
-  .home-page .composer-input:has(.prompt-starters) textarea { padding-bottom: 96px; }
+  .prompt-starters > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+  .prompt-starters button { min-width: 0; min-height: 44px; justify-content: space-between; font-size: 12px; overflow: hidden; }
+  .prompt-starters button:nth-child(3) { grid-column: 1 / -1; }
+  .prompt-starters button { white-space: nowrap; text-overflow: ellipsis; }
+  .home-page .composer-input:has(.prompt-starters) textarea { padding-bottom: 142px; }
   .home-page .mode-option { display: flex; }
   .home-page .estimate-line { gap: 8px; }
   .home-page .estimate-line > span { min-width: 0; }
