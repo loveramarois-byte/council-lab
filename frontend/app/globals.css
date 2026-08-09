@@ -1442,3 +1442,104 @@ body:has(.council-page.immersive) .main-content { width: 100%; }
   .home-page .estimate-line > span:last-child { display: none; }
   .home-page .estimate-bar { margin-right: 5px; }
 }
+
+/* Deliberation ritual: the seats form one visible procession into the final answer. */
+.council-seats {
+  --journey-progress: 8%;
+}
+.council-seats::after {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  left: 24px;
+  top: calc(50% - 1px);
+  width: var(--journey-progress);
+  max-width: calc(100% - 48px);
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: width .48s cubic-bezier(.22,.8,.32,1);
+}
+.council-seats:has(.council-seat:nth-child(1).active),
+.council-seats:has(.council-seat:nth-child(1).completed) { --journey-progress: 14%; }
+.council-seats:has(.council-seat:nth-child(2).active),
+.council-seats:has(.council-seat:nth-child(2).completed) { --journey-progress: 34%; }
+.council-seats:has(.council-seat:nth-child(3).active),
+.council-seats:has(.council-seat:nth-child(3).completed) { --journey-progress: 54%; }
+.council-seats:has(.council-seat:nth-child(4).active),
+.council-seats:has(.council-seat:nth-child(4).completed) { --journey-progress: 74%; }
+.council-seats:has(.summary-node.active),
+.council-seats:has(.summary-node.completed) { --journey-progress: 92%; }
+.council-seat.active,
+.summary-node.active {
+  animation: seat-presence 2.2s ease-in-out infinite;
+}
+
+/* The discussion reads as a continuous record instead of disconnected messages. */
+.dialogue-scroll {
+  position: relative;
+  background: #fffdf9;
+}
+.dialogue-scroll::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  top: 25px;
+  bottom: 28px;
+  left: 33px;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+.dialogue-scroll > * {
+  position: relative;
+  z-index: 1;
+}
+.discussion-turn:not(.user) {
+  padding-top: 14px;
+  padding-bottom: 18px;
+}
+.discussion-turn:not(.user) .speaker-avatar {
+  box-shadow: 0 0 0 5px #fffdf9;
+}
+.discussion-thinking {
+  min-height: 56px;
+  margin-left: 0;
+  padding: 12px 8px 12px 44px;
+}
+.discussion-thinking::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 19px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: #fffdf9;
+  box-shadow: 0 0 0 5px #fffdf9;
+}
+.discussion-thinking-copy > span {
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+@keyframes seat-presence {
+  0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--seat, var(--accent)) 10%, transparent); }
+  50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--seat, var(--accent)) 15%, transparent); }
+}
+
+@media (max-width: 680px) {
+  .council-seats::after { left: 18px; max-width: calc(100% - 36px); }
+  .dialogue-scroll::before { left: 23px; }
+  .discussion-turn:not(.user) .speaker-avatar { box-shadow: 0 0 0 4px #fffdf9; }
+  .discussion-thinking { padding-left: 34px; }
+  .discussion-thinking::before { left: 9px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .council-seats::after { transition: none; }
+  .council-seat.active,
+  .summary-node.active { animation: none; }
+}
