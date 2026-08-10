@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight, Filter, LoaderCircle, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Filter, LoaderCircle, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { ModalDialog } from "../../components/ModalDialog";
 import { api, Run, RunSummary } from "../../lib/api";
 
 const PAGE_SIZE = 50;
@@ -15,6 +16,9 @@ export default function RunsPage() {
   const [status, setStatus] = useState("all");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<RunSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const load = () => {
     setLoadError("");
@@ -57,9 +61,18 @@ export default function RunsPage() {
   };
 
   const remove = async (id: string) => {
-    await api.deleteRun(id);
-    setRuns((items) => (items || []).filter((item) => item.id !== id));
-    setTotal((count) => Math.max(0, count - 1));
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await api.deleteRun(id);
+      setRuns((items) => (items || []).filter((item) => item.id !== id));
+      setTotal((count) => Math.max(0, count - 1));
+      setPendingDelete(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "记录删除失败，请重试");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return <div className="page-wrap">
@@ -73,10 +86,11 @@ export default function RunsPage() {
     <div className="run-list">
       {runs === null ? <div className="empty-state run-loading" role="status"><LoaderCircle className="spin" size={22} /><h2>正在读取历史记录</h2><p>本地记录较多时可能需要片刻。</p></div>
         : loadError ? <div className="empty-state"><span className="empty-number">!</span><h2>历史记录暂时无法读取</h2><p>{loadError}</p><button className="text-action" onClick={load}>重新读取</button></div>
-        : filtered.length === 0 ? <div className="empty-state"><span className="empty-number">00</span><h2>{runs.length === 0 ? "还没有审议记录" : "没有匹配的审议记录"}</h2><p>{runs.length === 0 ? "从一个具体问题开始，答案会在这里留下轨迹。" : "清除搜索词或切回全部状态后再试。"}</p>{runs.length === 0 ? <Link href="/" className="text-action">开始第一份审议 <ArrowUpRight size={14} /></Link> : <button className="text-action" onClick={() => { setQuery(""); setStatus("all"); }}>清除筛选</button>}{runs.length < total && <button className="text-action" onClick={loadMore} disabled={loadingMore}>{loadingMore ? "正在继续查找" : "继续加载更多记录"}</button>}</div>
-        : <>{groupedRuns.map((group) => <section key={group.key} className="run-day-group" aria-labelledby={`run-day-${group.key}`}><header className="run-day-heading"><div><span>{group.stamp}</span><h2 id={`run-day-${group.key}`}>{group.label}</h2></div><small>{group.items.length} 份审议</small></header>{group.items.map((run) => <article key={run.id} className="run-row"><div className="row-marker"><span className={`status-pill-dot status-${run.status}`} /></div><div className="row-main"><Link href={`/runs/${run.id}`} className="row-question">{run.question}</Link><div className="row-meta"><span className="row-status-label">{runStatusLabel(run.status)}</span><span>{run.mode === "standard" ? "标准" : run.mode === "quick" ? "快速" : "严谨"}</span><time dateTime={run.created_at}>{new Date(run.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time><span>{activeProviderCount(run)} 个 Provider</span></div></div><div className="row-status">{runStatusLabel(run.status)}<small>{run.has_final_decision ? "未外部核验 · " : ""}{run.usage.model_calls} 次调用 · {(run.usage.input_tokens + run.usage.output_tokens).toLocaleString()} Token</small></div><button className="icon-button row-delete" onClick={() => remove(run.id)} title="删除记录" aria-label={`删除：${run.question}`}><Trash2 size={15} /></button><ArrowUpRight className="row-arrow" size={17} /></article>)}</section>)}
+        : filtered.length === 0 ? <div className="empty-state"><h2>{runs.length === 0 ? "还没有审议记录" : "没有匹配的审议记录"}</h2><p>{runs.length === 0 ? "从一个具体问题开始，答案会在这里留下轨迹。" : "清除搜索词或切回全部状态后再试。"}</p>{runs.length === 0 ? <Link href="/" className="text-action">开始第一份审议 <ArrowUpRight size={14} /></Link> : <button className="text-action" onClick={() => { setQuery(""); setStatus("all"); }}>清除筛选</button>}{runs.length < total && <button className="text-action" onClick={loadMore} disabled={loadingMore}>{loadingMore ? "正在继续查找" : "继续加载更多记录"}</button>}</div>
+        : <>{groupedRuns.map((group) => <section key={group.key} className="run-day-group" aria-labelledby={`run-day-${group.key}`}><header className="run-day-heading"><div><span>{group.stamp}</span><h2 id={`run-day-${group.key}`}>{group.label}</h2></div><small>{group.items.length} 份审议</small></header>{group.items.map((run) => <article key={run.id} className="run-row"><div className="row-marker"><span className={`status-pill-dot status-${run.status}`} /></div><div className="row-main"><Link href={`/runs/${run.id}`} className="row-question">{run.question}</Link><div className="row-meta"><span className="row-status-label">{runStatusLabel(run.status)}</span><span>{run.mode === "standard" ? "标准" : run.mode === "quick" ? "快速" : "严谨"}</span><time dateTime={run.created_at}>{new Date(run.created_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time><span>{activeProviderCount(run)} 个 Provider</span></div></div><div className="row-status">{runStatusLabel(run.status)}<small>{run.has_final_decision ? "未外部核验 · " : ""}{run.usage.model_calls} 次调用 · {(run.usage.input_tokens + run.usage.output_tokens).toLocaleString()} Token</small></div><button className="icon-button row-delete" onClick={() => { setDeleteError(""); setPendingDelete(run); }} title="删除记录" aria-label={`删除：${run.question}`}><Trash2 size={15} /></button><ArrowUpRight className="row-arrow" size={17} /></article>)}</section>)}
           {(visibleCount < filtered.length || runs.length < total) && <div className="run-load-more"><button className="text-action" onClick={loadMore} disabled={loadingMore}>{loadingMore ? "正在读取更多记录" : `加载更多（已显示 ${visibleRuns.length} / ${total}）`}</button></div>}</>}
     </div>
+    {pendingDelete && <ModalDialog className="confirm-dialog" labelledBy="delete-run-title" onClose={() => { if (!deleting) setPendingDelete(null); }}><header><AlertTriangle size={20} /><div><h2 id="delete-run-title">删除这份审议记录？</h2><p>“{pendingDelete.question}”及其公开讨论、最终简报和回访将从本机永久删除。</p></div></header><footer>{deleteError && <p className="confirm-error" role="alert">{deleteError}</p>}<button className="quiet-button" type="button" data-autofocus onClick={() => setPendingDelete(null)} disabled={deleting}>保留记录</button><button className="danger-button" type="button" onClick={() => void remove(pendingDelete.id)} disabled={deleting}>{deleting ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}{deleting ? "正在删除" : "永久删除"}</button></footer></ModalDialog>}
   </div>;
 }
 

@@ -633,10 +633,10 @@ test("四席依次辩论并在用户确认后给出最终答案", async ({ page,
     await expect(page.getByText("4 席顺序调用", { exact: true })).toBeVisible();
     await expect(page.getByText("各席独立配置", { exact: true })).toBeVisible();
     await expect(page.getByText("公开讨论", { exact: true })).toBeVisible();
-    await expect(page.getByText("LangGraph", { exact: true })).toBeVisible();
-    await expect(page.getByText(/\d+ 个检查点/)).toBeVisible();
-    await expect(page.getByText(/上下文 \d+ \/ \d+/)).toBeVisible();
-    await expect(page.getByText(/上游累计 [\d,]+ \/ [\d,]+/)).toBeVisible();
+    await expect(page.locator(".callboard-meta")).toContainText("本地演示");
+    await expect(page.getByText("LangGraph", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/\d+ 个检查点/)).toHaveCount(0);
+    await expect(page.getByText(/上游累计 [\d,]+ \/ [\d,]+/)).toHaveCount(0);
     await expect(page.locator(".discussion-turn.agent")).toHaveCount(4, { timeout: 10_000 });
     await expect(page.locator(".council-session")).toContainText("等待你的确认");
     await expect(page.getByPlaceholder("最终答案生成前，我还想补充…")).toBeEnabled();
@@ -1042,12 +1042,12 @@ test("五个真实 AI 席位就绪后才显示完成入口", async ({ page }) =>
   await expect(page.getByRole("link", { name: /完成，开始提问/ })).toHaveAttribute("href", "/");
 });
 
-test("评测页没有硬编码模型调用成绩", async ({ page }) => {
+test("评测页展示公开验收并明确质量边界", async ({ page }) => {
   await page.goto("/evaluations");
-  await expect(page.getByText("暂无真实评测数据")).toBeVisible();
-  const averageCalls = page.locator(".eval-row").filter({ hasText: "平均模型调用" });
-  await expect(averageCalls.locator(".muted-cell")).toHaveCount(3);
-  for (const cell of await averageCalls.locator(".muted-cell").all()) await expect(cell).toHaveText("—");
+  await expect(page.getByRole("heading", { name: "先看证据，再相信流程。" })).toBeVisible();
+  await expect(page.getByText("50 / 50 请求成功")).toBeVisible();
+  await expect(page.getByText(/不代表事实正确率、模型质量排名或所有 Provider/)).toBeVisible();
+  await expect(page.getByRole("link", { name: /查看数据/ })).toHaveAttribute("href", /live-acceptance-50-summary-2026-08-05\.json/);
 });
 
 test("移动端圆桌固定一屏，内部消息区滚动", async ({ page, request }) => {
@@ -1247,7 +1247,7 @@ test("普通审议不再探测高风险控制接口", async ({ page }) => {
 test("完成后的结构化决策简报保留阻塞项、少数意见并可导出", async ({ page }) => {
   const now = new Date().toISOString();
   const run = {
-    id: "decision-brief-fixture", question: "是否应该发布这个版本？", mode: "standard", provider_id: "mock", model: "council-mock", reasoning_effort: "high",
+    id: "decision-brief-fixture", question: "是否应该发布这个版本？", mode: "standard", provider_id: "compatible", model: "test-model", reasoning_effort: "high",
     status: "completed", created_at: now, updated_at: now, analysis: null, candidates: [], critiques: [], verifications: [], revisions: [], scores: [],
     final_decision: { final_answer: "先做小范围发布，并保留回滚开关。", key_reasons: [], verified_claims: [], partially_verified_claims: [], contradicted_claims: [], unverified_claims: ["需求未核验"], disagreements: ["预算不足"], risks_and_limitations: ["模型共识不等于事实验证。"], confidence: { level: "unverified", explanation: "不提供百分比置信度" }, sources: [], provider_summary: { provider: "Mock", protocol: "mock", model: "council-mock", used_ccswitch: false, degraded: false }, usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 100 } },
     usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 100 }, provider_attempts: Array.from({ length: 5 }, (_, index) => ({ role: "analyst", provider_id: "compatible", provider_name: "Compatible", model: "test-model", endpoint: "/responses", attempt: index + 1, status_code: 200, duration_ms: 20 })), degraded: false, protocol: "mock", workflow_engine: "langgraph", checkpoint_count: 4,
@@ -1278,7 +1278,7 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
   await expect(card).toContainText("预算仍未确认或错误率超过门槛时停止发布");
   await expect(card).toContainText("少数意见");
   await expect(card).toContainText("不代表事实正确概率");
-  await expect(page.getByText("API 5 / 5 成功", { exact: true })).toBeVisible();
+  await expect(page.locator(".callboard-api")).toHaveText("请求 5 / 5 成功");
   await expect(page.getByText("查看原始综合文本")).toBeVisible();
   await page.getByRole("button", { name: "导出" }).click();
   await expect(page.locator(".completed-actions").getByRole("link", { name: /Markdown/ })).toHaveAttribute("href", `/api/runs/${run.id}/export?format=markdown`);
@@ -1291,7 +1291,7 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
   expect(moreMenuBounds!.x).toBeGreaterThanOrEqual(0);
   expect(moreMenuBounds!.x + moreMenuBounds!.width).toBeLessThanOrEqual(390);
   await expect(page.getByRole("button", { name: "结果回访" })).toBeVisible();
-  await expect(page.getByRole("link", { name: /讨论新问题/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "新问题" })).toBeVisible();
   await expect(page.getByRole("button", { name: "结束讨论" })).toHaveCount(0);
   const viewport = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewportWidth: window.innerWidth }));
   expect(viewport.width).toBeLessThanOrEqual(viewport.viewportWidth);
@@ -1411,4 +1411,31 @@ test("历史页明确区分空记录、无匹配和读取失败", async ({ page 
   await page.reload();
   await expect(page.getByText("历史记录暂时无法读取")).toBeVisible();
   await expect(page.getByRole("button", { name: "重新读取" })).toBeVisible();
+});
+
+test("删除历史记录必须二次确认且可取消", async ({ page }) => {
+  const now = new Date().toISOString();
+  const run = {
+    id: "history-delete", question: "这份记录需要确认后才能删除", mode: "standard", provider_id: "mock",
+    status: "completed", created_at: now, participant_roles: [], seat_assignments: [], has_final_decision: true,
+    usage: { model_calls: 5, tool_calls: 0, input_tokens: 100, output_tokens: 20, estimated_cost: null, duration_ms: 10 },
+  };
+  let deleteRequests = 0;
+  await page.route(/\/api\/runs\?summary=true&limit=\d+&offset=\d+$/, (route) => route.fulfill({ json: { items: [run], total: 1, limit: 50, offset: 0 } }));
+  await page.route("**/api/runs/history-delete", (route) => {
+    deleteRequests += 1;
+    return route.fulfill({ json: { deleted: true } });
+  });
+
+  await page.goto("/runs");
+  await page.getByRole("button", { name: /删除：这份记录/ }).click();
+  await expect(page.getByRole("dialog", { name: "删除这份审议记录？" })).toBeVisible();
+  expect(deleteRequests).toBe(0);
+  await page.getByRole("button", { name: "保留记录" }).click();
+  await expect(page.getByText("这份记录需要确认后才能删除", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /删除：这份记录/ }).click();
+  await page.getByRole("button", { name: "永久删除" }).click();
+  await expect(page.getByText("这份记录需要确认后才能删除", { exact: true })).toHaveCount(0);
+  expect(deleteRequests).toBe(1);
 });

@@ -224,6 +224,7 @@ export default function RunDetailPage() {
   const runStopped = run?.status === "stopped";
   const providerTokens = (run?.usage.input_tokens || 0) + (run?.usage.output_tokens || 0);
   const providerAttempts = run?.provider_attempts || [];
+  const isLocalDemo = run?.provider_id === "mock" || Boolean(run?.seat_assignments?.length && run.seat_assignments.every((item) => item.provider_id === "mock"));
   const successfulProviderAttempts = providerAttempts.filter((item) => item.status_code !== null && item.status_code !== undefined && item.status_code >= 200 && item.status_code < 300).length;
   const runLimits = run?.limits || DEFAULT_RUN_LIMITS;
   const canResumeLimit = Boolean(runStopped && ["max_tokens", "max_model_calls"].includes(run?.limit_reason || ""));
@@ -545,9 +546,9 @@ export default function RunDetailPage() {
       </section>
 
       <details className="council-callboard" aria-label="AI 独立调用顺序" open>
-        <summary className="callboard-summary"><span><Bot size={15} /><strong>审议路径</strong><small>{seatCount} 席与总结席 · {run.usage.model_calls} 次调用</small><b className="callboard-api">API {providerAttempts.length ? `${successfulProviderAttempts} / ${providerAttempts.length} 成功` : "旧记录未采集"}</b></span><span>查看运行细节<ChevronDown size={15} /></span></summary>
+        <summary className="callboard-summary"><span><Bot size={15} /><strong>审议路径</strong><small>{seatCount} 席与总结席 · {run.usage.model_calls} 次调用</small><b className="callboard-api">{isLocalDemo ? "本地演示 · 不计 API 用量" : providerAttempts.length ? `请求 ${successfulProviderAttempts} / ${providerAttempts.length} 成功` : "运行详情"}</b></span><span>查看运行细节<ChevronDown size={15} /></span></summary>
         <div className="callboard-body">
-          <div className="callboard-meta"><Bot size={14} /><strong>{seatCount} 席顺序调用</strong><span className="api-attempt-meta" title={providerAttempts.length ? "实际发出的 Provider HTTP 请求，包含可重试请求。" : "此历史记录创建于请求审计上线前。"}><Gauge size={12} />{run.status === "completed" ? "请求" : "API"} {providerAttempts.length ? `${successfulProviderAttempts} / ${providerAttempts.length} 成功` : "旧记录未采集"}</span><span>{run.analysis?.short_task_route ? "短任务精简路线" : "各席独立配置"}</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="工作流引擎"><GitBranch size={12} />{run.workflow_engine === "langgraph" ? "LangGraph" : "Council"}</span><span title="持久检查点"><Save size={12} />{run.checkpoint_count || 0} 个检查点</span><span title="成功模型调用的实际次数和系统预计总次数"><Gauge size={12} />调用 {run.usage.model_calls} / 预计 {expectedModelCalls}</span><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></div></div>
+          <div className="callboard-meta"><Bot size={14} /><strong>{seatCount} 席顺序调用</strong><span className="api-attempt-meta" title={isLocalDemo ? "本地演示不会向外部 Provider 发出请求。" : providerAttempts.length ? "实际发出的 Provider HTTP 请求，包含可重试请求。" : "这份历史记录没有请求级审计数据。"}><Gauge size={12} />{isLocalDemo ? "本地演示" : providerAttempts.length ? `请求 ${successfulProviderAttempts} / ${providerAttempts.length} 成功` : `${run.usage.model_calls} 次调用`}</span><span>{run.analysis?.short_task_route ? "短任务精简路线" : "各席独立配置"}</span><span>{run.template_name || "开放讨论"}</span>{run.project_name && <span>{run.project_name} · {run.source_snapshots?.length || 0} 份资料</span>}<div className="runtime-meta"><span title="成功模型调用的实际次数和系统预计总次数"><Gauge size={12} />调用 {run.usage.model_calls} / 预计 {expectedModelCalls}</span>{!isLocalDemo && <><span title={`本席发送的讨论上下文；${run.context_snapshot?.token_estimator_exact ? "使用模型精确 tokenizer" : "使用偏保守估算"}`}><Layers3 size={12} />上下文 {run.context_snapshot?.estimated_tokens || 0} / {run.context_snapshot?.token_budget || 0} · {run.context_snapshot?.token_estimator_exact ? "精确" : "估算"}</span><span title="Provider 返回的全程累计用量，包含上游基础指令"><Gauge size={12} />上游累计 {providerTokens.toLocaleString()} / {runLimits.max_tokens.toLocaleString()}</span></>}</div></div>
           <div className="council-seats">
             {run.participant_roles.map((participant, index) => <Seat key={participant.id} participant={participant} assignment={run.seat_assignments?.[index]} index={index} selected={target === participant.id} status={completedSpeakerIds.has(participant.id) ? "completed" : runFailed && run.current_speaker_index === index ? "failed" : debateActive && run.current_speaker_index === index ? "active" : "queued"} onSelect={() => debateActive && setTarget(target === participant.id ? null : participant.id)} />)}
             <div className={`summary-node ${run.status === "completed" ? "completed" : runFailed && discussionComplete ? "failed" : discussionComplete ? "active" : "queued"}`} aria-label={`第 ${summaryCallNumber} 次调用：记录员总结`}>
@@ -631,7 +632,7 @@ export default function RunDetailPage() {
         {run.status === "completed" && <div className="completed-actions">
           <div className="completed-primary">
             <button className="quiet-button" onClick={openDecisionReview}><ClipboardCheck size={15} />{run.decision_review ? "编辑回访" : "结果回访"}</button>
-            <Link className="send-button" href="/">讨论新问题<Sparkles size={15} /></Link>
+            <Link className="send-button" href="/"><span className="action-label-long">讨论新问题</span><span className="action-label-short">新问题</span><Sparkles size={15} /></Link>
           </div>
           <div className="completed-secondary">
             <details className="action-menu">
@@ -731,7 +732,7 @@ function DecisionBriefView({ brief }: { brief: DecisionBrief }) {
   const support = { unanimous: "一致支持", majority: "多数支持", contested: "存在明确反对" }[brief.support];
   const basis = { user_input: "用户输入", model_inference: "模型推断", cited_unverified: "引用未核验", outcome_verified: "结果已验证" };
   return <article className={`decision-brief-card status-${brief.status}`} aria-label="结构化决策简报">
-    <header><div><span>DECISION BRIEF · v{brief.version}</span><h2>结构化决策简报</h2></div><div className="decision-brief-status"><strong>{status.label}</strong><small>{status.detail}</small></div></header>
+    <header><div><span>决策简报</span><h2>结构化判断</h2></div><div className="decision-brief-status"><strong>{status.label}</strong><small>{status.detail}</small></div></header>
     <div className="decision-brief-support"><strong>{support}</strong><span>只表示公开讨论中的可观察表态，不代表事实正确概率。</span></div>
     <section className="decision-recommendation"><span>当前建议</span><RichText content={brief.recommendation} /></section>
     {brief.contract_extension && <ContractExtensionView extension={brief.contract_extension} />}
