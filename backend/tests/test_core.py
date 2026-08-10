@@ -87,6 +87,10 @@ def test_builtin_provider_catalog_uses_official_api_roots():
     assert catalog["zhipu"].default_model == "glm-4-flash"
     assert not any("5.6" in model or "v4-" in model or "k3" in model for profile in catalog.values() for model in [profile.default_model, *profile.available_models])
     assert normalize_base_url(catalog["zhipu"].base_url, ProviderType.COMPATIBLE) == catalog["zhipu"].base_url
+    assert catalog["novita"].base_url == "https://api.novita.ai/openai"
+    assert catalog["novita"].api_key_reference == "NOVITA_API_KEY"
+    assert catalog["novita"].provider_type == ProviderType.COMPATIBLE
+    assert normalize_base_url(catalog["novita"].base_url, ProviderType.COMPATIBLE) == catalog["novita"].base_url
 
 
 def test_provider_secret_uses_system_credential_store_without_public_exposure(monkeypatch):

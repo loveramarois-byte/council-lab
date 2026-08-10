@@ -36,6 +36,7 @@ const providerMarks: Record<string, { label: string; color: string }> = {
   zhipu: { label: "GL", color: "#167b83" },
   kimi: { label: "K", color: "#25282d" },
   siliconflow: { label: "SF", color: "#39705b" },
+  novita: { label: "NV", color: "#7a4bce" },
   openai: { label: "AI", color: "#494540" },
   custom: { label: "<>" , color: "#736b61" },
   mock: { label: "M", color: "#9a6a35" },
