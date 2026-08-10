@@ -1,7 +1,7 @@
 {
   "name": "council-lab-web",
   "private": true,
-  "version": "0.18.8",
+  "version": "0.18.9",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
