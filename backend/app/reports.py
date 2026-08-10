@@ -35,6 +35,7 @@ def _decision_brief_markdown(brief: DecisionBrief) -> list[str]:
         ("尚未解决的问题", [f"{'[阻塞] ' if item.blocking else ''}{item.issue}" for item in brief.unresolved]),
         ("假设与依据", [f"{item.claim}（依据：{item.basis}）" for item in brief.assumptions]),
         ("下一步行动", [item.action for item in brief.actions]),
+        ("停止条件", brief.stop_conditions),
         ("重新审议条件", [f"{item.condition}（{item.severity}）" for item in brief.reopen_triggers]),
     )
     for heading, items in sections:
@@ -255,6 +256,7 @@ def _decision_brief_html(brief: DecisionBrief) -> str:
             ("尚未解决的问题", [f"{'[阻塞] ' if item.blocking else ''}{item.issue}" for item in brief.unresolved]),
             ("假设与依据", [f"{item.claim}（依据：{item.basis}）" for item in brief.assumptions]),
             ("下一步行动", [item.action for item in brief.actions]),
+            ("停止条件", brief.stop_conditions),
             ("重新审议条件", [f"{item.condition}（{item.severity}）" for item in brief.reopen_triggers]),
         )
         if items

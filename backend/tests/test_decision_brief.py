@@ -143,6 +143,18 @@ def test_generator_supports_all_three_statuses_without_percentage_confidence():
     assert proceed.support == "unanimous"
     assert "%" not in proceed.model_dump_json()
 
+    for brief in (proceed, conditional, no_decision):
+        assert brief.actions
+        assert all(action.success_criteria for action in brief.actions)
+        assert brief.reopen_triggers
+        assert brief.stop_conditions
+        assert brief.contract_extension is not None
+        assert brief.contract_extension.contract == "general_decision"
+
+    assert "可逆" in proceed.actions[0].action
+    assert "核对" in conditional.actions[0].action
+    assert "阻塞" in no_decision.actions[0].action
+
 
 @pytest.mark.parametrize(
     ("contract_id", "contract_label", "disclaimer_fragment"),
@@ -291,6 +303,7 @@ def test_exports_render_structured_brief_without_fact_probability():
         assert "存在明确反对" in exported
         assert "少数意见" in exported
         assert "预算不足" in exported
+        assert "停止条件" in exported
         assert "事实正确概率" in exported
         assert "82%" not in exported
 

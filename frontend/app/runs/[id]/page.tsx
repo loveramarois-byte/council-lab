@@ -739,6 +739,7 @@ function DecisionBriefView({ brief }: { brief: DecisionBrief }) {
       {brief.decisive_reasons.length > 0 && <BriefSection title="决定性理由" items={brief.decisive_reasons.map((item) => item.summary)} />}
       {brief.unresolved.length > 0 && <section><h3>尚未解决的问题</h3><ul>{brief.unresolved.map((item) => <li key={item.id} className={item.blocking ? "blocking" : ""}>{item.blocking && <strong>阻塞</strong>}<span>{item.issue}</span>{item.resolution_method && <small>{item.resolution_method}</small>}</li>)}</ul></section>}
       {brief.actions.length > 0 && <BriefSection title="下一步行动" items={brief.actions.map((item) => item.action)} />}
+      {(brief.stop_conditions?.length || 0) > 0 && <BriefSection title="停止条件" items={brief.stop_conditions || []} />}
       {brief.reopen_triggers.length > 0 && <BriefSection title="重新审议条件" items={brief.reopen_triggers.map((item) => item.condition)} />}
       {brief.assumptions.length > 0 && <section><h3>假设与依据</h3><ul>{brief.assumptions.map((item) => <li key={item.id}><span>{item.claim}</span><small>{basis[item.basis]}{item.validation_method ? ` · ${item.validation_method}` : ""}</small></li>)}</ul></section>}
       {brief.minority_report && <section className="minority-report"><h3>少数意见</h3><p>{brief.minority_report.summary}</p><small>反对席位：{brief.minority_report.seat_ids.join("、")}</small></section>}

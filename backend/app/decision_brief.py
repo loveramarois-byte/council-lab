@@ -134,16 +134,37 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
         for index, claim in enumerate(_deduplicate(decision.verified_claims), 1)
     ]
     decisive_reasons = [*synthesis_reasons, *verified_reasons]
-    actions = []
-    if status != "proceed":
-        actions.append(
+    recommendation_excerpt = " ".join(decision.final_answer.split())[:800].rstrip("，,；;：: ")
+    if status == "proceed":
+        actions = [
+            DecisionAction(
+                id="execute-reversible-first-step",
+                action=f"以可逆、可观察的首步执行当前建议：{recommendation_excerpt}",
+                owner="用户",
+                success_criteria="首步达到预先记录的预期结果，且未触发停止条件或出现新的阻塞证据。",
+            )
+        ]
+        stop_conditions = ["执行结果偏离成功标准、出现新的重大风险或关键事实发生实质变化时，立即停止推进。"]
+    elif status == "no_decision":
+        actions = [
+            DecisionAction(
+                id="resolve-blocking-issues",
+                action="先解决简报中的阻塞项；阻塞项关闭前不执行当前建议。",
+                owner="用户",
+                success_criteria="所有阻塞项都有可核验的处理结果，且被否定的关键前提已修正或移除。",
+            )
+        ]
+        stop_conditions = ["任何阻塞项仍未解决、关键前提仍被证据否定或证据相互冲突时，不得执行当前建议。"]
+    else:
+        actions = [
             DecisionAction(
                 id="verify-material-claims",
-                action="在执行前核对未验证或存在冲突的关键结论。",
+                action="先核对未验证或存在冲突的关键结论；核验通过后再以可逆小步执行当前建议。",
                 owner="用户",
-                success_criteria="关键结论能对应第一方资料、原始数据或可复现测试。",
+                success_criteria="关键结论能对应第一方资料、原始数据或可复现测试，且分歧已有明确处理结果。",
             )
-        )
+        ]
+        stop_conditions = ["关键主张未完成核验、出现相互冲突的证据或风险边界仍不清楚时，停止推进。"]
     reopen_triggers = [
         ReopenTrigger(
             id="material-facts-change",
@@ -190,7 +211,7 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
                     success_threshold="执行前由用户明确可量化阈值；未定义阈值时不得宣称验证成功。",
                 )
             ],
-            stop_conditions=[item.condition for item in reopen_triggers],
+            stop_conditions=stop_conditions,
         )
     elif run.output_contract == "technical_architecture":
         contract_extension = TechnicalArchitectureExtension(
@@ -252,6 +273,7 @@ def build_decision_brief(run: RunRecord) -> DecisionBrief:
         unresolved=unresolved,
         assumptions=assumptions,
         actions=actions,
+        stop_conditions=stop_conditions,
         reopen_triggers=reopen_triggers,
         minority_report=minority_report,
         limitations=limitations,

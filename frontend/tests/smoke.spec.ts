@@ -407,7 +407,7 @@ test("App Store 版本只展示由商店管理的更新通道", async ({ page })
   await expect(page.getByText("无需在 Council 内下载或替换应用文件。")).toBeVisible();
   await expect(page.getByText("App Store", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "重新检查" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "下载并安装" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载并安装" })).toHaveCount(0);
 });
 
 test("更新检查失败后可重试并显示自动更新入口", async ({ page }) => {
@@ -1261,6 +1261,7 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
     unresolved: [{ id: "issue-1", issue: "预算上限尚未确认", blocking: true, positions: [{ seat_id: "challenger", position: "预算不足时不应上线" }], resolution_method: "确认预算门槛后重新审议。" }],
     assumptions: [{ id: "assumption-1", claim: "当前需求强度足以支持灰度", basis: "model_inference", validation_method: "核对真实用户数据", owner: "用户", due_at: null }],
     actions: [{ id: "action-1", action: "先确认预算上限", owner: "用户", due_at: null, success_criteria: "预算获得确认", status: "pending" }],
+    stop_conditions: ["预算仍未确认或错误率超过门槛时停止发布"],
     reopen_triggers: [{ id: "trigger-1", condition: "预算或需求发生实质变化", check_method: "重新核对", severity: "blocking" }],
     minority_report: { summary: "预算不足时不应上线。", seat_ids: ["challenger"], conditions_under_which_it_may_be_correct: ["预算低于门槛"] },
     limitations: ["席位支持度不代表事实正确概率。", "未经过外部事实核验。"],
@@ -1274,6 +1275,7 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
   await expect(card).toContainText("满足条件后推进");
   await expect(card).toContainText("存在明确反对");
   await expect(card).toContainText("预算上限尚未确认");
+  await expect(card).toContainText("预算仍未确认或错误率超过门槛时停止发布");
   await expect(card).toContainText("少数意见");
   await expect(card).toContainText("不代表事实正确概率");
   await expect(page.getByText("API 5 / 5 成功", { exact: true })).toBeVisible();

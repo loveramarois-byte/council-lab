@@ -266,6 +266,7 @@ export type DecisionBrief = {
   unresolved: { id: string; issue: string; blocking: boolean; positions: { seat_id: string; position: string }[]; resolution_method?: string | null }[];
   assumptions: { id: string; claim: string; basis: "user_input" | "model_inference" | "cited_unverified" | "outcome_verified"; validation_method?: string | null; owner?: string | null; due_at?: string | null }[];
   actions: { id: string; action: string; owner?: string | null; due_at?: string | null; success_criteria?: string | null; status: "pending" | "in_progress" | "done" | "cancelled" }[];
+  stop_conditions?: string[];
   reopen_triggers: { id: string; condition: string; check_method?: string | null; severity: "informational" | "important" | "blocking" }[];
   minority_report?: { summary: string; seat_ids: string[]; conditions_under_which_it_may_be_correct: string[] } | null;
   limitations: string[];

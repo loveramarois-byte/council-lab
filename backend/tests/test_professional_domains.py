@@ -91,6 +91,20 @@ def test_adversarial_english_professional_questions_cannot_use_normal_flow(quest
 
 
 @pytest.mark.parametrize(
+    ("question", "domain"),
+    [
+        ("我能不能把二甲双胍减半？", "medical"),
+        ("公司突然把我开除，我还能主张什么？", "legal"),
+        ("把全部退休储蓄买入 ETF 是否合适？", "investment"),
+    ],
+)
+def test_common_chinese_professional_phrasings_cannot_bypass_high_risk_control(question: str, domain: str):
+    assert detect_professional_domains(question) == [domain]
+    assert analyze_readiness(question).recommended_mode == "high_risk_council"
+    assert analyze_question(question, "quick").short_task_route is False
+
+
+@pytest.mark.parametrize(
     "question",
     [
         "保险箱应该放在哪里？",

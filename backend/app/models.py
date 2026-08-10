@@ -688,6 +688,7 @@ class DecisionBrief(DecisionBriefItem):
     unresolved: list[UnresolvedIssue] = Field(default_factory=list, max_length=50)
     assumptions: list[DecisionAssumption] = Field(default_factory=list, max_length=50)
     actions: list[DecisionAction] = Field(default_factory=list, max_length=50)
+    stop_conditions: list[str] = Field(default_factory=list, max_length=50)
     reopen_triggers: list[ReopenTrigger] = Field(default_factory=list, max_length=50)
     minority_report: MinorityReport | None = None
     limitations: list[str] = Field(min_length=1, max_length=50)
