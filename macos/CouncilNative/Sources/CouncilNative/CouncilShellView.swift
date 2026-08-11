@@ -5,6 +5,7 @@ struct CouncilShellView: View {
     @EnvironmentObject private var service: ServiceController
     @EnvironmentObject private var navigation: CouncilNavigationModel
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var columnVisibilityBeforeImmersive: NavigationSplitViewVisibility = .all
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -23,6 +24,14 @@ struct CouncilShellView: View {
         .onChange(of: service.entryURL) { _, url in
             if let url { navigation.open(url) }
         }
+        .onChange(of: navigation.isImmersive) { _, isImmersive in
+            if isImmersive {
+                columnVisibilityBeforeImmersive = columnVisibility
+                columnVisibility = .detailOnly
+            } else {
+                columnVisibility = columnVisibilityBeforeImmersive
+            }
+        }
     }
 
     @ViewBuilder
@@ -40,28 +49,30 @@ struct CouncilShellView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .navigation) {
-            Button { navigation.goBack() } label: {
-                Image(systemName: "chevron.left")
-            }
-            .disabled(!navigation.canGoBack)
-            .help("返回")
+        if !navigation.isImmersive {
+            ToolbarItemGroup(placement: .navigation) {
+                Button { navigation.goBack() } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!navigation.canGoBack)
+                .help("返回")
 
-            Button { navigation.goForward() } label: {
-                Image(systemName: "chevron.right")
+                Button { navigation.goForward() } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!navigation.canGoForward)
+                .help("前进")
             }
-            .disabled(!navigation.canGoForward)
-            .help("前进")
-        }
 
-        ToolbarItemGroup(placement: .primaryAction) {
-            if navigation.isLoading {
-                ProgressView().controlSize(.small)
+            ToolbarItemGroup(placement: .primaryAction) {
+                if navigation.isLoading {
+                    ProgressView().controlSize(.small)
+                }
+                Button { navigation.reload() } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("重新载入")
             }
-            Button { navigation.reload() } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .help("重新载入")
         }
     }
 }

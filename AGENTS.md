@@ -33,6 +33,14 @@ For every high-risk change:
 - Report commands run and checks that could not be executed.
 - Do not commit, merge, release, or deploy unless explicitly instructed.
 
+## macOS desktop delivery
+
+- The user's canonical local entry point is `~/Desktop/Council.app`.
+- After every user-visible change on macOS, rebuild `frontend/.next-runtime`, rebuild
+  and replace `~/Desktop/Council.app`, then launch that exact app and verify its
+  health endpoint reports the Build ID embedded in the app bundle.
+- A source build or browser preview alone is not a completed desktop delivery.
+
 ## Required review focus
 
 Code review must prioritize:

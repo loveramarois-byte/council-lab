@@ -63,6 +63,7 @@ final class CouncilNavigationModel: ObservableObject {
     @Published var canGoBack = false
     @Published var canGoForward = false
     @Published var isLoading = false
+    @Published var isImmersive = false
 
     var reloadAction: (() -> Void)?
     var backAction: (() -> Void)?

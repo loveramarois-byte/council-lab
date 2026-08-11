@@ -38,9 +38,9 @@ test("首次打开明确区分本地演示并引导配置五席", async ({ page 
     return route.fulfill({ json: { id: "demo-fixture" } });
   });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
-  await expect(page.getByText("依次发言、公开回应；短定义与确定性计算会自动精简调用。")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "无需 API Key，先完成一次决策。" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "重要决定，先听反方。" })).toBeVisible();
+  await expect(page.getByText("四席挑战假设、比较方案；你确认后，留下可执行、可回看的决策记录。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "无需 API Key，先看一次完整反方评审。" })).toBeVisible();
   await expect(page.getByText(/不联网、不产生模型费用/)).toBeVisible();
   await expect(page.getByRole("link", { name: /连接真实 AI/ })).toHaveAttribute("href", "/settings/providers");
   await expect(page.getByRole("link", { name: "资料空间" })).toHaveCount(0);
@@ -81,7 +81,7 @@ test("示例决策只填充可编辑问题，高级设置仍可访问", async ({
 
   await page.goto("/");
   await page.getByRole("button", { name: "开始本地演示" }).click();
-  await page.getByRole("button", { name: /现在发布，还是延期/ }).click();
+  await page.getByRole("button", { name: "产品上线评审" }).click();
 
   const question = page.getByRole("textbox", { name: "你的问题" });
   await expect(question).toHaveValue(/核心功能已经完成/);
@@ -337,7 +337,7 @@ test("五席真实 Provider 就绪时直接开放提问", async ({ page }) => {
 test("旧资料空间地址兼容重定向到新建审议", async ({ page }) => {
   await page.goto("/projects");
   await page.waitForURL("/");
-  await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "重要决定，先听反方。" })).toBeVisible();
 });
 
 test("软件发现新版本后提供安全的自动更新入口", async ({ page }) => {
@@ -1278,6 +1278,11 @@ test("完成后的结构化决策简报保留阻塞项、少数意见并可导�
   await expect(card).toContainText("预算仍未确认或错误率超过门槛时停止发布");
   await expect(card).toContainText("少数意见");
   await expect(card).toContainText("不代表事实正确概率");
+  const valueSummary = page.getByRole("region", { name: "本次审议增量" });
+  await expect(valueSummary).toContainText("这次圆桌没有只给答案");
+  await expect(valueSummary).toContainText("1未决问题");
+  await expect(valueSummary).toContainText("1待核验前提");
+  await expect(valueSummary).toContainText("2停止与重开条件");
   await expect(page.locator(".callboard-api")).toHaveText("请求 5 / 5 成功");
   await expect(page.getByText("查看原始综合文本")).toBeVisible();
   await page.getByRole("button", { name: "导出" }).click();
@@ -1336,7 +1341,7 @@ test("Service Worker 脚本存在且不造成注册错误", async ({ page }) => 
   await page.route("**/api/agent-assignments", (route) => route.fulfill({ json: assignments() }));
   await page.route("**/api/templates", (route) => route.fulfill({ json: templates }));
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: /四种视角/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "重要决定，先听反方。" })).toBeVisible();
   const activeScript = await page.evaluate(async () => (await navigator.serviceWorker.ready).active?.scriptURL || "");
   expect(activeScript).toMatch(/\/sw\.js$/);
   const cachedPaths = await page.evaluate(async () => {

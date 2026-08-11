@@ -171,6 +171,12 @@ export default function RunDetailPage() {
     return () => window.cancelAnimationFrame(frame);
   }, [immersive]);
   useEffect(() => {
+    window.dispatchEvent(new CustomEvent("council:immersive-change", { detail: { active: immersive } }));
+  }, [immersive]);
+  useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent("council:immersive-change", { detail: { active: false } }));
+  }, []);
+  useEffect(() => {
     const onFullscreenChange = () => {
       const ownsFullscreen = document.fullscreenElement === pageRef.current;
       if (ownsFullscreen) {
@@ -501,7 +507,8 @@ export default function RunDetailPage() {
     const requestId = immersiveRequestRef.current + 1;
     immersiveRequestRef.current = requestId;
     setImmersive(true);
-    const supportsDesktopFullscreen = window.matchMedia("(min-width: 681px)").matches && document.fullscreenEnabled && pageRef.current?.requestFullscreen;
+    const isNativeShell = (window as Window & { __COUNCIL_NATIVE__?: boolean }).__COUNCIL_NATIVE__ === true;
+    const supportsDesktopFullscreen = !isNativeShell && window.matchMedia("(min-width: 681px)").matches && document.fullscreenEnabled && pageRef.current?.requestFullscreen;
     if (!supportsDesktopFullscreen) return;
     try {
       await pageRef.current!.requestFullscreen();
@@ -731,10 +738,34 @@ function DecisionBriefView({ brief }: { brief: DecisionBrief }) {
   }[brief.status];
   const support = { unanimous: "一致支持", majority: "多数支持", contested: "存在明确反对" }[brief.support];
   const basis = { user_input: "用户输入", model_inference: "模型推断", cited_unverified: "引用未核验", outcome_verified: "结果已验证" };
+  const deliberationValue = [
+    {
+      label: "未决问题",
+      count: brief.unresolved.length,
+      detail: "没有被总结抹平",
+      icon: AlertTriangle,
+    },
+    {
+      label: "待核验前提",
+      count: brief.assumptions.filter((item) => item.basis !== "outcome_verified").length,
+      detail: "执行前需要求证",
+      icon: ClipboardCheck,
+    },
+    {
+      label: "停止与重开条件",
+      count: (brief.stop_conditions?.length || 0) + brief.reopen_triggers.length,
+      detail: "知道何时停下来",
+      icon: RotateCcw,
+    },
+  ];
   return <article className={`decision-brief-card status-${brief.status}`} aria-label="结构化决策简报">
     <header><div><span>决策简报</span><h2>结构化判断</h2></div><div className="decision-brief-status"><strong>{status.label}</strong><small>{status.detail}</small></div></header>
     <div className="decision-brief-support"><strong>{support}</strong><span>只表示公开讨论中的可观察表态，不代表事实正确概率。</span></div>
     <section className="decision-recommendation"><span>当前建议</span><RichText content={brief.recommendation} /></section>
+    <section className="decision-value-summary" aria-label="本次审议增量">
+      <header><div><strong>这次圆桌没有只给答案</strong><span>单次回答容易埋掉的内容，已被单独保留。</span></div></header>
+      <div>{deliberationValue.map(({ label, count, detail, icon: Icon }) => <div key={label}><Icon size={15} aria-hidden="true" /><span><strong>{count}</strong><b>{label}</b><small>{detail}</small></span></div>)}</div>
+    </section>
     {brief.contract_extension && <ContractExtensionView extension={brief.contract_extension} />}
     <div className="decision-brief-grid">
       {brief.decisive_reasons.length > 0 && <BriefSection title="决定性理由" items={brief.decisive_reasons.map((item) => item.summary)} />}

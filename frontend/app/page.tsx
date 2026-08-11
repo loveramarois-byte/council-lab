@@ -19,19 +19,19 @@ const exampleDecisions: Array<{
   outputContract: OutputContractId;
 }> = [
   {
-    label: "现在发布，还是延期？",
+    label: "产品上线评审",
     question: "我们是否应该现在发布产品？核心功能已经完成，但仍有 3 个中等缺陷；本周发布能赶上行业活动。团队 4 人，可以在 48 小时内回滚。请比较现在发布与延期一周，给出选择、主要风险和退出条件。",
     templateId: "decision_review",
     outputContract: "product_review",
   },
   {
-    label: "两套架构如何选择？",
+    label: "技术架构评审",
     question: "新服务应该采用模块化单体还是微服务？团队 6 人，预计一年内从每天 5 万请求增长到 50 万请求，当前最重要的是交付速度和故障可恢复性。请比较两种方案，并给出迁移触发条件。",
     templateId: "decision_review",
     outputContract: "technical_architecture",
   },
   {
-    label: "这个计划会怎样失败？",
+    label: "创业失败预演",
     question: "假设我们的新产品在六个月后失败了：预算只能支撑 8 个月，目前有 20 位试用用户，还没有稳定付费渠道。请倒推最可能的失败原因、最早预警信号和本月应采取的预防动作。",
     templateId: "premortem",
     outputContract: "product_review",
@@ -229,7 +229,7 @@ export default function HomePage() {
     <header className="topbar"><div><span className="top-kicker">工作台 / 新建审议</span><span className="top-title">Council 圆桌</span></div><div className={`top-meta ${hasDemoSeats || configState === "error" ? "demo" : ""}`}><span className="status-dot" />{topStatus}</div></header>
 
     <section className="home-command">
-      <div><h1>四种视角，你也在场。</h1><p>依次发言、公开回应；短定义与确定性计算会自动精简调用。</p></div>
+      <div><h1>重要决定，先听反方。</h1><p>四席挑战假设、比较方案；你确认后，留下可执行、可回看的决策记录。</p></div>
       <div className="council-sequence" aria-label="审议顺序"><span title="分析"><b>析</b><small>分析</small></span><ChevronRight size={12} /><span title="追问"><b>诘</b><small>追问</small></span><ChevronRight size={12} /><span title="构建"><b>构</b><small>构建</small></span><ChevronRight size={12} /><span title="反观"><b>观</b><small>反观</small></span><ChevronRight size={12} /><strong title="结论"><b>答</b><small>结论</small></strong></div>
     </section>
 
@@ -251,7 +251,7 @@ export default function HomePage() {
         </div>
       </div> : hasDemoSeats && !demoAcknowledged ? <div className="first-run-gate" role="region" aria-label="本地演示席确认">
         <div className="first-run-mark"><Bot size={23} /></div>
-        <div className="first-run-copy"><span className="section-label">第一次使用</span><h2>{mockSeatCount === 5 ? "无需 API Key，先完成一次决策。" : `当前配置包含 ${mockSeatCount} 个本地演示席。`}</h2><p>{mockSeatCount === 5 ? "本地演示使用预设回复，不联网、不产生模型费用。你可以先走完整个圆桌流程，再决定是否连接真实 AI。" : `${demoDisclosure} 继续前请确认你接受这套混合席位配置。`}</p></div>
+        <div className="first-run-copy"><span className="section-label">第一次使用</span><h2>{mockSeatCount === 5 ? "无需 API Key，先看一次完整反方评审。" : `当前配置包含 ${mockSeatCount} 个本地演示席。`}</h2><p>{mockSeatCount === 5 ? "本地演示使用预设回复，不联网、不产生模型费用。你会看到风险、分歧和停止条件如何被单独留下，再决定是否连接真实 AI。" : `${demoDisclosure} 继续前请确认你接受这套混合席位配置。`}</p></div>
         <div className="first-run-actions">
           <button type="button" className="send-button" onClick={() => setDemoAcknowledged(true)}>{mockSeatCount === 5 ? <><Play size={15} />开始本地演示</> : <>确认混合配置并继续<ChevronRight size={14} /></>}</button>
           <Link className="quiet-button" href={setupHref}><Settings2 size={15} />{setupLabel}</Link>
@@ -260,7 +260,7 @@ export default function HomePage() {
         {hasDemoSeats && <div className="demo-disclosure"><CircleAlert size={15} /><span><strong>{mockSeatCount === 5 ? "本地演示模式" : `混合配置 · ${mockSeatCount} 个本地演示席`}</strong> · {demoDisclosure}</span><Link href={setupHref}>{setupLabel}<ChevronRight size={13} /></Link></div>}
         <div className="composer-section">
           <div className="composer-head">
-            <div><span className="section-label">你需要做什么决定？</span><span className="section-hint">写清目标、约束、选项和成功标准，结论会更可靠</span></div>
+            <div><span className="section-label">把一个真实决定放上圆桌</span><span className="section-hint">写清目标、约束、选项和成功标准，反方才能击中要害</span></div>
             <label className="template-select"><span>决策类型</span><select aria-label="审议模板" value={templateId} onChange={(event) => { const nextTemplate = event.target.value; const definition = templates.find((item) => item.id === nextTemplate); setTemplateId(nextTemplate); if (definition?.default_output_contract) setOutputContract(definition.default_output_contract); if (definition?.requires_high_risk) { setHighRisk(true); setAutoSummarize(false); } }}><optgroup label="通用">{generalTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>{professionalTemplates.length > 0 && <optgroup label="专业领域">{professionalTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}</select></label>
             <button type="button" className={`advanced-home-toggle ${advancedOpen ? "open" : ""}`} aria-expanded={advancedOpen} aria-controls="advanced-run-settings" onClick={() => setAdvancedOpen((value) => !value)}><SlidersHorizontal size={14} /><span>高级设置</span><ChevronDown size={14} /></button>
             <span className="composer-count">{question.length.toString().padStart(3, "0")} / 12000</span>
@@ -272,7 +272,7 @@ export default function HomePage() {
           </div>}
           <div className="composer-input">
             <textarea aria-label="你的问题" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") submit(); }} placeholder={selectedTemplate?.prompt_hint || "写下需要四席共同审议的问题"} title={selectedContract?.prompt_hint} rows={5} />
-            {question.length === 0 && <div className="prompt-starters" aria-label="示例决策"><span>从一个实际问题开始</span><div>{exampleDecisions.map((example) => <button key={example.label} type="button" onClick={() => useExample(example)}>{example.label}<ChevronRight size={13} /></button>)}</div></div>}
+            {question.length === 0 && <div className="prompt-starters" aria-label="示例决策"><span>直接试一个专业场景</span><div>{exampleDecisions.map((example) => <button key={example.label} type="button" onClick={() => useExample(example)}>{example.label}<ChevronRight size={13} /></button>)}</div></div>}
           </div>
           {readiness && <section className={`readiness-panel ${readiness.ready ? "ready" : "needs-input"}`} aria-label="决策准备度"><header><div><strong>{readiness.ready ? "可以开始审议" : readiness.rules_version === "readiness_unavailable" ? "准备度检查暂时不可用" : "开始前还有信息缺口"}</strong><small>{readiness.rules_version === "readiness_unavailable" ? "请先自行确认这些关键信息" : `系统建议：${readinessModeLabel(readiness.recommended_mode)}`}</small></div><span>{readiness.task_labels.map(readinessTaskLabel).join(" · ")}</span></header>{readiness.clarification_questions.length > 0 && <ul>{readiness.clarification_questions.map((item) => <li key={item}>{item}</li>)}</ul>}{!readiness.ready && (professionalModeRequired ? <footer><span>该问题必须进入高风险控制面补充关键事实，系统会自动启用证据与专业复核流程。</span></footer> : <footer><span>{readiness.rules_version === "readiness_unavailable" ? "系统无法代你检查；确认信息足够后，仍可明确选择继续。" : "你可以补充问题，也可以明确保留这些缺口并继续。"}</span><button type="button" className="quiet-button" onClick={() => { setReadinessOverride(true); void submit(true); }}>仍然继续</button></footer>)}</section>}
           {memories.length > 0 && <section className="memory-picker" aria-label="本次使用的已批准记忆"><header><div><strong>本次可用的已批准记忆</strong><small>默认不注入，只有你明确勾选的内容才会进入本次 Run。</small></div><span>{selectedMemoryIds.length} / {memories.length}</span></header><div>{memories.map((item) => <label key={item.memory.id}><input type="checkbox" checked={selectedMemoryIds.includes(item.memory.id)} onChange={(event) => setSelectedMemoryIds((current) => event.target.checked ? [...current, item.memory.id] : current.filter((id) => id !== item.memory.id))} /><span><strong>{item.memory.type}</strong>{item.memory.content}</span></label>)}</div>{memoryPreview && selectedMemoryIds.length > 0 && <details><summary>查看实际注入快照</summary><pre>{memoryPreview.rendered_context || "所选记忆当前不可用，不会注入。"}</pre></details>}</section>}

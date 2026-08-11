@@ -12,7 +12,7 @@ struct CouncilWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
-        configuration.preferences.isElementFullscreenEnabled = true
+        configuration.preferences.isElementFullscreenEnabled = false
         configuration.userContentController.addUserScript(
             WKUserScript(
                 source: Self.nativeShellScript,
@@ -62,6 +62,7 @@ struct CouncilWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             self.navigation.isLoading = true
+            self.navigation.isImmersive = false
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -98,9 +99,13 @@ struct CouncilWebView: NSViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "councilNetwork",
-                  !recoveredFromChunkMismatch,
                   let payload = message.body as? [String: Any],
-                  payload["phase"] as? String == "chunk-load-error" else { return }
+                  let phase = payload["phase"] as? String else { return }
+            if phase == "immersive-mode", let active = payload["active"] as? Bool {
+                navigation.isImmersive = active
+                return
+            }
+            guard phase == "chunk-load-error", !recoveredFromChunkMismatch else { return }
             recoveredFromChunkMismatch = true
             webView?.reloadFromOrigin()
         }
@@ -112,6 +117,12 @@ struct CouncilWebView: NSViewRepresentable {
         if (String(event.reason || '').includes('ChunkLoadError')) {
           window.webkit.messageHandlers.councilNetwork.postMessage({ phase: 'chunk-load-error' });
         }
+      });
+      window.addEventListener('council:immersive-change', (event) => {
+        window.webkit.messageHandlers.councilNetwork.postMessage({
+          phase: 'immersive-mode',
+          active: Boolean(event.detail && event.detail.active),
+        });
       });
       const style = document.createElement('style');
       style.id = 'council-native-shell';
@@ -126,7 +137,7 @@ struct CouncilWebView: NSViewRepresentable {
         }
       `;
       document.documentElement.appendChild(style);
-      document.documentElement.dataset.councilNative = 'true';
+      window.__COUNCIL_NATIVE__ = true;
     })();
     """#
 }
